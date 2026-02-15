@@ -48,7 +48,7 @@ cargo install --path .
 ### Build manually
 
 ```bash
-git clone https://github.com/your-user/itr.git
+git clone https://github.com/joeaguilar/itr
 cd itr
 cargo build --release
 # Binary at ./target/release/itr
@@ -57,7 +57,7 @@ cargo build --release
 ### Nix
 
 ```bash
-nix profile install github:your-user/itr
+nix profile install https://github.com/joeaguilar/itr
 # or in a dev shell:
 nix develop
 ```
