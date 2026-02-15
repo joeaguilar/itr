@@ -1,9 +1,9 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::Format;
 use rusqlite::{params, Connection};
 
-pub fn run(conn: &Connection, fix: bool, fmt: Format) -> Result<(), NitError> {
+pub fn run(conn: &Connection, fix: bool, fmt: Format) -> Result<(), ItrError> {
     let mut problems: Vec<Problem> = Vec::new();
     let mut fixed: Vec<String> = Vec::new();
 
@@ -114,7 +114,7 @@ struct Problem {
     fixable: bool,
 }
 
-fn find_orphaned_deps(conn: &Connection) -> Result<Vec<(i64, i64)>, NitError> {
+fn find_orphaned_deps(conn: &Connection) -> Result<Vec<(i64, i64)>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT d.blocker_id, d.blocked_id FROM dependencies d
          WHERE NOT EXISTS (SELECT 1 FROM issues WHERE id = d.blocker_id)
@@ -126,7 +126,7 @@ fn find_orphaned_deps(conn: &Connection) -> Result<Vec<(i64, i64)>, NitError> {
     Ok(results)
 }
 
-fn fix_orphaned_deps(conn: &Connection) -> Result<(), NitError> {
+fn fix_orphaned_deps(conn: &Connection) -> Result<(), ItrError> {
     conn.execute(
         "DELETE FROM dependencies WHERE
          NOT EXISTS (SELECT 1 FROM issues WHERE id = dependencies.blocker_id)
@@ -136,7 +136,7 @@ fn fix_orphaned_deps(conn: &Connection) -> Result<(), NitError> {
     Ok(())
 }
 
-fn find_cycles(conn: &Connection) -> Result<Vec<String>, NitError> {
+fn find_cycles(conn: &Connection) -> Result<Vec<String>, ItrError> {
     // Simple cycle detection: for each dependency, check if there's a reverse path
     let deps = db::all_dependencies(conn)?;
     let mut cycles = Vec::new();
@@ -153,7 +153,7 @@ fn find_cycles(conn: &Connection) -> Result<Vec<String>, NitError> {
     Ok(cycles)
 }
 
-fn can_reach(conn: &Connection, from: i64, to: i64) -> Result<bool, NitError> {
+fn can_reach(conn: &Connection, from: i64, to: i64) -> Result<bool, ItrError> {
     let mut visited = std::collections::HashSet::new();
     let mut queue = std::collections::VecDeque::new();
     queue.push_back(from);
@@ -175,7 +175,7 @@ fn can_reach(conn: &Connection, from: i64, to: i64) -> Result<bool, NitError> {
     Ok(false)
 }
 
-fn find_stuck_in_progress(conn: &Connection, max_days: i64) -> Result<Vec<(i64, String, i64)>, NitError> {
+fn find_stuck_in_progress(conn: &Connection, max_days: i64) -> Result<Vec<(i64, String, i64)>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT id, title, CAST((julianday('now') - julianday(updated_at)) AS INTEGER) as days
          FROM issues
@@ -190,7 +190,7 @@ fn find_stuck_in_progress(conn: &Connection, max_days: i64) -> Result<Vec<(i64, 
     Ok(results)
 }
 
-fn find_empty_epics(conn: &Connection) -> Result<Vec<(i64, String)>, NitError> {
+fn find_empty_epics(conn: &Connection) -> Result<Vec<(i64, String)>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT i.id, i.title FROM issues i
          WHERE i.kind = 'epic'
@@ -203,7 +203,7 @@ fn find_empty_epics(conn: &Connection) -> Result<Vec<(i64, String)>, NitError> {
     Ok(results)
 }
 
-fn find_done_blockers(conn: &Connection) -> Result<Vec<(i64, i64)>, NitError> {
+fn find_done_blockers(conn: &Connection) -> Result<Vec<(i64, i64)>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT d.blocker_id, d.blocked_id FROM dependencies d
          JOIN issues i ON d.blocker_id = i.id
@@ -215,7 +215,7 @@ fn find_done_blockers(conn: &Connection) -> Result<Vec<(i64, i64)>, NitError> {
     Ok(results)
 }
 
-fn fix_done_blockers(conn: &Connection) -> Result<(), NitError> {
+fn fix_done_blockers(conn: &Connection) -> Result<(), ItrError> {
     conn.execute(
         "DELETE FROM dependencies WHERE blocker_id IN
          (SELECT id FROM issues WHERE status IN ('done', 'wontfix'))",

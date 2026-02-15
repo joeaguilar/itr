@@ -1,7 +1,7 @@
 use std::process;
 
 #[derive(Debug, thiserror::Error)]
-pub enum NitError {
+pub enum ItrError {
     #[error("Issue {0} not found")]
     NotFound(i64),
 
@@ -15,7 +15,7 @@ pub enum NitError {
         valid: String,
     },
 
-    #[error("No .nit.db found. Run 'nit init' to create one.")]
+    #[error("No .itr.db found. Run 'itr init' to create one.")]
     NoDatabase,
 
     #[error("Database error: {0}")]
@@ -28,33 +28,33 @@ pub enum NitError {
     Io(#[from] std::io::Error),
 }
 
-impl NitError {
+impl ItrError {
     pub fn exit_code(&self) -> i32 {
         match self {
-            NitError::NotFound(_) => 1,
-            NitError::CycleDetected(_) => 1,
-            NitError::InvalidValue { .. } => 1,
-            NitError::NoDatabase => 1,
-            NitError::Db(_) => 1,
-            NitError::Parse(_) => 1,
-            NitError::Io(_) => 1,
+            ItrError::NotFound(_) => 1,
+            ItrError::CycleDetected(_) => 1,
+            ItrError::InvalidValue { .. } => 1,
+            ItrError::NoDatabase => 1,
+            ItrError::Db(_) => 1,
+            ItrError::Parse(_) => 1,
+            ItrError::Io(_) => 1,
         }
     }
 
     pub fn error_code(&self) -> &'static str {
         match self {
-            NitError::NotFound(_) => "NOT_FOUND",
-            NitError::CycleDetected(_) => "CYCLE_DETECTED",
-            NitError::InvalidValue { .. } => "INVALID_VALUE",
-            NitError::NoDatabase => "NO_DATABASE",
-            NitError::Db(_) => "DB_ERROR",
-            NitError::Parse(_) => "PARSE_ERROR",
-            NitError::Io(_) => "IO_ERROR",
+            ItrError::NotFound(_) => "NOT_FOUND",
+            ItrError::CycleDetected(_) => "CYCLE_DETECTED",
+            ItrError::InvalidValue { .. } => "INVALID_VALUE",
+            ItrError::NoDatabase => "NO_DATABASE",
+            ItrError::Db(_) => "DB_ERROR",
+            ItrError::Parse(_) => "PARSE_ERROR",
+            ItrError::Io(_) => "IO_ERROR",
         }
     }
 }
 
-pub fn handle_error(err: NitError, json_mode: bool) -> ! {
+pub fn handle_error(err: ItrError, json_mode: bool) -> ! {
     if json_mode {
         let err_json = serde_json::json!({
             "error": err.to_string(),

@@ -46,7 +46,7 @@ fn run_command(
     command: Commands,
     conn: &rusqlite::Connection,
     fmt: Format,
-) -> Result<(), error::NitError> {
+) -> Result<(), error::ItrError> {
     match command {
         Commands::Init { .. } | Commands::Schema => unreachable!(),
 

@@ -1,34 +1,34 @@
-# `nit` — Agent-First Issue Tracker CLI
+# `itr` — Agent-First Issue Tracker CLI
 
 ## Project Overview
 
-Build a Rust CLI tool called `nit` (nitpick) that manages a local SQLite-backed issue database. The primary consumers are AI coding agents (e.g., Claude Code), not humans. Every design decision should optimize for machine-parseable output, minimal token overhead, stdin/stdout composability, and deterministic behavior.
+Build a Rust CLI tool called `itr` (nitpick) that manages a local SQLite-backed issue database. The primary consumers are AI coding agents (e.g., Claude Code), not humans. Every design decision should optimize for machine-parseable output, minimal token overhead, stdin/stdout composability, and deterministic behavior.
 
-The tool lives in a project directory as a single `.nit.db` file and requires zero configuration, no daemon, no network, and no authentication. Distribution targets NixOS first via a flake, with standard `cargo install` as the fallback.
+The tool lives in a project directory as a single `.itr.db` file and requires zero configuration, no daemon, no network, and no authentication. Distribution targets NixOS first via a flake, with standard `cargo install` as the fallback.
 
 ---
 
 ## Competitive Landscape & Design Rationale
 
-Several tools exist in this space. `nit` draws lessons from each while carving out a distinct niche.
+Several tools exist in this space. `itr` draws lessons from each while carving out a distinct niche.
 
 ### Beads / br (Steve Yegge)
 
-Beads is the closest prior art — a git-backed issue tracker designed for AI coding agents. It uses SQLite locally with JSONL export for git-friendly collaboration. Key concepts `nit` borrows: the `ready` command for surfacing unblocked work, the philosophy that agents should kill sessions and resume from tracker state, and the idea that issue trackers serve as "persistent memory" across agent sessions.
+Beads is the closest prior art — a git-backed issue tracker designed for AI coding agents. It uses SQLite locally with JSONL export for git-friendly collaboration. Key concepts `itr` borrows: the `ready` command for surfacing unblocked work, the philosophy that agents should kill sessions and resume from tracker state, and the idea that issue trackers serve as "persistent memory" across agent sessions.
 
-Where `nit` diverges: Beads is a complex system (the Go version is 276K lines, the Rust port 20K) with daemon processes, git hooks, JSONL sync layers, and collision-resolution logic. `nit` is deliberately minimal — no daemon, no sync layer, no git integration by default. The database IS the source of truth. If you want git tracking, commit the `.nit.db` file or export explicitly. This is a philosophical choice: agents working on a single machine don't need distributed sync, and the complexity of sync introduces more failure modes than it solves for the solo-agent use case.
+Where `itr` diverges: Beads is a complex system (the Go version is 276K lines, the Rust port 20K) with daemon processes, git hooks, JSONL sync layers, and collision-resolution logic. `itr` is deliberately minimal — no daemon, no sync layer, no git integration by default. The database IS the source of truth. If you want git tracking, commit the `.itr.db` file or export explicitly. This is a philosophical choice: agents working on a single machine don't need distributed sync, and the complexity of sync introduces more failure modes than it solves for the solo-agent use case.
 
 ### git-bug
 
-A distributed bug tracker that stores data as git objects (not files). Elegant architecture with bridges to GitHub/GitLab. However, it's optimized for human workflows with TUI/WebUI interfaces. Its bridge concept is interesting — `nit` could eventually support export to GitHub Issues — but the core design is too human-centric for agent-first usage.
+A distributed bug tracker that stores data as git objects (not files). Elegant architecture with bridges to GitHub/GitLab. However, it's optimized for human workflows with TUI/WebUI interfaces. Its bridge concept is interesting — `itr` could eventually support export to GitHub Issues — but the core design is too human-centric for agent-first usage.
 
 ### Taskwarrior
 
-The most mature CLI task manager. Its urgency scoring system is brilliant — a polynomial that combines priority, age, blocking status, due date, and tags into a single numeric score. `nit` adopts a simplified version of this for its `next` command. Taskwarrior also pioneered UDAs (User Defined Attributes) which inspire `nit`'s flexible metadata approach. However, Taskwarrior predates the agent era and has no concept of machine-parseable output by default, dependency graphs, or batch operations.
+The most mature CLI task manager. Its urgency scoring system is brilliant — a polynomial that combines priority, age, blocking status, due date, and tags into a single numeric score. `itr` adopts a simplified version of this for its `next` command. Taskwarrior also pioneered UDAs (User Defined Attributes) which inspire `itr`'s flexible metadata approach. However, Taskwarrior predates the agent era and has no concept of machine-parseable output by default, dependency graphs, or batch operations.
 
 ### Claude Code Tasks (native)
 
-Anthropic's built-in task system for Claude Code uses DAG-based dependencies, filesystem persistence, and cross-session state. It's tightly coupled to Claude Code's runtime. `nit` serves as an agent-agnostic alternative that any coding agent (Claude Code, Codex, Amp, Cursor) can use via CLI, and that persists independently of any agent's session management.
+Anthropic's built-in task system for Claude Code uses DAG-based dependencies, filesystem persistence, and cross-session state. It's tightly coupled to Claude Code's runtime. `itr` serves as an agent-agnostic alternative that any coding agent (Claude Code, Codex, Amp, Cursor) can use via CLI, and that persists independently of any agent's session management.
 
 ### Ditz, ticgit, git-issue
 
@@ -41,7 +41,7 @@ Older distributed trackers that store issues as files in git repos. Mostly dead 
 ### Crate Layout
 
 ```
-nit/
+itr/
 ├── Cargo.toml
 ├── flake.nix
 ├── src/
@@ -77,7 +77,7 @@ nit/
 
 ```toml
 [package]
-name = "nit"
+name = "itr"
 version = "0.1.0"
 edition = "2021"
 description = "Agent-first issue tracker CLI"
@@ -104,7 +104,7 @@ No runtime dependencies. No async. No daemon. No network. The binary is fully se
 
 ## Database Schema
 
-File: `.nit.db` in the project root (located by walking up from cwd until found, or created by `nit init`).
+File: `.itr.db` in the project root (located by walking up from cwd until found, or created by `itrinit`).
 
 ```sql
 -- Run on init. Use WAL mode for better concurrent read performance.
@@ -188,17 +188,17 @@ END;
 Implement a walk-up search in `db.rs`:
 
 1. Start from the current working directory.
-2. Look for `.nit.db` in each directory.
+2. Look for `.itr.db` in each directory.
 3. Walk up to parent until found or filesystem root is reached.
-4. If not found, commands other than `init` return exit code 1 with message: `No .nit.db found. Run 'nit init' to create one.`
+4. If not found, commands other than `init` return exit code 1 with message: `No .itr.db found. Run 'itr init' to create one.`
 
-Also support an environment variable override: `NIT_DB_PATH` — if set, use that path directly (skip walk-up). This is useful for agents that want to operate on a specific database, or for CI pipelines.
+Also support an environment variable override: `ITR_DB_PATH` — if set, use that path directly (skip walk-up). This is useful for agents that want to operate on a specific database, or for CI pipelines.
 
 ---
 
 ## Urgency Scoring Engine
 
-Inspired by Taskwarrior's polynomial urgency model, adapted for agent workflows. Urgency is a computed float that combines multiple factors into a single sortable score. This powers both `nit next` and `nit ready`.
+Inspired by Taskwarrior's polynomial urgency model, adapted for agent workflows. Urgency is a computed float that combines multiple factors into a single sortable score. This powers both `itr next` and `itr ready`.
 
 ### Default Coefficients
 
@@ -236,10 +236,10 @@ Where each factor is either 0.0 or 1.0 (binary) except:
 Coefficients are stored in the `config` table and can be modified:
 
 ```bash
-nit config set urgency.priority.critical 15.0
-nit config get urgency.priority.critical
-nit config list                              # show all config
-nit config reset                             # restore defaults
+itr config set urgency.priority.critical 15.0
+itr config get urgency.priority.critical
+itr config list                              # show all config
+itr config reset                             # restore defaults
 ```
 
 This lets teams tune the scoring to match their workflow. An agent doing mostly bug triage might boost `urgency.kind.bug`, while a feature-heavy sprint might boost `urgency.kind.feature`.
@@ -322,15 +322,15 @@ All commands defined via clap derive macros in `cli.rs`.
 --quiet, -q              Suppress non-essential output (only emit data or errors)
 ```
 
-### `nit init`
+### `itr init`
 
-Create `.nit.db` in the current directory. If one already exists, print its path and exit 0 (idempotent).
+Create `.itr.db` in the current directory. If one already exists, print its path and exit 0 (idempotent).
 
 Optionally generates a snippet for `AGENTS.md` / `CLAUDE.md`:
 
 ```bash
-nit init                    # create db
-nit init --agents-md        # also append nit instructions to AGENTS.md
+itr init                    # create db
+itr init --agents-md        # also append itr instructions to AGENTS.md
 ```
 
 The `--agents-md` flag appends a block like:
@@ -338,16 +338,16 @@ The `--agents-md` flag appends a block like:
 ```markdown
 ## Issue Tracking
 
-This project uses `nit` for issue tracking. Before starting work, run `nit ready -f json`
-to find the next actionable task. After completing work, run `nit close <ID> "reason"`.
-File discovered issues with `nit add`. Always run `nit note <ID> "summary"` before ending a session.
+This project uses `itr` for issue tracking. Before starting work, run `itr ready -f json`
+to find the next actionable task. After completing work, run `itr close <ID> "reason"`.
+File discovered issues with `itr add`. Always run `itr note <ID> "summary"` before ending a session.
 ```
 
-**Output (compact):** `INIT: /path/to/.nit.db`
-**Output (json):** `{"action": "init", "path": "/path/to/.nit.db", "created": true}`
+**Output (compact):** `INIT: /path/to/.itr.db`
+**Output (json):** `{"action": "init", "path": "/path/to/.itr.db", "created": true}`
 **Exit codes:** 0 success, 1 error
 
-### `nit add <TITLE>`
+### `itr add <TITLE>`
 
 Create a new issue. Returns the created issue.
 
@@ -368,12 +368,12 @@ Create a new issue. Returns the created issue.
 **Stdin JSON mode:** When `--stdin-json` is passed, read a JSON object from stdin with fields matching the schema. This avoids shell escaping issues for long context strings.
 
 ```bash
-echo '{"title":"Fix auth bug","priority":"high","kind":"bug","context":"Stack trace:\n...long text...","files":["src/auth.rs"],"tags":["bug","auth"]}' | nit add --stdin-json
+echo '{"title":"Fix auth bug","priority":"high","kind":"bug","context":"Stack trace:\n...long text...","files":["src/auth.rs"],"tags":["bug","auth"]}' | itr add --stdin-json
 ```
 
 **Exit codes:** 0 success (prints created issue), 1 error
 
-### `nit list`
+### `itr list`
 
 List issues with filtering. Default: open and in-progress issues that are NOT blocked, sorted by urgency descending.
 
@@ -393,7 +393,7 @@ List issues with filtering. Default: open and in-progress issues that are NOT bl
 
 **Exit codes:** 0 results found, 2 no results match filter
 
-### `nit get <ID>`
+### `itr get <ID>`
 
 Get full detail for a single issue, including notes, dependency info, urgency breakdown, and children (if epic).
 
@@ -415,7 +415,7 @@ priority.high=6.0 blocking=8.0 kind.bug=2.0 age=1.8 has_acceptance=1.0 notes=0.5
 
 **Exit codes:** 0 found, 1 not found
 
-### `nit update <ID>`
+### `itr update <ID>`
 
 Update one or more fields on an issue. Only specified fields are changed.
 
@@ -447,12 +447,12 @@ UNBLOCKED:15 "Deploy auth service v2"
 
 **Exit codes:** 0 success, 1 issue not found or invalid field value
 
-### `nit close <ID> [REASON]`
+### `itr close <ID> [REASON]`
 
-Shorthand for `nit update <ID> --status done`. The optional reason is stored in `close_reason`.
+Shorthand for `itr update <ID> --status done`. The optional reason is stored in `close_reason`.
 
 ```bash
-nit close 7 "Implemented in commit abc123, all tests pass"
+itr close 7 "Implemented in commit abc123, all tests pass"
 ```
 
 If `REASON` is omitted and stdin is not a TTY, read from stdin.
@@ -460,14 +460,14 @@ If `REASON` is omitted and stdin is not a TTY, read from stdin.
 Also supports `--wontfix` flag to close as wontfix instead of done:
 
 ```bash
-nit close 7 --wontfix "Superseded by issue 12"
+itr close 7 --wontfix "Superseded by issue 12"
 ```
 
 Reports unblocked issues, same as `update`.
 
 **Exit codes:** 0 success, 1 not found
 
-### `nit note <ID> <TEXT>`
+### `itr note <ID> <TEXT>`
 
 Append a note to an issue's log.
 
@@ -478,13 +478,13 @@ Append a note to an issue's log.
 --agent <NAME>           Agent/session identifier [default: ""]
 ```
 
-Supports stdin: `echo "long note content" | nit note 7 --agent claude-session-xyz`
+Supports stdin: `echo "long note content" | itr note 7 --agent claude-session-xyz`
 
 If `<TEXT>` is omitted and stdin is not a TTY, read from stdin.
 
 **Exit codes:** 0 success, 1 issue not found
 
-### `nit depend <ID> --on <ID>`
+### `itr depend <ID> --on <ID>`
 
 Add a dependency. Issue `<ID>` becomes blocked by `--on <ID>`.
 
@@ -497,23 +497,23 @@ Add a dependency. Issue `<ID>` becomes blocked by `--on <ID>`.
 **Output (compact):** `DEPEND: 7 blocked by 3`
 **Exit codes:** 0 success, 1 error (not found, cycle detected)
 
-### `nit undepend <ID> --on <ID>`
+### `itr undepend <ID> --on <ID>`
 
 Remove a dependency. **Idempotent:** if it doesn't exist, exit 0. Reports unblocked issues if this was the last blocker.
 
 **Exit codes:** 0 success, 1 issue not found
 
-### `nit next`
+### `itr next`
 
 Return the single highest-urgency unblocked issue in `open` status (not `in-progress`). This is the "what should I work on" command.
 
 Uses the urgency scoring engine. Returns the top result.
 
-Optionally auto-claim: `nit next --claim` returns the issue AND sets it to `in-progress` atomically.
+Optionally auto-claim: `itr next --claim` returns the issue AND sets it to `in-progress` atomically.
 
 **Exit codes:** 0 issue returned, 2 no eligible issues
 
-### `nit ready`
+### `itr ready`
 
 List ALL unblocked, non-terminal issues sorted by urgency. This is the "work queue" — everything an agent could pick up right now. Unlike `next` which returns one, `ready` returns the full prioritized queue.
 
@@ -527,12 +527,12 @@ This is the command agents should call at session start to understand the full p
 
 **Exit codes:** 0 results found, 2 no eligible issues
 
-### `nit batch add`
+### `itr batch add`
 
 Bulk-create issues from a JSON array on stdin.
 
 ```bash
-cat issues.json | nit batch add
+cat issues.json | itr batch add
 ```
 
 Input format: JSON array of issue objects (same shape as `add --stdin-json`).
@@ -553,7 +553,7 @@ Input format: JSON array of issue objects (same shape as `add --stdin-json`).
 
 **Exit codes:** 0 all created, 1 validation error (none created)
 
-### `nit graph`
+### `itr graph`
 
 Output the dependency graph.
 
@@ -578,7 +578,7 @@ Output the dependency graph.
 
 **DOT format** (for Graphviz visualization):
 ```dot
-digraph nit {
+digraph itr {
   rankdir=LR;
   3 [label="3: Update token lib..." shape=box]
   7 [label="7: Refactor auth..." shape=box style=filled fillcolor=gray]
@@ -588,7 +588,7 @@ digraph nit {
 
 **Exit codes:** 0 success
 
-### `nit stats`
+### `itr stats`
 
 Project health summary. Shows counts by status, priority, kind, blocked/unblocked ratio, average urgency, and oldest open issue. Designed to give an agent (or human) a quick snapshot of project state.
 
@@ -608,34 +608,34 @@ Project health summary. Shows counts by status, priority, kind, blocked/unblocke
 
 **Exit codes:** 0 success
 
-### `nit export`
+### `itr export`
 
 Export the full database to a portable format.
 
 ```bash
-nit export > backup.jsonl          # JSONL, one issue per line (default)
-nit export --format json > all.json  # Single JSON array
+itr export > backup.jsonl          # JSONL, one issue per line (default)
+itr export --format json > all.json  # Single JSON array
 ```
 
 Export includes all issues (including closed), notes, and dependencies. This is the interchange format for backup, migration, and sharing.
 
 **Exit codes:** 0 success
 
-### `nit import`
+### `itr import`
 
 Import issues from JSONL or JSON.
 
 ```bash
-cat backup.jsonl | nit import
-nit import --file backup.jsonl
-nit import --file backup.jsonl --merge   # skip existing IDs instead of erroring
+cat backup.jsonl | itr import
+itr import --file backup.jsonl
+itr import --file backup.jsonl --merge   # skip existing IDs instead of erroring
 ```
 
 **Transactional.** `--merge` mode skips issues whose IDs already exist rather than failing.
 
 **Exit codes:** 0 success, 1 error
 
-### `nit doctor`
+### `itr doctor`
 
 Run integrity checks on the database and report problems.
 
@@ -647,26 +647,26 @@ Checks:
 - Issues with `done` status but still listed as blockers
 
 ```bash
-nit doctor            # report only
-nit doctor --fix      # auto-fix what's safe (remove orphaned deps, etc.)
+itr doctor            # report only
+itr doctor --fix      # auto-fix what's safe (remove orphaned deps, etc.)
 ```
 
 **Exit codes:** 0 all clean, 1 problems found (2 if --fix couldn't resolve)
 
-### `nit config`
+### `itr config`
 
 Manage per-project configuration stored in the `config` table.
 
 ```bash
-nit config list                              # show all settings
-nit config get urgency.priority.critical     # get one value
-nit config set urgency.priority.critical 15.0  # set a value
-nit config reset                             # restore all defaults
+itr config list                              # show all settings
+itr config get urgency.priority.critical     # get one value
+itr config set urgency.priority.critical 15.0  # set a value
+itr config reset                             # restore all defaults
 ```
 
 **Exit codes:** 0 success, 1 key not found
 
-### `nit schema`
+### `itr schema`
 
 Dump the current database schema as SQL. Useful for agent self-documentation.
 
@@ -729,7 +729,7 @@ Use `thiserror` to define a unified error enum:
 
 ```rust
 #[derive(Debug, thiserror::Error)]
-pub enum NitError {
+pub enum ItrError {
     #[error("Issue {0} not found")]
     NotFound(i64),
 
@@ -739,7 +739,7 @@ pub enum NitError {
     #[error("Invalid value for {field}: '{value}'. Valid: {valid}")]
     InvalidValue { field: String, value: String, valid: String },
 
-    #[error("No .nit.db found. Run 'nit init' to create one.")]
+    #[error("No .itr.db found. Run 'itr init' to create one.")]
     NoDatabase,
 
     #[error("Database error: {0}")]
@@ -890,41 +890,41 @@ set -e
 cd $(mktemp -d)
 
 # Init
-nit init
-[ -f .nit.db ]
+itr init
+[ -f .itr.db ]
 
 # Add and retrieve
-ID=$(nit add "Test issue" -p high -k bug -f json | jq -r '.id')
-[ "$(nit get "$ID" -f json | jq -r '.priority')" = "high" ]
-[ "$(nit get "$ID" -f json | jq -r '.kind')" = "bug" ]
+ID=$(itr add "Test issue" -p high -k bug -f json | jq -r '.id')
+[ "$(itr get "$ID" -f json | jq -r '.priority')" = "high" ]
+[ "$(itr get "$ID" -f json | jq -r '.kind')" = "bug" ]
 
 # Dependency and blocking
-ID1=$(nit add "First" -f json | jq -r '.id')
-ID2=$(nit add "Second" --blocked-by "$ID1" -f json | jq -r '.id')
-[ "$(nit get "$ID2" -f json | jq -r '.is_blocked')" = "true" ]
+ID1=$(itr add "First" -f json | jq -r '.id')
+ID2=$(itr add "Second" --blocked-by "$ID1" -f json | jq -r '.id')
+[ "$(itr get "$ID2" -f json | jq -r '.is_blocked')" = "true" ]
 
 # Cycle detection
-! nit depend "$ID1" --on "$ID2" 2>/dev/null
+! itr depend "$ID1" --on "$ID2" 2>/dev/null
 [ $? -eq 1 ]
 
 # Ready shows only unblocked
-READY_COUNT=$(nit ready -f json | jq '. | length')
+READY_COUNT=$(itr ready -f json | jq '. | length')
 [ "$READY_COUNT" -ge 1 ]
 
 # Close with reason, check unblock
-nit close "$ID1" "Done in commit abc123"
-[ "$(nit get "$ID2" -f json | jq -r '.is_blocked')" = "false" ]
-[ "$(nit get "$ID1" -f json | jq -r '.close_reason')" = "Done in commit abc123" ]
+itr close "$ID1" "Done in commit abc123"
+[ "$(itr get "$ID2" -f json | jq -r '.is_blocked')" = "false" ]
+[ "$(itr get "$ID1" -f json | jq -r '.close_reason')" = "Done in commit abc123" ]
 
 # Stats
-[ "$(nit stats -f json | jq '.by_status.done')" = "1" ]
+[ "$(itr stats -f json | jq '.by_status.done')" = "1" ]
 
 # Export/import round-trip
-nit export > /tmp/nit-export.jsonl
+itr export > /tmp/itr-export.jsonl
 cd $(mktemp -d)
-nit init
-nit import --file /tmp/nit-export.jsonl
-[ "$(nit stats -f json | jq '.total')" -ge 1 ]
+itr init
+itr import --file /tmp/itr-export.jsonl
+[ "$(itr stats -f json | jq '.total')" -ge 1 ]
 
 echo "All tests passed"
 ```
@@ -937,14 +937,14 @@ echo "All tests passed"
 
 ```bash
 cargo build --release
-# Binary at target/release/nit
+# Binary at target/release/itr
 ```
 
 ### Nix Flake
 
 ```nix
 {
-  description = "nit - agent-first issue tracker";
+  description = "itr - agent-first issue tracker";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -965,7 +965,7 @@ cargo build --release
     in {
       packages = forAllSystems (pkgs: {
         default = pkgs.rustPlatform.buildRustPackage {
-          pname = "nit";
+          pname = "itr";
           version = "0.1.0";
           src = ./.;
           cargoLock.lockFile = ./Cargo.lock;
@@ -982,7 +982,7 @@ cargo build --release
 }
 ```
 
-Install via `nix profile install github:user/nit` or add to system config. Dev shell via `nix develop`.
+Install via `nix profile install github:user/itr` or add to system config. Dev shell via `nix develop`.
 
 ---
 
@@ -992,9 +992,9 @@ Features deliberately deferred from v0.1 to keep scope tight, but architecturall
 
 ### MCP Server Mode
 
-Add a `nit mcp` subcommand that runs nit as an MCP (Model Context Protocol) server over stdio. This would let Claude Code (and other MCP-compatible agents) interact with nit via structured tool calls instead of CLI subprocess invocations, reducing overhead and improving reliability.
+Add a `itr mcp` subcommand that runs itr as an MCP (Model Context Protocol) server over stdio. This would let Claude Code (and other MCP-compatible agents) interact with itr via structured tool calls instead of CLI subprocess invocations, reducing overhead and improving reliability.
 
-The Rust MCP SDK (`rmcp` crate) supports this. Each nit command becomes an MCP tool:
+The Rust MCP SDK (`rmcp` crate) supports this. Each itr command becomes an MCP tool:
 
 ```
 nit_add, nit_list, nit_get, nit_update, nit_close,
@@ -1005,23 +1005,23 @@ This is architecturally cheap to add because the command implementations already
 
 ### Git Sync (optional, opt-in)
 
-Add `nit sync` that exports to JSONL and optionally commits to git. This would follow the Beads model but remain explicitly opt-in. The core design principle stays: the SQLite db is the source of truth, JSONL is just a portable snapshot.
+Add `itr sync` that exports to JSONL and optionally commits to git. This would follow the Beads model but remain explicitly opt-in. The core design principle stays: the SQLite db is the source of truth, JSONL is just a portable snapshot.
 
 ### Bridge to GitHub Issues
 
-`nit bridge github --repo user/repo` to sync issues bidirectionally with GitHub Issues. Useful for projects that want agent-local tracking but human-visible issues on GitHub.
+`itr bridge github --repo user/repo` to sync issues bidirectionally with GitHub Issues. Useful for projects that want agent-local tracking but human-visible issues on GitHub.
 
 ### Templates
 
-`nit template add bug-report '{"kind":"bug","priority":"high","tags":["bug"],"acceptance":"no regression in test suite"}'`
+`itr template add bug-report '{"kind":"bug","priority":"high","tags":["bug"],"acceptance":"no regression in test suite"}'`
 
-Then: `nit add "Login fails on Safari" --template bug-report`
+Then: `itr add "Login fails on Safari" --template bug-report`
 
 Reduces boilerplate for common issue patterns.
 
 ### Hooks
 
-Post-create, post-close, post-update hooks that run shell commands. E.g., auto-run tests when an issue is closed, or notify a webhook. Similar to git hooks, stored in `.nit/hooks/`.
+Post-create, post-close, post-update hooks that run shell commands. E.g., auto-run tests when an issue is closed, or notify a webhook. Similar to git hooks, stored in `.itr/hooks/`.
 
 ---
 
@@ -1031,13 +1031,13 @@ Post-create, post-close, post-update hooks that run shell commands. E.g., auto-r
 
 ```bash
 # What's the overall state?
-nit stats -f json
+itr stats -f json
 
 # What can I work on right now?
-nit ready -f json
+itr ready -f json
 
 # Grab the top task
-ISSUE=$(nit next --claim -f json)
+ISSUE=$(itr next --claim -f json)
 ID=$(echo "$ISSUE" | jq -r '.id')
 FILES=$(echo "$ISSUE" | jq -r '.files | join(" ")')
 echo "Working on: $(echo "$ISSUE" | jq -r '.title')"
@@ -1046,7 +1046,7 @@ echo "Working on: $(echo "$ISSUE" | jq -r '.title')"
 ### Filing issues from an audit
 
 ```bash
-cat <<'EOF' | nit batch add
+cat <<'EOF' | itr batch add
 [
   {"title": "SQL injection in /api/users endpoint", "priority": "critical", "kind": "bug",
    "context": "Parameter 'id' in UserController.getUser() is concatenated directly into SQL query at line 47 of src/controllers/user.rs",
@@ -1065,7 +1065,7 @@ EOF
 
 ```bash
 # Get next task
-ISSUE=$(nit next -f json)
+ISSUE=$(itr next -f json)
 if [ $? -eq 2 ]; then
   echo "No work available"
   exit 0
@@ -1074,45 +1074,45 @@ fi
 ID=$(echo "$ISSUE" | jq -r '.id')
 
 # Claim it
-nit update "$ID" -s in-progress
+itr update "$ID" -s in-progress
 
 # ... agent does work ...
 
 # Log progress
-nit note "$ID" "Refactored query builder. All tests pass." --agent "claude-session-001"
+itr note "$ID" "Refactored query builder. All tests pass." --agent "claude-session-001"
 
 # Mark done with reason
-nit close "$ID" "Implemented parameterized queries, verified with integration tests"
+itr close "$ID" "Implemented parameterized queries, verified with integration tests"
 ```
 
 ### Landing the plane (session end)
 
 ```bash
 # Log what happened this session
-nit note "$CURRENT_ID" "Session ending. Completed auth refactor. Tests pass. \
+itr note "$CURRENT_ID" "Session ending. Completed auth refactor. Tests pass. \
 Discovered edge case with token expiry - filed as issue." --agent "claude-session-001"
 
 # File any discovered work
-nit add "Handle token expiry edge case in refresh flow" -p high -k bug \
+itr add "Handle token expiry edge case in refresh flow" -p high -k bug \
   --context "During auth refactor, found that tokens within 30s of expiry cause race condition" \
   --files "src/auth/refresh.rs" --tags "auth,race-condition"
 
 # Show what's next for the follow-up agent
-nit ready -f json --limit 5
+itr ready -f json --limit 5
 ```
 
 ### Querying context before starting work
 
 ```bash
 # Full picture on an issue
-nit get 7 -f json
+itr get 7 -f json
 
 # Everything tagged 'auth' including blocked work
-nit list --tag auth --include-blocked -f json
+itr list --tag auth --include-blocked -f json
 
 # Dependency graph to understand relationships
-nit graph -f json
+itr graph -f json
 
 # Health check
-nit doctor
+itr doctor
 ```

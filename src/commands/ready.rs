@@ -1,5 +1,5 @@
 use crate::db;
-use crate::error::{self, NitError};
+use crate::error::{self, ItrError};
 use crate::format::{self, Format};
 use crate::models::IssueSummary;
 use crate::urgency::{self, UrgencyConfig};
@@ -10,7 +10,7 @@ pub fn run(
     limit: Option<usize>,
     status: Option<String>,
     fmt: Format,
-) -> Result<(), NitError> {
+) -> Result<(), ItrError> {
     let statuses = match status {
         Some(s) => vec![s],
         None => vec!["open".to_string(), "in-progress".to_string()],

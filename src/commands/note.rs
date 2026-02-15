@@ -1,5 +1,5 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::Format;
 use rusqlite::Connection;
 use std::io::{self, IsTerminal, Read};
@@ -10,12 +10,12 @@ pub fn run(
     text: Option<String>,
     agent: &str,
     fmt: Format,
-) -> Result<(), NitError> {
+) -> Result<(), ItrError> {
     let content = match text {
         Some(t) => t,
         None => {
             if io::stdin().is_terminal() {
-                return Err(NitError::InvalidValue {
+                return Err(ItrError::InvalidValue {
                     field: "text".to_string(),
                     value: String::new(),
                     valid: "non-empty string or pipe via stdin".to_string(),

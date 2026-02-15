@@ -1,9 +1,9 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::models::ExportData;
 use rusqlite::Connection;
 
-pub fn run(conn: &Connection, export_format: &str) -> Result<(), NitError> {
+pub fn run(conn: &Connection, export_format: &str) -> Result<(), ItrError> {
     let issues = db::all_issues(conn)?;
 
     let mut export_items: Vec<ExportData> = Vec::new();

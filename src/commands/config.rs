@@ -1,10 +1,10 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::Format;
 use crate::urgency::UrgencyConfig;
 use rusqlite::Connection;
 
-pub fn run_list(conn: &Connection, fmt: Format) -> Result<(), NitError> {
+pub fn run_list(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     let stored = db::config_list(conn)?;
     let defaults = UrgencyConfig::defaults_map();
 
@@ -45,7 +45,7 @@ pub fn run_list(conn: &Connection, fmt: Format) -> Result<(), NitError> {
     Ok(())
 }
 
-pub fn run_get(conn: &Connection, key: &str, fmt: Format) -> Result<(), NitError> {
+pub fn run_get(conn: &Connection, key: &str, fmt: Format) -> Result<(), ItrError> {
     let value = match db::config_get(conn, key)? {
         Some(v) => v,
         None => {
@@ -54,7 +54,7 @@ pub fn run_get(conn: &Connection, key: &str, fmt: Format) -> Result<(), NitError
             match defaults.iter().find(|(k, _)| *k == key) {
                 Some((_, v)) => format!("{}", v),
                 None => {
-                    return Err(NitError::NotFound(-1));
+                    return Err(ItrError::NotFound(-1));
                 }
             }
         }
@@ -73,7 +73,7 @@ pub fn run_get(conn: &Connection, key: &str, fmt: Format) -> Result<(), NitError
     Ok(())
 }
 
-pub fn run_set(conn: &Connection, key: &str, value: &str, fmt: Format) -> Result<(), NitError> {
+pub fn run_set(conn: &Connection, key: &str, value: &str, fmt: Format) -> Result<(), ItrError> {
     db::config_set(conn, key, value)?;
 
     match fmt {
@@ -89,7 +89,7 @@ pub fn run_set(conn: &Connection, key: &str, value: &str, fmt: Format) -> Result
     Ok(())
 }
 
-pub fn run_reset(conn: &Connection, fmt: Format) -> Result<(), NitError> {
+pub fn run_reset(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     db::config_reset(conn)?;
 
     match fmt {

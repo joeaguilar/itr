@@ -1,4 +1,4 @@
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::models::{Issue, Note};
 use rusqlite::{params, Connection};
 use std::env;
@@ -65,9 +65,9 @@ BEGIN
 END;
 "#;
 
-pub fn find_db(override_path: Option<&str>) -> Result<PathBuf, NitError> {
+pub fn find_db(override_path: Option<&str>) -> Result<PathBuf, ItrError> {
     // Check env var
-    if let Ok(path) = env::var("NIT_DB_PATH") {
+    if let Ok(path) = env::var("ITR_DB_PATH") {
         return Ok(PathBuf::from(path));
     }
 
@@ -77,25 +77,25 @@ pub fn find_db(override_path: Option<&str>) -> Result<PathBuf, NitError> {
     }
 
     // Walk up from cwd
-    let mut dir = env::current_dir().map_err(NitError::Io)?;
+    let mut dir = env::current_dir().map_err(ItrError::Io)?;
     loop {
-        let candidate = dir.join(".nit.db");
+        let candidate = dir.join(".itr.db");
         if candidate.exists() {
             return Ok(candidate);
         }
         if !dir.pop() {
-            return Err(NitError::NoDatabase);
+            return Err(ItrError::NoDatabase);
         }
     }
 }
 
-pub fn open_db(path: &Path) -> Result<Connection, NitError> {
+pub fn open_db(path: &Path) -> Result<Connection, ItrError> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     Ok(conn)
 }
 
-pub fn init_db(path: &Path) -> Result<Connection, NitError> {
+pub fn init_db(path: &Path) -> Result<Connection, ItrError> {
     let conn = Connection::open(path)?;
     conn.execute_batch(SCHEMA)?;
     Ok(conn)
@@ -117,7 +117,7 @@ pub fn insert_issue(
     tags: &[String],
     acceptance: &str,
     parent_id: Option<i64>,
-) -> Result<Issue, NitError> {
+) -> Result<Issue, ItrError> {
     let files_json = serde_json::to_string(files)?;
     let tags_json = serde_json::to_string(tags)?;
 
@@ -131,7 +131,7 @@ pub fn insert_issue(
     get_issue(conn, id)
 }
 
-pub fn get_issue(conn: &Connection, id: i64) -> Result<Issue, NitError> {
+pub fn get_issue(conn: &Connection, id: i64) -> Result<Issue, ItrError> {
     conn.query_row(
         "SELECT id, title, status, priority, kind, context, files, tags, acceptance, parent_id, close_reason, created_at, updated_at
          FROM issues WHERE id = ?1",
@@ -155,12 +155,12 @@ pub fn get_issue(conn: &Connection, id: i64) -> Result<Issue, NitError> {
         },
     )
     .map_err(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => NitError::NotFound(id),
-        other => NitError::Db(other),
+        rusqlite::Error::QueryReturnedNoRows => ItrError::NotFound(id),
+        other => ItrError::Db(other),
     })
 }
 
-pub fn issue_exists(conn: &Connection, id: i64) -> Result<bool, NitError> {
+pub fn issue_exists(conn: &Connection, id: i64) -> Result<bool, ItrError> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM issues WHERE id = ?1",
         params![id],
@@ -183,7 +183,7 @@ pub fn list_issues(
     include_blocked: bool,
     parent_id: Option<i64>,
     all: bool,
-) -> Result<Vec<Issue>, NitError> {
+) -> Result<Vec<Issue>, ItrError> {
     let mut sql = String::from(
         "SELECT id, title, status, priority, kind, context, files, tags, acceptance, parent_id, close_reason, created_at, updated_at FROM issues WHERE 1=1",
     );
@@ -289,18 +289,18 @@ pub fn list_issues(
     Ok(issues)
 }
 
-pub fn update_issue_field(conn: &Connection, id: i64, field: &str, value: &str) -> Result<(), NitError> {
+pub fn update_issue_field(conn: &Connection, id: i64, field: &str, value: &str) -> Result<(), ItrError> {
     if !issue_exists(conn, id)? {
-        return Err(NitError::NotFound(id));
+        return Err(ItrError::NotFound(id));
     }
     let sql = format!("UPDATE issues SET {} = ?1 WHERE id = ?2", field);
     conn.execute(&sql, params![value, id])?;
     Ok(())
 }
 
-pub fn update_issue_parent(conn: &Connection, id: i64, parent_id: Option<i64>) -> Result<(), NitError> {
+pub fn update_issue_parent(conn: &Connection, id: i64, parent_id: Option<i64>) -> Result<(), ItrError> {
     if !issue_exists(conn, id)? {
-        return Err(NitError::NotFound(id));
+        return Err(ItrError::NotFound(id));
     }
     conn.execute(
         "UPDATE issues SET parent_id = ?1 WHERE id = ?2",
@@ -311,12 +311,12 @@ pub fn update_issue_parent(conn: &Connection, id: i64, parent_id: Option<i64>) -
 
 // --- Dependencies ---
 
-pub fn add_dependency(conn: &Connection, blocker_id: i64, blocked_id: i64) -> Result<bool, NitError> {
+pub fn add_dependency(conn: &Connection, blocker_id: i64, blocked_id: i64) -> Result<bool, ItrError> {
     if !issue_exists(conn, blocker_id)? {
-        return Err(NitError::NotFound(blocker_id));
+        return Err(ItrError::NotFound(blocker_id));
     }
     if !issue_exists(conn, blocked_id)? {
-        return Err(NitError::NotFound(blocked_id));
+        return Err(ItrError::NotFound(blocked_id));
     }
 
     // Check for existing
@@ -333,7 +333,7 @@ pub fn add_dependency(conn: &Connection, blocker_id: i64, blocked_id: i64) -> Re
     // Check if blocked_id can already reach blocker_id via existing "blocks" edges.
     // If so, adding this edge would create a cycle.
     if has_path(conn, blocked_id, blocker_id)? {
-        return Err(NitError::CycleDetected(format!(
+        return Err(ItrError::CycleDetected(format!(
             "{} -> ... -> {}",
             blocked_id, blocker_id
         )));
@@ -346,12 +346,12 @@ pub fn add_dependency(conn: &Connection, blocker_id: i64, blocked_id: i64) -> Re
     Ok(true)
 }
 
-pub fn remove_dependency(conn: &Connection, blocker_id: i64, blocked_id: i64) -> Result<(), NitError> {
+pub fn remove_dependency(conn: &Connection, blocker_id: i64, blocked_id: i64) -> Result<(), ItrError> {
     if !issue_exists(conn, blocker_id)? {
-        return Err(NitError::NotFound(blocker_id));
+        return Err(ItrError::NotFound(blocker_id));
     }
     if !issue_exists(conn, blocked_id)? {
-        return Err(NitError::NotFound(blocked_id));
+        return Err(ItrError::NotFound(blocked_id));
     }
     conn.execute(
         "DELETE FROM dependencies WHERE blocker_id = ?1 AND blocked_id = ?2",
@@ -362,7 +362,7 @@ pub fn remove_dependency(conn: &Connection, blocker_id: i64, blocked_id: i64) ->
 
 /// Check if there's a path from `from_id` to `to_id` following blocker edges.
 /// i.e., `from_id` is blocked by X, X is blocked by Y, ... eventually reaches `to_id`.
-fn has_path(conn: &Connection, from_id: i64, to_id: i64) -> Result<bool, NitError> {
+fn has_path(conn: &Connection, from_id: i64, to_id: i64) -> Result<bool, ItrError> {
     let mut visited = std::collections::HashSet::new();
     let mut queue = std::collections::VecDeque::new();
     queue.push_back(from_id);
@@ -390,7 +390,7 @@ fn has_path(conn: &Connection, from_id: i64, to_id: i64) -> Result<bool, NitErro
     Ok(false)
 }
 
-pub fn get_blockers(conn: &Connection, issue_id: i64) -> Result<Vec<i64>, NitError> {
+pub fn get_blockers(conn: &Connection, issue_id: i64) -> Result<Vec<i64>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT blocker_id FROM dependencies WHERE blocked_id = ?1",
     )?;
@@ -400,7 +400,7 @@ pub fn get_blockers(conn: &Connection, issue_id: i64) -> Result<Vec<i64>, NitErr
     Ok(ids)
 }
 
-pub fn get_blocking(conn: &Connection, issue_id: i64) -> Result<Vec<i64>, NitError> {
+pub fn get_blocking(conn: &Connection, issue_id: i64) -> Result<Vec<i64>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT blocked_id FROM dependencies WHERE blocker_id = ?1",
     )?;
@@ -410,7 +410,7 @@ pub fn get_blocking(conn: &Connection, issue_id: i64) -> Result<Vec<i64>, NitErr
     Ok(ids)
 }
 
-pub fn is_blocked(conn: &Connection, issue_id: i64) -> Result<bool, NitError> {
+pub fn is_blocked(conn: &Connection, issue_id: i64) -> Result<bool, ItrError> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM dependencies d
          JOIN issues i ON d.blocker_id = i.id
@@ -422,7 +422,7 @@ pub fn is_blocked(conn: &Connection, issue_id: i64) -> Result<bool, NitError> {
     Ok(count > 0)
 }
 
-pub fn blocks_active_issues(conn: &Connection, issue_id: i64) -> Result<bool, NitError> {
+pub fn blocks_active_issues(conn: &Connection, issue_id: i64) -> Result<bool, ItrError> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM dependencies d
          JOIN issues i ON d.blocked_id = i.id
@@ -435,7 +435,7 @@ pub fn blocks_active_issues(conn: &Connection, issue_id: i64) -> Result<bool, Ni
 }
 
 /// Get issues that become unblocked when `closed_id` is resolved.
-pub fn get_newly_unblocked(conn: &Connection, closed_id: i64) -> Result<Vec<(i64, String)>, NitError> {
+pub fn get_newly_unblocked(conn: &Connection, closed_id: i64) -> Result<Vec<(i64, String)>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT i.id, i.title FROM issues i
          JOIN dependencies d ON d.blocked_id = i.id
@@ -459,9 +459,9 @@ pub fn get_newly_unblocked(conn: &Connection, closed_id: i64) -> Result<Vec<(i64
 
 // --- Notes ---
 
-pub fn add_note(conn: &Connection, issue_id: i64, content: &str, agent: &str) -> Result<Note, NitError> {
+pub fn add_note(conn: &Connection, issue_id: i64, content: &str, agent: &str) -> Result<Note, ItrError> {
     if !issue_exists(conn, issue_id)? {
-        return Err(NitError::NotFound(issue_id));
+        return Err(ItrError::NotFound(issue_id));
     }
     conn.execute(
         "INSERT INTO notes (issue_id, content, agent) VALUES (?1, ?2, ?3)",
@@ -481,10 +481,10 @@ pub fn add_note(conn: &Connection, issue_id: i64, content: &str, agent: &str) ->
             })
         },
     )
-    .map_err(NitError::Db)
+    .map_err(ItrError::Db)
 }
 
-pub fn get_notes(conn: &Connection, issue_id: i64) -> Result<Vec<Note>, NitError> {
+pub fn get_notes(conn: &Connection, issue_id: i64) -> Result<Vec<Note>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT id, issue_id, content, agent, created_at FROM notes WHERE issue_id = ?1 ORDER BY created_at ASC",
     )?;
@@ -502,7 +502,7 @@ pub fn get_notes(conn: &Connection, issue_id: i64) -> Result<Vec<Note>, NitError
     Ok(notes)
 }
 
-pub fn count_notes(conn: &Connection, issue_id: i64) -> Result<i64, NitError> {
+pub fn count_notes(conn: &Connection, issue_id: i64) -> Result<i64, ItrError> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM notes WHERE issue_id = ?1",
         params![issue_id],
@@ -513,7 +513,7 @@ pub fn count_notes(conn: &Connection, issue_id: i64) -> Result<i64, NitError> {
 
 // --- Config ---
 
-pub fn config_get(conn: &Connection, key: &str) -> Result<Option<String>, NitError> {
+pub fn config_get(conn: &Connection, key: &str) -> Result<Option<String>, ItrError> {
     match conn.query_row(
         "SELECT value FROM config WHERE key = ?1",
         params![key],
@@ -521,11 +521,11 @@ pub fn config_get(conn: &Connection, key: &str) -> Result<Option<String>, NitErr
     ) {
         Ok(val) => Ok(Some(val)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(NitError::Db(e)),
+        Err(e) => Err(ItrError::Db(e)),
     }
 }
 
-pub fn config_set(conn: &Connection, key: &str, value: &str) -> Result<(), NitError> {
+pub fn config_set(conn: &Connection, key: &str, value: &str) -> Result<(), ItrError> {
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES (?1, ?2)",
         params![key, value],
@@ -533,7 +533,7 @@ pub fn config_set(conn: &Connection, key: &str, value: &str) -> Result<(), NitEr
     Ok(())
 }
 
-pub fn config_list(conn: &Connection) -> Result<Vec<(String, String)>, NitError> {
+pub fn config_list(conn: &Connection) -> Result<Vec<(String, String)>, ItrError> {
     let mut stmt = conn.prepare("SELECT key, value FROM config ORDER BY key")?;
     let rows: Vec<(String, String)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -541,14 +541,14 @@ pub fn config_list(conn: &Connection) -> Result<Vec<(String, String)>, NitError>
     Ok(rows)
 }
 
-pub fn config_reset(conn: &Connection) -> Result<(), NitError> {
+pub fn config_reset(conn: &Connection) -> Result<(), ItrError> {
     conn.execute("DELETE FROM config", [])?;
     Ok(())
 }
 
 // --- All issues (for export, stats, etc.) ---
 
-pub fn all_issues(conn: &Connection) -> Result<Vec<Issue>, NitError> {
+pub fn all_issues(conn: &Connection) -> Result<Vec<Issue>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT id, title, status, priority, kind, context, files, tags, acceptance, parent_id, close_reason, created_at, updated_at
          FROM issues ORDER BY id",
@@ -575,7 +575,7 @@ pub fn all_issues(conn: &Connection) -> Result<Vec<Issue>, NitError> {
     Ok(issues)
 }
 
-pub fn all_dependencies(conn: &Connection) -> Result<Vec<(i64, i64)>, NitError> {
+pub fn all_dependencies(conn: &Connection) -> Result<Vec<(i64, i64)>, ItrError> {
     let mut stmt = conn.prepare("SELECT blocker_id, blocked_id FROM dependencies")?;
     let deps: Vec<(i64, i64)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -584,7 +584,7 @@ pub fn all_dependencies(conn: &Connection) -> Result<Vec<(i64, i64)>, NitError> 
 }
 
 #[allow(dead_code)]
-pub fn all_notes(conn: &Connection) -> Result<Vec<Note>, NitError> {
+pub fn all_notes(conn: &Connection) -> Result<Vec<Note>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT id, issue_id, content, agent, created_at FROM notes ORDER BY id",
     )?;

@@ -1,25 +1,43 @@
-# nit — Agent-First Issue Tracker CLI
+# itr — Agent-First Issue Tracker CLI
 
 A local, zero-config issue tracker built for AI coding agents. SQLite-backed, single binary, no daemon, no network, no auth.
 
 ```
 cargo install --path .
-nit init
-nit add "Fix auth bug" -p high -k bug --tags "auth,security" --files "src/auth.rs"
-nit ready -f json
+itr init
+itr add "Fix auth bug" -p high -k bug --tags "auth,security" --files "src/auth.rs"
+itr ready -f json
 ```
 
-## Why nit?
+## Why itr?
 
-AI coding agents need persistent memory across sessions. `nit` gives them a local issue database they can read from, write to, and reason about — without any setup, configuration, or network access.
+AI coding agents need persistent memory across sessions. `itr` gives them a local issue database they can read from, write to, and reason about — without any setup, configuration, or network access.
 
 - **Agent-first**: compact output format minimizes token usage; JSON mode for structured data
-- **Zero config**: one `.nit.db` file, no daemon, no git hooks, no YAML
+- **Zero config**: one `.itr.db` file, no daemon, no git hooks, no YAML
 - **Deterministic**: sorted output, consistent exit codes, no interactive prompts
 - **Composable**: stdout is always parseable data, stderr is always errors
 - **Fast**: single-digit millisecond operations on SQLite
 
 ## Install
+
+### Quick install (recommended)
+
+```bash
+./install.sh
+```
+
+The installation script will:
+- Build the release binary
+- Offer installation to `~/.cargo/bin`, `/usr/local/bin`, or a custom location
+- Verify the binary is in your PATH
+- Guide you through any additional setup
+
+To uninstall later:
+
+```bash
+./uninstall.sh
+```
 
 ### From source (any platform)
 
@@ -30,16 +48,16 @@ cargo install --path .
 ### Build manually
 
 ```bash
-git clone https://github.com/your-user/nit.git
-cd nit
+git clone https://github.com/your-user/itr.git
+cd itr
 cargo build --release
-# Binary at ./target/release/nit
+# Binary at ./target/release/itr
 ```
 
 ### Nix
 
 ```bash
-nix profile install github:your-user/nit
+nix profile install github:your-user/itr
 # or in a dev shell:
 nix develop
 ```
@@ -50,30 +68,30 @@ nix develop
 
 ```bash
 # Initialize in your project root
-nit init
+itr init
 
 # Create issues
-nit add "Fix login timeout" -p high -k bug -c "Users report 30s hangs"
-nit add "Add rate limiting" -p medium -k feature --tags "api,security"
-nit add "Write integration tests" -p low -k task -a "cargo test integration passes"
+itr add "Fix login timeout" -p high -k bug -c "Users report 30s hangs"
+itr add "Add rate limiting" -p medium -k feature --tags "api,security"
+itr add "Write integration tests" -p low -k task -a "cargo test integration passes"
 
 # Set up dependencies
-nit depend 3 --on 1    # issue 3 blocked by issue 1
+itr depend 3 --on 1    # issue 3 blocked by issue 1
 
 # See what's ready to work on
-nit ready
+itr ready
 
 # Grab the top task
-nit next --claim
+itr next --claim
 
 # Log progress
-nit note 1 "Investigated timeout — root cause is connection pool exhaustion"
+itr note 1 "Investigated timeout — root cause is connection pool exhaustion"
 
 # Close with reason
-nit close 1 "Fixed pool size in config, verified with load test"
+itr close 1 "Fixed pool size in config, verified with load test"
 
 # Check project health
-nit stats
+itr stats
 ```
 
 ## Output Formats
@@ -97,7 +115,7 @@ ACCEPTANCE: cargo test auth passes
 Full structured output. Always valid JSON.
 
 ```bash
-nit get 1 -f json
+itr get 1 -f json
 ```
 
 ```json
@@ -134,43 +152,43 @@ Human-readable table format.
 
 | Command | Description |
 |---------|-------------|
-| `nit init` | Create `.nit.db` in the current directory |
-| `nit add <TITLE>` | Create a new issue |
-| `nit list` | List issues (default: open/in-progress, unblocked, by urgency) |
-| `nit get <ID>` | Full detail for one issue |
-| `nit update <ID>` | Modify issue fields |
-| `nit close <ID> [REASON]` | Close an issue as done |
-| `nit note <ID> <TEXT>` | Append a note to an issue |
+| `itr init` | Create `.itr.db` in the current directory |
+| `itr add <TITLE>` | Create a new issue |
+| `itr list` | List issues (default: open/in-progress, unblocked, by urgency) |
+| `itr get <ID>` | Full detail for one issue |
+| `itr update <ID>` | Modify issue fields |
+| `itr close <ID> [REASON]` | Close an issue as done |
+| `itr note <ID> <TEXT>` | Append a note to an issue |
 
 ### Dependencies
 
 | Command | Description |
 |---------|-------------|
-| `nit depend <ID> --on <ID>` | Mark an issue as blocked by another |
-| `nit undepend <ID> --on <ID>` | Remove a dependency |
-| `nit graph` | Output the dependency graph (JSON or DOT format) |
+| `itr depend <ID> --on <ID>` | Mark an issue as blocked by another |
+| `itr undepend <ID> --on <ID>` | Remove a dependency |
+| `itr graph` | Output the dependency graph (JSON or DOT format) |
 
 ### Agent Workflow
 
 | Command | Description |
 |---------|-------------|
-| `nit next` | Single highest-urgency unblocked open issue |
-| `nit next --claim` | Same, but atomically sets it to in-progress |
-| `nit ready` | All unblocked non-terminal issues, sorted by urgency |
-| `nit batch add` | Bulk-create issues from JSON array on stdin |
+| `itr next` | Single highest-urgency unblocked open issue |
+| `itr next --claim` | Same, but atomically sets it to in-progress |
+| `itr ready` | All unblocked non-terminal issues, sorted by urgency |
+| `itr batch add` | Bulk-create issues from JSON array on stdin |
 
 ### Project Management
 
 | Command | Description |
 |---------|-------------|
-| `nit stats` | Counts by status/priority/kind, blocked ratio, average urgency |
-| `nit doctor` | Integrity checks (orphaned deps, stuck issues, cycles) |
-| `nit doctor --fix` | Auto-fix safe issues |
-| `nit config list` | Show all urgency coefficients |
-| `nit config set <KEY> <VALUE>` | Tune urgency scoring |
-| `nit export` | Export all data as JSONL (or `--export-format json`) |
-| `nit import --file <PATH>` | Import from JSONL/JSON (supports `--merge`) |
-| `nit schema` | Dump the database schema SQL |
+| `itr stats` | Counts by status/priority/kind, blocked ratio, average urgency |
+| `itr doctor` | Integrity checks (orphaned deps, stuck issues, cycles) |
+| `itr doctor --fix` | Auto-fix safe issues |
+| `itr config list` | Show all urgency coefficients |
+| `itr config set <KEY> <VALUE>` | Tune urgency scoring |
+| `itr export` | Export all data as JSONL (or `--export-format json`) |
+| `itr import --file <PATH>` | Import from JSONL/JSON (supports `--merge`) |
+| `itr schema` | Dump the database schema SQL |
 
 ### Global Flags
 
@@ -180,14 +198,14 @@ Human-readable table format.
 -q, --quiet              Suppress non-essential output
 ```
 
-## nit add
+## itr add
 
 ```bash
 # Basic
-nit add "Fix the bug"
+itr add "Fix the bug"
 
 # Full options
-nit add "Fix auth timeout" \
+itr add "Fix auth timeout" \
   -p critical \
   -k bug \
   -c "Users see 30s hangs on login" \
@@ -199,31 +217,31 @@ nit add "Fix auth timeout" \
 
 # From JSON on stdin (avoids shell escaping)
 echo '{"title":"Fix bug","priority":"high","kind":"bug","context":"long text..."}' \
-  | nit add --stdin-json
+  | itr add --stdin-json
 ```
 
 **Fields**: `title` (required), `priority` (critical/high/medium/low), `kind` (bug/feature/task/epic), `context`, `files`, `tags`, `acceptance`, `blocked-by`, `parent`.
 
-## nit list
+## itr list
 
 ```bash
-nit list                          # open + in-progress, unblocked, by urgency
-nit list --all                    # all statuses
-nit list -s open                  # only open
-nit list -k bug -p critical       # bugs with critical priority
-nit list --tag auth               # issues tagged 'auth'
-nit list --blocked                # only blocked issues
-nit list --include-blocked        # include blocked in results
-nit list --parent 5               # children of epic #5
-nit list --sort id -n 10          # by id, limit 10
+itr list                          # open + in-progress, unblocked, by urgency
+itr list --all                    # all statuses
+itr list -s open                  # only open
+itr list -k bug -p critical       # bugs with critical priority
+itr list --tag auth               # issues tagged 'auth'
+itr list --blocked                # only blocked issues
+itr list --include-blocked        # include blocked in results
+itr list --parent 5               # children of epic #5
+itr list --sort id -n 10          # by id, limit 10
 ```
 
-## nit batch add
+## itr batch add
 
 Bulk-create issues from a JSON array. Supports `@N` references for intra-batch dependencies.
 
 ```bash
-cat <<'EOF' | nit batch add
+cat <<'EOF' | itr batch add
 [
   {"title": "Fix SQL injection", "priority": "critical", "kind": "bug"},
   {"title": "Add parameterized queries", "priority": "high"},
@@ -236,7 +254,7 @@ EOF
 
 ## Urgency Scoring
 
-Every issue has a computed urgency score that drives `nit next` and `nit ready`. The score is never stored — it's always computed fresh from current state.
+Every issue has a computed urgency score that drives `itr next` and `itr ready`. The score is never stored — it's always computed fresh from current state.
 
 ```
 urgency = priority + kind + blocking + blocked + age + in_progress + acceptance + notes
@@ -262,10 +280,10 @@ urgency = priority + kind + blocking + blocked + age + in_progress + acceptance 
 ### Customize
 
 ```bash
-nit config set urgency.priority.critical 15.0
-nit config set urgency.kind.bug 5.0
-nit config list       # see all values
-nit config reset      # restore defaults
+itr config set urgency.priority.critical 15.0
+itr config set urgency.kind.bug 5.0
+itr config list       # see all values
+itr config reset      # restore defaults
 ```
 
 ## Exit Codes
@@ -280,26 +298,26 @@ Exit code 2 lets agents distinguish "nothing found" from "something broke."
 
 ## Database
 
-`nit` stores everything in a single `.nit.db` SQLite file. It finds the database by walking up from the current directory, or you can set `NIT_DB_PATH` to point at a specific file.
+`itr` stores everything in a single `.itr.db` SQLite file. It finds the database by walking up from the current directory, or you can set `ITR_DB_PATH` to point at a specific file.
 
 ```bash
 # Use env var
-export NIT_DB_PATH=/path/to/.nit.db
+export ITR_DB_PATH=/path/to/.itr.db
 
 # Or CLI flag
-nit list --db /path/to/.nit.db
+itr list --db /path/to/.itr.db
 ```
 
 ### Schema
 
-Four tables: `issues`, `dependencies`, `notes`, `config`. Run `nit schema` to see the full SQL.
+Four tables: `issues`, `dependencies`, `notes`, `config`. Run `itr schema` to see the full SQL.
 
 ## Agent Integration
 
 ### CLAUDE.md / AGENTS.md
 
 ```bash
-nit init --agents-md   # appends instructions to AGENTS.md
+itr init --agents-md   # appends instructions to AGENTS.md
 ```
 
 Or manually add to your `CLAUDE.md`:
@@ -307,35 +325,35 @@ Or manually add to your `CLAUDE.md`:
 ```markdown
 ## Issue Tracking
 
-This project uses `nit` for issue tracking. Before starting work, run `nit ready -f json`
-to find the next actionable task. After completing work, run `nit close <ID> "reason"`.
-File discovered issues with `nit add`. Always run `nit note <ID> "summary"` before ending a session.
+This project uses `itr` for issue tracking. Before starting work, run `itr ready -f json`
+to find the next actionable task. After completing work, run `itr close <ID> "reason"`.
+File discovered issues with `itr add`. Always run `itr note <ID> "summary"` before ending a session.
 ```
 
 ### Typical Agent Session
 
 ```bash
 # 1. Understand the landscape
-nit stats -f json
-nit ready -f json
+itr stats -f json
+itr ready -f json
 
 # 2. Grab top task
-ISSUE=$(nit next --claim -f json)
+ISSUE=$(itr next --claim -f json)
 ID=$(echo "$ISSUE" | jq -r '.id')
 
 # 3. Do the work...
 
 # 4. Log what happened
-nit note "$ID" "Refactored auth module. All tests pass." --agent "claude-session-001"
+itr note "$ID" "Refactored auth module. All tests pass." --agent "claude-session-001"
 
 # 5. Close it
-nit close "$ID" "Implemented in commit abc123"
+itr close "$ID" "Implemented in commit abc123"
 
 # 6. File anything discovered
-nit add "Edge case in token refresh" -p high -k bug --files "src/auth/refresh.rs"
+itr add "Edge case in token refresh" -p high -k bug --files "src/auth/refresh.rs"
 
 # 7. Show what's next
-nit ready -f json --limit 5
+itr ready -f json --limit 5
 ```
 
 ## Testing

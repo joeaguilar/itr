@@ -1,5 +1,5 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::IssueDetail;
 use crate::urgency::{self, UrgencyConfig};
@@ -12,7 +12,7 @@ pub fn run(
     reason: Option<String>,
     wontfix: bool,
     fmt: Format,
-) -> Result<(), NitError> {
+) -> Result<(), ItrError> {
     // Read reason from stdin if not provided and stdin is not a TTY
     let reason = match reason {
         Some(r) => r,

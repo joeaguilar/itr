@@ -1,11 +1,11 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::{IssueDetail, IssueSummary};
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 
-pub fn run(conn: &Connection, id: i64, fmt: Format) -> Result<(), NitError> {
+pub fn run(conn: &Connection, id: i64, fmt: Format) -> Result<(), ItrError> {
     let issue = db::get_issue(conn, id)?;
     let config = UrgencyConfig::load(conn);
     let (urg, breakdown) = urgency::compute_urgency_with_breakdown(&issue, &config, conn);

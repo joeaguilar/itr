@@ -285,7 +285,7 @@ fn format_graph_compact(graph: &GraphOutput) -> String {
 
 fn format_graph_dot(graph: &GraphOutput) -> String {
     let mut lines = Vec::new();
-    lines.push("digraph nit {".to_string());
+    lines.push("digraph itr {".to_string());
     lines.push("  rankdir=LR;".to_string());
     for node in &graph.nodes {
         let title_short = if node.title.len() > 30 {

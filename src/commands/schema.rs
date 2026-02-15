@@ -1,8 +1,8 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::Format;
 
-pub fn run(fmt: Format) -> Result<(), NitError> {
+pub fn run(fmt: Format) -> Result<(), ItrError> {
     let schema = db::get_schema_sql();
 
     match fmt {

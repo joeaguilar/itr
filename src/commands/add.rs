@@ -1,5 +1,5 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::{BatchAddInput, IssueDetail};
 use crate::urgency::{self, UrgencyConfig};
@@ -19,7 +19,7 @@ pub fn run(
     parent: Option<i64>,
     stdin_json: bool,
     fmt: Format,
-) -> Result<(), NitError> {
+) -> Result<(), ItrError> {
     let (title, priority, kind, context, files_vec, tags_vec, acceptance, parent_id, blocked_by_ids) =
         if stdin_json {
             let mut input = String::new();
@@ -42,7 +42,7 @@ pub fn run(
                 blocked,
             )
         } else {
-            let title = title.ok_or_else(|| NitError::InvalidValue {
+            let title = title.ok_or_else(|| ItrError::InvalidValue {
                 field: "title".to_string(),
                 value: String::new(),
                 valid: "non-empty string".to_string(),
@@ -116,10 +116,10 @@ pub fn run(
     Ok(())
 }
 
-pub fn validate_priority(p: &str) -> Result<(), NitError> {
+pub fn validate_priority(p: &str) -> Result<(), ItrError> {
     match p {
         "critical" | "high" | "medium" | "low" => Ok(()),
-        _ => Err(NitError::InvalidValue {
+        _ => Err(ItrError::InvalidValue {
             field: "priority".to_string(),
             value: p.to_string(),
             valid: "critical, high, medium, low".to_string(),
@@ -127,10 +127,10 @@ pub fn validate_priority(p: &str) -> Result<(), NitError> {
     }
 }
 
-pub fn validate_kind(k: &str) -> Result<(), NitError> {
+pub fn validate_kind(k: &str) -> Result<(), ItrError> {
     match k {
         "bug" | "feature" | "task" | "epic" => Ok(()),
-        _ => Err(NitError::InvalidValue {
+        _ => Err(ItrError::InvalidValue {
             field: "kind".to_string(),
             value: k.to_string(),
             valid: "bug, feature, task, epic".to_string(),
@@ -138,10 +138,10 @@ pub fn validate_kind(k: &str) -> Result<(), NitError> {
     }
 }
 
-pub fn validate_status(s: &str) -> Result<(), NitError> {
+pub fn validate_status(s: &str) -> Result<(), ItrError> {
     match s {
         "open" | "in-progress" | "done" | "wontfix" => Ok(()),
-        _ => Err(NitError::InvalidValue {
+        _ => Err(ItrError::InvalidValue {
             field: "status".to_string(),
             value: s.to_string(),
             valid: "open, in-progress, done, wontfix".to_string(),

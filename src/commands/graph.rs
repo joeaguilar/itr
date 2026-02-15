@@ -1,11 +1,11 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::{GraphEdge, GraphNode, GraphOutput};
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 
-pub fn run(conn: &Connection, all: bool, fmt: Format) -> Result<(), NitError> {
+pub fn run(conn: &Connection, all: bool, fmt: Format) -> Result<(), ItrError> {
     let issues = if all {
         db::all_issues(conn)?
     } else {

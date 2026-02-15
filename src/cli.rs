@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "nit", about = "Agent-first issue tracker CLI", version)]
+#[command(name = "itr", about = "Agent-first issue tracker CLI", version)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -21,9 +21,9 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Initialize a new .nit.db database
+    /// Initialize a new .itr.db database
     Init {
-        /// Also append nit instructions to AGENTS.md
+        /// Also append itr instructions to AGENTS.md
         #[arg(long)]
         agents_md: bool,
     },

@@ -1,6 +1,6 @@
 use crate::commands::add::{validate_kind, validate_priority, validate_status};
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::IssueDetail;
 use crate::urgency::{self, UrgencyConfig};
@@ -24,7 +24,7 @@ pub fn run(
     add_files: Vec<String>,
     remove_files: Vec<String>,
     fmt: Format,
-) -> Result<(), NitError> {
+) -> Result<(), ItrError> {
     // Validate issue exists
     let _issue = db::get_issue(conn, id)?;
 

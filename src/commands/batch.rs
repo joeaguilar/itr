@@ -1,13 +1,13 @@
 use crate::commands::add::{validate_kind, validate_priority};
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::{BatchAddInput, IssueDetail};
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 use std::io::{self, Read};
 
-pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), NitError> {
+pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 
@@ -46,13 +46,13 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), NitError> {
         for dep in &item.blocked_by {
             let blocker_id = if let Some(s) = dep.as_str() {
                 if let Some(stripped) = s.strip_prefix('@') {
-                    let batch_idx: usize = stripped.parse().map_err(|_| NitError::InvalidValue {
+                    let batch_idx: usize = stripped.parse().map_err(|_| ItrError::InvalidValue {
                         field: "blocked_by".to_string(),
                         value: s.to_string(),
                         valid: "@N where N is a batch index".to_string(),
                     })?;
                     if batch_idx >= created_ids.len() {
-                        return Err(NitError::InvalidValue {
+                        return Err(ItrError::InvalidValue {
                             field: "blocked_by".to_string(),
                             value: s.to_string(),
                             valid: format!("@0 to @{}", created_ids.len() - 1),
@@ -60,7 +60,7 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), NitError> {
                     }
                     created_ids[batch_idx]
                 } else {
-                    s.parse::<i64>().map_err(|_| NitError::InvalidValue {
+                    s.parse::<i64>().map_err(|_| ItrError::InvalidValue {
                         field: "blocked_by".to_string(),
                         value: s.to_string(),
                         valid: "integer ID or @N batch reference".to_string(),
@@ -69,7 +69,7 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), NitError> {
             } else if let Some(n) = dep.as_i64() {
                 n
             } else {
-                return Err(NitError::InvalidValue {
+                return Err(ItrError::InvalidValue {
                     field: "blocked_by".to_string(),
                     value: dep.to_string(),
                     valid: "integer ID or @N batch reference".to_string(),

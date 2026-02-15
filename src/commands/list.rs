@@ -1,5 +1,5 @@
 use crate::db;
-use crate::error::{self, NitError};
+use crate::error::{self, ItrError};
 use crate::format::{self, Format};
 use crate::models::IssueSummary;
 use crate::urgency::{self, UrgencyConfig};
@@ -18,7 +18,7 @@ pub fn run(
     sort: &str,
     limit: Option<usize>,
     fmt: Format,
-) -> Result<(), NitError> {
+) -> Result<(), ItrError> {
     let issues = db::list_issues(
         conn,
         &statuses,

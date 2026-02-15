@@ -1,12 +1,12 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::{OldestOpen, Stats};
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 use std::collections::HashMap;
 
-pub fn run(conn: &Connection, fmt: Format) -> Result<(), NitError> {
+pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     let all_issues = db::all_issues(conn)?;
     let config = UrgencyConfig::load(conn);
 

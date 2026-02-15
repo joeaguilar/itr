@@ -1,5 +1,5 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::Format;
 use crate::models::ExportData;
 use rusqlite::{params, Connection};
@@ -11,7 +11,7 @@ pub fn run(
     file: Option<String>,
     merge: bool,
     fmt: Format,
-) -> Result<(), NitError> {
+) -> Result<(), ItrError> {
     let input = match file {
         Some(path) => fs::read_to_string(&path)?,
         None => {

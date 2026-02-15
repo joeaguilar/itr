@@ -1,9 +1,9 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::Format;
 use rusqlite::Connection;
 
-pub fn run(conn: &Connection, id: i64, on: i64, fmt: Format) -> Result<(), NitError> {
+pub fn run(conn: &Connection, id: i64, on: i64, fmt: Format) -> Result<(), ItrError> {
     let created = db::add_dependency(conn, on, id)?;
 
     match fmt {
@@ -24,7 +24,7 @@ pub fn run(conn: &Connection, id: i64, on: i64, fmt: Format) -> Result<(), NitEr
     Ok(())
 }
 
-pub fn run_undepend(conn: &Connection, id: i64, on: i64, fmt: Format) -> Result<(), NitError> {
+pub fn run_undepend(conn: &Connection, id: i64, on: i64, fmt: Format) -> Result<(), ItrError> {
     db::remove_dependency(conn, on, id)?;
 
     // Check if this unblocks anything

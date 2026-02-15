@@ -1,5 +1,5 @@
 [package]
-name = "nit"
+name = "itr"
 version = "0.1.0"
 edition = "2021"
 description = "Agent-first issue tracker CLI"

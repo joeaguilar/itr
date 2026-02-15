@@ -1,18 +1,18 @@
 use crate::db;
-use crate::error::NitError;
+use crate::error::ItrError;
 use crate::format::Format;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-pub fn run(agents_md: bool, fmt: Format, db_override: Option<&str>) -> Result<(), NitError> {
+pub fn run(agents_md: bool, fmt: Format, db_override: Option<&str>) -> Result<(), ItrError> {
     let db_path = if let Some(p) = db_override {
         PathBuf::from(p)
-    } else if let Ok(p) = env::var("NIT_DB_PATH") {
+    } else if let Ok(p) = env::var("ITR_DB_PATH") {
         PathBuf::from(p)
     } else {
-        let cwd = env::current_dir().map_err(NitError::Io)?;
-        cwd.join(".nit.db")
+        let cwd = env::current_dir().map_err(ItrError::Io)?;
+        cwd.join(".itr.db")
     };
 
     let created = if db_path.exists() {
@@ -49,14 +49,14 @@ pub fn run(agents_md: bool, fmt: Format, db_override: Option<&str>) -> Result<()
     Ok(())
 }
 
-fn append_agents_md(cwd: &PathBuf) -> Result<(), NitError> {
+fn append_agents_md(cwd: &PathBuf) -> Result<(), ItrError> {
     let agents_path = cwd.join("AGENTS.md");
     let block = r#"
 ## Issue Tracking
 
-This project uses `nit` for issue tracking. Before starting work, run `nit ready -f json`
-to find the next actionable task. After completing work, run `nit close <ID> "reason"`.
-File discovered issues with `nit add`. Always run `nit note <ID> "summary"` before ending a session.
+This project uses `itr` for issue tracking. Before starting work, run `itr ready -f json`
+to find the next actionable task. After completing work, run `itr close <ID> "reason"`.
+File discovered issues with `itr add`. Always run `itr note <ID> "summary"` before ending a session.
 "#;
 
     if agents_path.exists() {
