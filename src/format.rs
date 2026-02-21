@@ -195,11 +195,7 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
         "-----|-------|-------------|----------|---------|------------------------------------------|--------"
     ));
     for i in issues {
-        let title = if i.title.len() > 40 {
-            format!("{}...", &i.title[..37])
-        } else {
-            i.title.clone()
-        };
+        let title = truncate_with_ellipsis(&i.title, 40);
         let blocked = if i.blocked_by.is_empty() {
             String::new()
         } else {
@@ -288,11 +284,7 @@ fn format_graph_dot(graph: &GraphOutput) -> String {
     lines.push("digraph itr {".to_string());
     lines.push("  rankdir=LR;".to_string());
     for node in &graph.nodes {
-        let title_short = if node.title.len() > 30 {
-            format!("{}...", &node.title[..27])
-        } else {
-            node.title.clone()
-        };
+        let title_short = truncate_with_ellipsis(&node.title, 30);
         let style = if node.is_blocked {
             " style=filled fillcolor=gray"
         } else {
@@ -308,6 +300,23 @@ fn format_graph_dot(graph: &GraphOutput) -> String {
     }
     lines.push("}".to_string());
     lines.join("\n")
+}
+
+// --- Title truncation helper ---
+
+/// Truncate a string to fit within `max_len` bytes, appending "..." if truncated.
+/// Always slices on a valid UTF-8 char boundary.
+fn truncate_with_ellipsis(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        let suffix_len = 3; // "..."
+        let mut end = max_len - suffix_len;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
+    }
 }
 
 // --- Unblocked notifications ---
@@ -332,5 +341,141 @@ pub fn format_unblocked(issues: &[(i64, String)], fmt: Format) -> String {
             .map(|(id, title)| format!("UNBLOCKED:{} \"{}\"", id, title))
             .collect::<Vec<_>>()
             .join("\n"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{IssueSummary, GraphOutput, GraphNode};
+
+    // --- truncate_with_ellipsis unit tests ---
+
+    #[test]
+    fn truncate_ascii_short_unchanged() {
+        assert_eq!(truncate_with_ellipsis("hello", 40), "hello");
+    }
+
+    #[test]
+    fn truncate_ascii_exact_limit_unchanged() {
+        let s = "a".repeat(40);
+        assert_eq!(truncate_with_ellipsis(&s, 40), s);
+    }
+
+    #[test]
+    fn truncate_ascii_over_limit() {
+        let s = "a".repeat(50);
+        let result = truncate_with_ellipsis(&s, 40);
+        assert!(result.ends_with("..."));
+        assert!(result.len() <= 40);
+    }
+
+    #[test]
+    fn truncate_multibyte_em_dash_at_boundary() {
+        // em dash '—' is 3 bytes (U+2014). Place it so byte 37 lands inside it.
+        // 35 ASCII chars + '—' (bytes 35..38) + more text
+        let s = format!("{}—this continues past the limit!!", "a".repeat(35));
+        let result = truncate_with_ellipsis(&s, 40);
+        assert!(result.ends_with("..."));
+        assert!(result.len() <= 40);
+    }
+
+    #[test]
+    fn truncate_multibyte_emoji_at_boundary() {
+        // '🚀' is 4 bytes. Place at the cut point.
+        let s = format!("{}🚀 and more stuff here!!", "a".repeat(35));
+        let result = truncate_with_ellipsis(&s, 40);
+        assert!(result.ends_with("..."));
+        assert!(result.len() <= 40);
+    }
+
+    #[test]
+    fn truncate_all_multibyte() {
+        // String of only 3-byte chars (em dashes): 20 chars = 60 bytes
+        let s = "—".repeat(20);
+        let result = truncate_with_ellipsis(&s, 40);
+        assert!(result.ends_with("..."));
+        assert!(result.len() <= 40);
+        // Validates it's valid UTF-8 (would panic if not)
+        let _ = result.chars().count();
+    }
+
+    #[test]
+    fn truncate_two_byte_chars_at_boundary() {
+        // 'é' is 2 bytes (U+00E9)
+        let s = format!("{}é more text after here!!", "a".repeat(36));
+        let result = truncate_with_ellipsis(&s, 40);
+        assert!(result.ends_with("..."));
+        assert!(result.len() <= 40);
+    }
+
+    #[test]
+    fn truncate_graph_dot_limit() {
+        // Graph DOT uses limit=30. em dash at byte 27 boundary.
+        let s = format!("{}—continues on and on", "a".repeat(27));
+        let result = truncate_with_ellipsis(&s, 30);
+        assert!(result.ends_with("..."));
+        assert!(result.len() <= 30);
+    }
+
+    // --- format_issue_list_pretty with multi-byte titles ---
+
+    fn make_summary(title: &str) -> IssueSummary {
+        IssueSummary {
+            id: 1,
+            title: title.to_string(),
+            status: "open".to_string(),
+            priority: "medium".to_string(),
+            kind: "task".to_string(),
+            urgency: 5.0,
+            is_blocked: false,
+            blocked_by: vec![],
+            tags: vec![],
+            files: vec![],
+            acceptance: String::new(),
+        }
+    }
+
+    #[test]
+    fn pretty_list_with_em_dash_title_does_not_panic() {
+        // This is the exact title from the original bug report
+        let title = "Set up justfile for Rust workspace — verify, build, run, test, fmt, clippy targets";
+        let issues = vec![make_summary(title)];
+        let result = format_issue_list(&issues, Format::Pretty);
+        assert!(result.contains("..."));
+    }
+
+    #[test]
+    fn pretty_list_with_emoji_title_does_not_panic() {
+        let title = "Fix the authentication bug in the 🔐 login flow for all users worldwide";
+        let issues = vec![make_summary(title)];
+        let result = format_issue_list(&issues, Format::Pretty);
+        assert!(result.contains("..."));
+    }
+
+    #[test]
+    fn pretty_list_short_multibyte_title_no_truncation() {
+        let title = "Fix café bug";
+        let issues = vec![make_summary(title)];
+        let result = format_issue_list(&issues, Format::Pretty);
+        assert!(result.contains("Fix café bug"));
+        assert!(!result.contains("..."));
+    }
+
+    #[test]
+    fn graph_dot_with_em_dash_title_does_not_panic() {
+        let graph = GraphOutput {
+            nodes: vec![GraphNode {
+                id: 1,
+                title: "Some task description — with extra context".to_string(),
+                status: "open".to_string(),
+                urgency: 5.0,
+                is_blocked: false,
+            }],
+            edges: vec![],
+        };
+        let result = format_graph(&graph, Format::Pretty);
+        assert!(result.contains("..."));
+        assert!(result.contains("digraph"));
     }
 }
