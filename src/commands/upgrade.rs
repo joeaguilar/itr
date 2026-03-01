@@ -85,7 +85,7 @@ fn find_source_dir(override_dir: Option<String>) -> Result<PathBuf, ItrError> {
         )));
     }
 
-    // 2. ITR_SOURCE_DIR env
+    // 2. ITR_SOURCE_DIR env var
     if let Ok(d) = env::var("ITR_SOURCE_DIR") {
         let p = PathBuf::from(&d);
         if is_itr_source(&p) {
@@ -93,9 +93,14 @@ fn find_source_dir(override_dir: Option<String>) -> Result<PathBuf, ItrError> {
         }
     }
 
-    // 3. Infer from binary path ancestors
+    // 3. Compile-time source directory (always valid if built from source)
+    let compile_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if is_itr_source(&compile_dir) {
+        return Ok(compile_dir);
+    }
+
+    // 4. Infer from binary path ancestors
     if let Ok(exe) = env::current_exe() {
-        // e.g. /path/to/itr/target/release/itr -> /path/to/itr
         let mut dir = exe.clone();
         for _ in 0..5 {
             dir.pop();
@@ -105,7 +110,7 @@ fn find_source_dir(override_dir: Option<String>) -> Result<PathBuf, ItrError> {
         }
     }
 
-    // 4. Walk up from cwd
+    // 5. Walk up from cwd
     if let Ok(mut dir) = env::current_dir() {
         loop {
             if is_itr_source(&dir) {

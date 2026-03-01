@@ -310,6 +310,9 @@ pub enum Commands {
     Show {
         /// Issue ID (omit to list all non-terminal issues)
         id: Option<i64>,
+        /// Include all statuses (done, wontfix)
+        #[arg(long)]
+        all: bool,
     },
 }
 

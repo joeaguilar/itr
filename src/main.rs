@@ -151,11 +151,13 @@ fn run_command(
 
         Commands::Claim => commands::next::run(conn, true, fmt),
 
-        Commands::Show { id: Some(id) } => commands::get::run(conn, id, fmt),
-        Commands::Show { id: None } => {
-            // Show all non-terminal issues (including blocked)
+        Commands::Show { id: Some(id), .. } => commands::get::run(conn, id, fmt),
+        Commands::Show { id: None, all } => {
+            if all {
+                eprintln!("hint: use `itr list --all` for full filtering options");
+            }
             commands::list::run(
-                conn, false, vec![], vec![], vec![], vec![], false, true, None, "urgency",
+                conn, all, vec![], vec![], vec![], vec![], false, true, None, "urgency",
                 None, fmt,
             )
         }
