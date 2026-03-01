@@ -32,7 +32,8 @@ pub fn run(
     )?;
 
     if issues.is_empty() {
-        error::exit_empty(fmt.is_json(), "No matching issues found.");
+        error::print_empty(fmt.is_json(), "No matching issues found.");
+        return Ok(());
     }
 
     let config = UrgencyConfig::load(conn);

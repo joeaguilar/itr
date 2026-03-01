@@ -2,6 +2,7 @@ use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::{BatchAddInput, IssueDetail};
+use crate::normalize;
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 use std::io::{self, Read};
@@ -73,8 +74,36 @@ pub fn run(
             )
         };
 
-    validate_priority(&priority)?;
-    validate_kind(&kind)?;
+    let priority = normalize::normalize_priority(&priority);
+    let kind = normalize::normalize_kind(&kind);
+
+    let mut review_notes: Vec<String> = Vec::new();
+    let mut tags_vec = tags_vec;
+
+    let priority = match validate_priority(&priority) {
+        Ok(()) => priority,
+        Err(_) => {
+            review_notes.push(format!(
+                "REVIEW: priority '{}' not recognized, defaulted to 'medium'. Valid: critical, high, medium, low",
+                priority
+            ));
+            "medium".to_string()
+        }
+    };
+    let kind = match validate_kind(&kind) {
+        Ok(()) => kind,
+        Err(_) => {
+            review_notes.push(format!(
+                "REVIEW: kind '{}' not recognized, defaulted to 'task'. Valid: bug, feature, task, epic",
+                kind
+            ));
+            "task".to_string()
+        }
+    };
+
+    if !review_notes.is_empty() && !tags_vec.contains(&"_needs_review".to_string()) {
+        tags_vec.push("_needs_review".to_string());
+    }
 
     let issue = db::insert_issue(
         conn,
@@ -87,6 +116,11 @@ pub fn run(
         &acceptance,
         parent_id,
     )?;
+
+    // Add review notes
+    for note_text in &review_notes {
+        db::add_note(conn, issue.id, note_text, "itr")?;
+    }
 
     // Add dependencies
     for blocker_id in &blocked_by_ids {

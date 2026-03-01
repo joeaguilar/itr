@@ -174,7 +174,11 @@ Human-readable table format.
 |---------|-------------|
 | `itr next` | Single highest-urgency unblocked open issue |
 | `itr next --claim` | Same, but atomically sets it to in-progress |
+| `itr claim` / `itr start` | Alias for `itr next --claim` |
 | `itr ready` | All unblocked non-terminal issues, sorted by urgency |
+| `itr show` | All non-terminal issues (including blocked) |
+| `itr show <ID>` | Alias for `itr get <ID>` |
+| `itr create` | Alias for `itr add` |
 | `itr batch add` | Bulk-create issues from JSON array on stdin |
 
 ### Project Management
@@ -189,6 +193,7 @@ Human-readable table format.
 | `itr export` | Export all data as JSONL (or `--export-format json`) |
 | `itr import --file <PATH>` | Import from JSONL/JSON (supports `--merge`) |
 | `itr schema` | Dump the database schema SQL |
+| `itr upgrade` | Rebuild and reinstall itr from source |
 
 ### Global Flags
 
@@ -221,6 +226,8 @@ echo '{"title":"Fix bug","priority":"high","kind":"bug","context":"long text..."
 ```
 
 **Fields**: `title` (required), `priority` (critical/high/medium/low), `kind` (bug/feature/task/epic), `context`, `files`, `tags`, `acceptance`, `blocked-by`, `parent`.
+
+**Fuzzy matching**: Synonyms are normalized automatically — `urgent`→`critical`, `enhancement`→`feature`, `wip`→`in-progress`, etc. Truly invalid values are accepted with a `_needs_review` tag and defaulted to safe values.
 
 ## itr list
 
@@ -290,11 +297,10 @@ itr config reset      # restore defaults
 
 | Code | Meaning |
 |------|---------|
-| 0 | Success |
+| 0 | Success (including empty result sets) |
 | 1 | Error (not found, validation, DB error, cycle detected) |
-| 2 | Empty result set (query succeeded but no matches) |
 
-Exit code 2 lets agents distinguish "nothing found" from "something broke."
+Empty results are not errors — `itr list` with no matches exits 0 and outputs `[]` in JSON mode.
 
 ## Database
 
@@ -315,6 +321,8 @@ Four tables: `issues`, `dependencies`, `notes`, `config`. Run `itr schema` to se
 ## Agent Integration
 
 ### CLAUDE.md / AGENTS.md
+
+Always invoke as `itr` (on PATH). Never use full binary paths like `~/.cargo/bin/itr` or `./target/release/itr`.
 
 ```bash
 itr init --agents-md   # appends instructions to AGENTS.md

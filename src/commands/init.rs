@@ -54,8 +54,11 @@ fn append_agents_md(cwd: &PathBuf) -> Result<(), ItrError> {
     let block = r#"
 ## Issue Tracking
 
-This project uses `itr` for issue tracking. Before starting work, run `itr ready -f json`
-to find the next actionable task. After completing work, run `itr close <ID> "reason"`.
+This project uses `itr` for issue tracking. Always use `itr` directly (it is on your PATH).
+Do NOT use full paths like ~/.cargo/bin/itr or ./target/release/itr.
+
+Before starting work, run `itr ready -f json` to find the next actionable task.
+After completing work, run `itr close <ID> "reason"`.
 File discovered issues with `itr add`. Always run `itr note <ID> "summary"` before ending a session.
 "#;
 

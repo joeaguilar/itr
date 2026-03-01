@@ -29,6 +29,7 @@ pub enum Commands {
     },
 
     /// Create a new issue
+    #[command(visible_alias = "create")]
     Add {
         /// Issue title
         title: Option<String>,
@@ -50,7 +51,7 @@ pub enum Commands {
         files: Option<String>,
 
         /// Comma-separated tags
-        #[arg(short, long)]
+        #[arg(short, long, visible_alias = "tag")]
         tags: Option<String>,
 
         /// Acceptance criteria
@@ -89,7 +90,7 @@ pub enum Commands {
         kind: Vec<String>,
 
         /// Filter by tag (repeatable, AND logic)
-        #[arg(long)]
+        #[arg(long, visible_alias = "tags")]
         tag: Vec<String>,
 
         /// Only show blocked issues
@@ -149,7 +150,7 @@ pub enum Commands {
         files: Option<String>,
 
         /// Replace tags list (comma-separated)
-        #[arg(short, long)]
+        #[arg(short, long, visible_alias = "tag")]
         tags: Option<String>,
 
         /// Replace acceptance criteria
@@ -290,6 +291,26 @@ pub enum Commands {
 
     /// Dump the current database schema
     Schema,
+
+    /// Rebuild and reinstall itr from source
+    Upgrade {
+        /// Skip git pull (rebuild current source only)
+        #[arg(long)]
+        no_pull: bool,
+        /// Override source directory
+        #[arg(long)]
+        source_dir: Option<String>,
+    },
+
+    /// Claim the highest-urgency unblocked issue (shorthand for next --claim)
+    #[command(visible_alias = "start")]
+    Claim,
+
+    /// Show issues or get detail for a single issue
+    Show {
+        /// Issue ID (omit to list all non-terminal issues)
+        id: Option<i64>,
+    },
 }
 
 #[derive(Subcommand)]

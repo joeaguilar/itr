@@ -26,6 +26,9 @@ pub enum ItrError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("Upgrade failed: {0}")]
+    UpgradeFailed(String),
 }
 
 impl ItrError {
@@ -38,6 +41,7 @@ impl ItrError {
             ItrError::Db(_) => 1,
             ItrError::Parse(_) => 1,
             ItrError::Io(_) => 1,
+            ItrError::UpgradeFailed(_) => 1,
         }
     }
 
@@ -50,6 +54,7 @@ impl ItrError {
             ItrError::Db(_) => "DB_ERROR",
             ItrError::Parse(_) => "PARSE_ERROR",
             ItrError::Io(_) => "IO_ERROR",
+            ItrError::UpgradeFailed(_) => "UPGRADE_FAILED",
         }
     }
 }
@@ -67,13 +72,11 @@ pub fn handle_error(err: ItrError, json_mode: bool) -> ! {
     process::exit(err.exit_code());
 }
 
-/// Exit with code 2 for empty result sets.
-pub fn exit_empty(json_mode: bool, msg: &str) -> ! {
+/// Print empty result output. NOT an error — returns normally with exit 0.
+pub fn print_empty(json_mode: bool, msg: &str) {
     if json_mode {
-        // For json mode, output empty array on stdout
         println!("[]");
     } else {
-        eprintln!("{}", msg);
+        println!("{}", msg);
     }
-    process::exit(2);
 }

@@ -21,7 +21,9 @@ There are no unit tests yet — only the shell-based integration test suite in `
 
 ### Core Flow
 
-`main.rs` parses CLI args via clap derive macros (`cli.rs`), resolves the database path, and dispatches to command handlers. Two commands (`init`, `schema`) don't need an existing database; all others require one.
+`main.rs` parses CLI args via clap derive macros (`cli.rs`), resolves the database path, and dispatches to command handlers. Three commands (`init`, `schema`, `upgrade`) don't need an existing database; all others require one.
+
+Always invoke as `itr` (on PATH). Never use full binary paths like `~/.cargo/bin/itr` or `./target/release/itr`.
 
 ### Key Modules
 
@@ -30,7 +32,8 @@ There are no unit tests yet — only the shell-based integration test suite in `
 - **`models.rs`** — All data structs (`Issue`, `Note`, `IssueDetail`, `IssueSummary`, `BatchAddInput`, `GraphOutput`, `Stats`, `ExportData`). Uses `serde` derive for JSON serialization. `IssueDetail` uses `#[serde(flatten)]` on its `issue` field.
 - **`urgency.rs`** — Urgency scoring engine. Scores are never stored — always computed fresh from current state. `UrgencyConfig` loads coefficients from the `config` table with hardcoded defaults. The `compute_urgency_with_breakdown` function returns both the score and a component breakdown.
 - **`format.rs`** — Output formatting for three modes: `compact` (token-efficient default), `json`, `pretty` (human tables/DOT graphs). Each data type has its own `format_*` function.
-- **`error.rs`** — `ItrError` enum with `thiserror` derive. Maps each variant to an exit code (all are 1) and a machine-readable error code. `handle_error` prints to stderr (JSON in json mode) and exits. `exit_empty` exits with code 2 for empty result sets.
+- **`normalize.rs`** — Fuzzy matching for priority/kind/status values. Normalizes synonyms (e.g., `urgent`→`critical`, `wip`→`in-progress`). Called before validation in add, update, and batch commands.
+- **`error.rs`** — `ItrError` enum with `thiserror` derive. Maps each variant to an exit code (all are 1) and a machine-readable error code. `handle_error` prints to stderr (JSON in json mode) and exits. `print_empty` prints empty results to stdout and returns normally (exit 0).
 
 ### Command Handlers (`src/commands/`)
 
@@ -42,9 +45,8 @@ Four tables: `issues`, `dependencies`, `notes`, `config`. Schema defined as a co
 
 ### Exit Codes
 
-- 0: success
+- 0: success (including empty result sets)
 - 1: error (not found, validation, DB error, cycle)
-- 2: empty result set (query OK but no matches)
 
 ### Output Contract
 

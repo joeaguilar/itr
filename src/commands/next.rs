@@ -20,7 +20,8 @@ pub fn run(conn: &Connection, claim: bool, fmt: Format) -> Result<(), ItrError> 
     )?;
 
     if issues.is_empty() {
-        error::exit_empty(fmt.is_json(), "No eligible issues found.");
+        error::print_empty(fmt.is_json(), "No eligible issues found.");
+        return Ok(());
     }
 
     let config = UrgencyConfig::load(conn);

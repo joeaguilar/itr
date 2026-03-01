@@ -3,6 +3,7 @@ use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::{BatchAddInput, IssueDetail};
+use crate::normalize;
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 use std::io::{self, Read};
@@ -13,19 +14,44 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
 
     let items: Vec<BatchAddInput> = serde_json::from_str(&input)?;
 
-    // Validate all first
-    for item in &items {
-        validate_priority(&item.priority)?;
-        validate_kind(&item.kind)?;
+    // Normalize all first
+    let mut items = items;
+    for item in &mut items {
+        item.priority = normalize::normalize_priority(&item.priority);
+        item.kind = normalize::normalize_kind(&item.kind);
     }
 
     // Use a transaction
     let tx = conn.unchecked_transaction()?;
 
     let mut created_ids: Vec<i64> = Vec::new();
+    // Track which items need review notes (index -> notes)
+    let mut item_review_notes: Vec<Vec<String>> = Vec::new();
 
-    // First pass: create all issues
-    for item in &items {
+    // First pass: create all issues with soft fallback
+    for item in &mut items {
+        let mut review_notes: Vec<String> = Vec::new();
+
+        if validate_priority(&item.priority).is_err() {
+            review_notes.push(format!(
+                "REVIEW: priority '{}' not recognized, defaulted to 'medium'. Valid: critical, high, medium, low",
+                item.priority
+            ));
+            item.priority = "medium".to_string();
+        }
+        if validate_kind(&item.kind).is_err() {
+            review_notes.push(format!(
+                "REVIEW: kind '{}' not recognized, defaulted to 'task'. Valid: bug, feature, task, epic",
+                item.kind
+            ));
+            item.kind = "task".to_string();
+        }
+
+        let mut tags = item.tags.clone();
+        if !review_notes.is_empty() && !tags.contains(&"_needs_review".to_string()) {
+            tags.push("_needs_review".to_string());
+        }
+
         let issue = db::insert_issue(
             &tx,
             &item.title,
@@ -33,11 +59,19 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
             &item.kind,
             &item.context,
             &item.files,
-            &item.tags,
+            &tags,
             &item.acceptance,
             item.parent_id,
         )?;
         created_ids.push(issue.id);
+        item_review_notes.push(review_notes);
+    }
+
+    // Add review notes for items that needed them
+    for (idx, notes) in item_review_notes.iter().enumerate() {
+        for note_text in notes {
+            db::add_note(&tx, created_ids[idx], note_text, "itr")?;
+        }
     }
 
     // Second pass: create dependencies

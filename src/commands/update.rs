@@ -3,6 +3,7 @@ use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::IssueDetail;
+use crate::normalize;
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 
@@ -28,17 +29,47 @@ pub fn run(
     // Validate issue exists
     let _issue = db::get_issue(conn, id)?;
 
+    let status = status.map(|s| normalize::normalize_status(&s));
+    let priority = priority.map(|p| normalize::normalize_priority(&p));
+    let kind = kind.map(|k| normalize::normalize_kind(&k));
+
+    let mut review_notes: Vec<String> = Vec::new();
+
     if let Some(ref s) = status {
-        validate_status(s)?;
-        db::update_issue_field(conn, id, "status", s)?;
+        match validate_status(s) {
+            Ok(()) => { db::update_issue_field(conn, id, "status", s)?; }
+            Err(_) => {
+                review_notes.push(format!(
+                    "REVIEW: status '{}' not recognized, defaulted to 'open'. Valid: open, in-progress, done, wontfix",
+                    s
+                ));
+                db::update_issue_field(conn, id, "status", "open")?;
+            }
+        }
     }
     if let Some(ref p) = priority {
-        validate_priority(p)?;
-        db::update_issue_field(conn, id, "priority", p)?;
+        match validate_priority(p) {
+            Ok(()) => { db::update_issue_field(conn, id, "priority", p)?; }
+            Err(_) => {
+                review_notes.push(format!(
+                    "REVIEW: priority '{}' not recognized, defaulted to 'medium'. Valid: critical, high, medium, low",
+                    p
+                ));
+                db::update_issue_field(conn, id, "priority", "medium")?;
+            }
+        }
     }
     if let Some(ref k) = kind {
-        validate_kind(k)?;
-        db::update_issue_field(conn, id, "kind", k)?;
+        match validate_kind(k) {
+            Ok(()) => { db::update_issue_field(conn, id, "kind", k)?; }
+            Err(_) => {
+                review_notes.push(format!(
+                    "REVIEW: kind '{}' not recognized, defaulted to 'task'. Valid: bug, feature, task, epic",
+                    k
+                ));
+                db::update_issue_field(conn, id, "kind", "task")?;
+            }
+        }
     }
     if let Some(ref t) = title {
         db::update_issue_field(conn, id, "title", t)?;
@@ -88,6 +119,20 @@ pub fn run(
 
     if let Some(pid) = parent {
         db::update_issue_parent(conn, id, Some(pid))?;
+    }
+
+    // Add _needs_review tag and notes if any field was auto-corrected
+    if !review_notes.is_empty() {
+        let current_issue = db::get_issue(conn, id)?;
+        let mut current_tags = current_issue.tags.clone();
+        if !current_tags.contains(&"_needs_review".to_string()) {
+            current_tags.push("_needs_review".to_string());
+            let json = serde_json::to_string(&current_tags)?;
+            db::update_issue_field(conn, id, "tags", &json)?;
+        }
+        for note_text in &review_notes {
+            db::add_note(conn, id, note_text, "itr")?;
+        }
     }
 
     // Re-read the updated issue
