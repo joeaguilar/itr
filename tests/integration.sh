@@ -536,6 +536,50 @@ else
 fi
 
 # ─────────────────────────────────────────────
+echo "--- search ---"
+# ─────────────────────────────────────────────
+
+# Search by title (issue 2 "Add logout endpoint" is open)
+OUT=$($ITR search "logout" -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+[ "$COUNT" -ge 1 ] && pass "search by title finds results" || fail "search by title finds results" "got $COUNT"
+
+# Verify matched_fields includes title
+MATCHED=$(jq_val "$OUT" "'title' in d[0]['matched_fields']")
+assert_eq "search matched_fields includes title" "True" "$MATCHED"
+
+# Search by note content (issue 1 is closed, use --all)
+OUT=$($ITR search "Investigation" --all -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+[ "$COUNT" -ge 1 ] && pass "search by note content finds results" || fail "search by note content finds results" "got $COUNT"
+MATCHED=$(jq_val "$OUT" "'notes' in d[0]['matched_fields']")
+assert_eq "search matched_fields includes notes" "True" "$MATCHED"
+
+# Multi-term AND logic — both terms must match somewhere on the issue
+OUT=$($ITR search "logout endpoint" -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+[ "$COUNT" -ge 1 ] && pass "search multi-term AND finds results" || fail "search multi-term AND finds results" "got $COUNT"
+
+# Search with --all includes closed issues
+OUT=$($ITR search "login" --all -f json)
+ALL_COUNT=$(jq_val "$OUT" "len(d)")
+[ "$ALL_COUNT" -ge 1 ] && pass "search --all includes closed" || fail "search --all includes closed" "got $ALL_COUNT"
+
+# Empty result
+OUT=$($ITR search "zzz_nonexistent_term_zzz" -f json)
+assert_eq "search empty result returns []" "[]" "$OUT"
+assert_exit "search empty result exits 0" "0" $ITR search "zzz_nonexistent_term_zzz"
+
+# Compact format has MATCHED field
+OUT=$($ITR search "logout")
+assert_contains "search compact has MATCHED" "MATCHED:" "$OUT"
+
+# --limit
+OUT=$($ITR search "issue" --all -n 2 -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+assert_eq "search --limit 2" "2" "$COUNT"
+
+# ─────────────────────────────────────────────
 echo "--- exit codes ---"
 # ─────────────────────────────────────────────
 

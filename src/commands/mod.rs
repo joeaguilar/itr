@@ -16,4 +16,5 @@ pub mod import;
 pub mod doctor;
 pub mod config;
 pub mod schema;
+pub mod search;
 pub mod upgrade;

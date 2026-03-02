@@ -1,4 +1,4 @@
-use crate::models::{IssueDetail, IssueSummary, Stats, GraphOutput, UnblockedIssue};
+use crate::models::{IssueDetail, IssueSummary, SearchResult, Stats, GraphOutput, UnblockedIssue};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Format {
@@ -317,6 +317,71 @@ fn truncate_with_ellipsis(s: &str, max_len: usize) -> String {
         }
         format!("{}...", &s[..end])
     }
+}
+
+// --- Search Results ---
+
+pub fn format_search_results(results: &[SearchResult], fmt: Format) -> String {
+    match fmt {
+        Format::Json => serde_json::to_string(results).unwrap_or_default(),
+        Format::Compact => format_search_compact(results),
+        Format::Pretty => format_search_pretty(results),
+    }
+}
+
+fn format_search_compact(results: &[SearchResult]) -> String {
+    results
+        .iter()
+        .map(|r| {
+            let mut first = format!(
+                "ID:{} STATUS:{} PRIORITY:{} KIND:{} URGENCY:{:.1} MATCHED:{}",
+                r.id, r.status, r.priority, r.kind, r.urgency,
+                r.matched_fields.join(",")
+            );
+            if !r.blocked_by.is_empty() {
+                first.push_str(&format!(
+                    " BLOCKED_BY:{}",
+                    r.blocked_by.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
+                ));
+            }
+            let mut lines = vec![first];
+            if !r.tags.is_empty() {
+                lines.push(format!("TAGS:{}", r.tags.join(",")));
+            }
+            if !r.files.is_empty() {
+                lines.push(format!("FILES:{}", r.files.join(",")));
+            }
+            lines.push(format!("TITLE: {}", r.title));
+            if !r.acceptance.is_empty() {
+                lines.push(format!("ACCEPTANCE: {}", r.acceptance));
+            }
+            lines.join("\n")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn format_search_pretty(results: &[SearchResult]) -> String {
+    if results.is_empty() {
+        return String::new();
+    }
+    let mut lines = Vec::new();
+    lines.push(format!(
+        " {:>3} | {:>5} | {:11} | {:8} | {:7} | {:40} | Matched",
+        "#", "Urg", "Status", "Pri", "Kind", "Title"
+    ));
+    lines.push(format!(
+        "-----|-------|-------------|----------|---------|------------------------------------------|--------"
+    ));
+    for r in results {
+        let title = truncate_with_ellipsis(&r.title, 40);
+        let matched = r.matched_fields.join(",");
+        lines.push(format!(
+            " {:>3} | {:>5.1} | {:11} | {:8} | {:7} | {:40} | {}",
+            r.id, r.urgency, r.status, r.priority, r.kind, title, matched
+        ));
+    }
+    lines.join("\n")
 }
 
 // --- Unblocked notifications ---

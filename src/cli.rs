@@ -306,6 +306,32 @@ pub enum Commands {
     #[command(visible_alias = "start")]
     Claim,
 
+    /// Search issues by text across all fields
+    Search {
+        /// Search query (all terms must match somewhere)
+        query: String,
+
+        /// Include all statuses (done, wontfix)
+        #[arg(long)]
+        all: bool,
+
+        /// Filter by status (repeatable)
+        #[arg(short, long)]
+        status: Vec<String>,
+
+        /// Filter by priority (repeatable)
+        #[arg(short, long)]
+        priority: Vec<String>,
+
+        /// Filter by kind (repeatable)
+        #[arg(short, long)]
+        kind: Vec<String>,
+
+        /// Max results
+        #[arg(short = 'n', long)]
+        limit: Option<usize>,
+    },
+
     /// Show issues or get detail for a single issue
     Show {
         /// Issue ID (omit to list all non-terminal issues)

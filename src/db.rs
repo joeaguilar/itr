@@ -511,6 +511,99 @@ pub fn count_notes(conn: &Connection, issue_id: i64) -> Result<i64, ItrError> {
     Ok(count)
 }
 
+// --- Search ---
+
+pub fn search_issue_ids(
+    conn: &Connection,
+    terms: &[String],
+    statuses: &[String],
+    priorities: &[String],
+    kinds: &[String],
+    all: bool,
+) -> Result<Vec<i64>, ItrError> {
+    if terms.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut sql = String::from(
+        "SELECT DISTINCT i.id FROM issues i LEFT JOIN notes n ON n.issue_id = i.id WHERE 1=1",
+    );
+    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    // Each term must match at least one searchable field
+    for term in terms {
+        let pattern = format!("%{}%", term);
+        let base = param_values.len();
+        let p1 = base + 1;
+        let p2 = base + 2;
+        let p3 = base + 3;
+        let p4 = base + 4;
+        let p5 = base + 5;
+        let p6 = base + 6;
+        let p7 = base + 7;
+        sql.push_str(&format!(
+            " AND (i.title LIKE ?{} OR i.context LIKE ?{} OR i.acceptance LIKE ?{} OR i.close_reason LIKE ?{} OR i.tags LIKE ?{} OR i.files LIKE ?{} OR n.content LIKE ?{})",
+            p1, p2, p3, p4, p5, p6, p7
+        ));
+        for _ in 0..7 {
+            param_values.push(Box::new(pattern.clone()));
+        }
+    }
+
+    // Status filter
+    if !all {
+        if !statuses.is_empty() {
+            let placeholders: Vec<String> = statuses
+                .iter()
+                .enumerate()
+                .map(|(i, _)| format!("?{}", param_values.len() + i + 1))
+                .collect();
+            sql.push_str(&format!(" AND i.status IN ({})", placeholders.join(",")));
+            for s in statuses {
+                param_values.push(Box::new(s.clone()));
+            }
+        } else {
+            let p1 = param_values.len() + 1;
+            let p2 = param_values.len() + 2;
+            sql.push_str(&format!(" AND i.status IN (?{}, ?{})", p1, p2));
+            param_values.push(Box::new("open".to_string()));
+            param_values.push(Box::new("in-progress".to_string()));
+        }
+    }
+
+    if !priorities.is_empty() {
+        let placeholders: Vec<String> = priorities
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", param_values.len() + i + 1))
+            .collect();
+        sql.push_str(&format!(" AND i.priority IN ({})", placeholders.join(",")));
+        for p in priorities {
+            param_values.push(Box::new(p.clone()));
+        }
+    }
+
+    if !kinds.is_empty() {
+        let placeholders: Vec<String> = kinds
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", param_values.len() + i + 1))
+            .collect();
+        sql.push_str(&format!(" AND i.kind IN ({})", placeholders.join(",")));
+        for k in kinds {
+            param_values.push(Box::new(k.clone()));
+        }
+    }
+
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+        param_values.iter().map(|b| b.as_ref()).collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let ids: Vec<i64> = stmt
+        .query_map(params_ref.as_slice(), |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ids)
+}
+
 // --- Config ---
 
 pub fn config_get(conn: &Connection, key: &str) -> Result<Option<String>, ItrError> {

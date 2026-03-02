@@ -139,6 +139,22 @@ pub struct OldestOpen {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResult {
+    pub id: i64,
+    pub title: String,
+    pub status: String,
+    pub priority: String,
+    pub kind: String,
+    pub urgency: f64,
+    pub is_blocked: bool,
+    pub blocked_by: Vec<i64>,
+    pub tags: Vec<String>,
+    pub files: Vec<String>,
+    pub acceptance: String,
+    pub matched_fields: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportData {
     pub issue: Issue,
     pub notes: Vec<Note>,

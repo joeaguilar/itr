@@ -149,6 +149,15 @@ fn run_command(
             ConfigAction::Reset => commands::config::run_reset(conn, fmt),
         },
 
+        Commands::Search {
+            query,
+            all,
+            status,
+            priority,
+            kind,
+            limit,
+        } => commands::search::run(conn, &query, all, status, priority, kind, limit, fmt),
+
         Commands::Claim => commands::next::run(conn, true, fmt),
 
         Commands::Show { id: Some(id), .. } => commands::get::run(conn, id, fmt),
