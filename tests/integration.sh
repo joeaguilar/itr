@@ -721,6 +721,228 @@ assert_eq "claim --skill sets in-progress" "in-progress" "$STATUS"
 rm -rf "$SKILLS_DIR"
 
 # ─────────────────────────────────────────────
+# Feature 1: Agent Ownership (assigned_to)
+# ─────────────────────────────────────────────
+echo ""
+echo "--- Agent Ownership ---"
+
+AGENT_DIR=$(mktemp -d)
+ITR_DB_PATH="$AGENT_DIR/.itr.db" $ITR init >/dev/null
+
+# Add with --assigned-to
+OUT=$(ITR_DB_PATH="$AGENT_DIR/.itr.db" $ITR add "Agent task 1" --assigned-to "agent-1" -f json)
+assert_eq "add --assigned-to" "agent-1" "$(jq_val "$OUT" "d['assigned_to']")"
+
+# Update --assigned-to
+OUT=$(ITR_DB_PATH="$AGENT_DIR/.itr.db" $ITR update 1 --assigned-to "agent-2" -f json)
+assert_eq "update --assigned-to" "agent-2" "$(jq_val "$OUT" "d['assigned_to']")"
+
+# Assign command
+OUT=$(ITR_DB_PATH="$AGENT_DIR/.itr.db" $ITR assign 1 "agent-3" -f json)
+assert_eq "assign command" "agent-3" "$(jq_val "$OUT" "d['assigned_to']")"
+
+# Unassign command
+OUT=$(ITR_DB_PATH="$AGENT_DIR/.itr.db" $ITR unassign 1 -f json)
+assert_eq "unassign command" "" "$(jq_val "$OUT" "d['assigned_to']")"
+
+# List --assigned-to filter
+ITR_DB_PATH="$AGENT_DIR/.itr.db" $ITR add "Unassigned task" -f json >/dev/null
+ITR_DB_PATH="$AGENT_DIR/.itr.db" $ITR assign 1 "agent-x" >/dev/null
+OUT=$(ITR_DB_PATH="$AGENT_DIR/.itr.db" $ITR list --assigned-to "agent-x" -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+assert_eq "list --assigned-to filters" "1" "$COUNT"
+
+# Next --claim with ITR_AGENT
+OUT=$(ITR_AGENT=sub-agent-1 ITR_DB_PATH="$AGENT_DIR/.itr.db" $ITR next --claim -f json)
+assert_eq "next --claim uses ITR_AGENT" "sub-agent-1" "$(jq_val "$OUT" "d['assigned_to']")"
+
+# Stats by_assignee
+OUT=$(ITR_DB_PATH="$AGENT_DIR/.itr.db" $ITR stats -f json)
+HAS_BY_ASSIGNEE=$(jq_val "$OUT" "'by_assignee' in d")
+assert_eq "stats has by_assignee" "True" "$HAS_BY_ASSIGNEE"
+
+rm -rf "$AGENT_DIR"
+
+# ─────────────────────────────────────────────
+# Feature 2: Bulk Close/Update
+# ─────────────────────────────────────────────
+echo ""
+echo "--- Bulk Operations ---"
+
+BULK_DIR=$(mktemp -d)
+ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR init >/dev/null
+echo '[{"title":"Bulk A","tags":["sprint-1"]},{"title":"Bulk B","tags":["sprint-1"]},{"title":"Bulk C","tags":["sprint-2"]}]' | ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR batch add >/dev/null
+
+# Bulk close with --dry-run
+OUT=$(ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR bulk close --tag sprint-1 --dry-run -f json)
+DRY_COUNT=$(jq_val "$OUT" "d['count']")
+assert_eq "bulk close dry-run count" "2" "$DRY_COUNT"
+DRY_RUN=$(jq_val "$OUT" "d['dry_run']")
+assert_eq "bulk close dry-run flag" "True" "$DRY_RUN"
+
+# Verify dry-run didn't actually close
+OUT=$(ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR list -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+assert_eq "bulk close dry-run no change" "3" "$COUNT"
+
+# Bulk close for real
+OUT=$(ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR bulk close --tag sprint-1 --reason "Sprint done" -f json)
+CLOSE_COUNT=$(jq_val "$OUT" "d['count']")
+assert_eq "bulk close count" "2" "$CLOSE_COUNT"
+
+# Verify remaining
+OUT=$(ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR list -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+assert_eq "bulk close reduced list" "1" "$COUNT"
+
+# Bulk update
+OUT=$(ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR bulk update --tag sprint-2 --set-priority high -f json)
+UPD_COUNT=$(jq_val "$OUT" "d['count']")
+assert_eq "bulk update count" "1" "$UPD_COUNT"
+
+rm -rf "$BULK_DIR"
+
+# ─────────────────────────────────────────────
+# Feature 3: --fields Selector
+# ─────────────────────────────────────────────
+echo ""
+echo "--- Fields Selector ---"
+
+cd "$WORKDIR"
+OUT=$($ITR ready -f json --fields id,title,urgency)
+# Should only contain id, title, urgency keys
+HAS_ONLY=$(jq_val "$OUT" "all(set(i.keys()) == {'id','title','urgency'} for i in d) if d else True")
+assert_eq "fields selector filters JSON" "True" "$HAS_ONLY"
+
+# Invalid field name
+set +e
+$ITR list -f json --fields id,bogus 2>/dev/null
+FIELD_EXIT=$?
+set -e
+assert_eq "invalid field exits 1" "1" "$FIELD_EXIT"
+
+# Fields ignored in compact mode (should not error)
+OUT=$($ITR list --fields id,title 2>&1)
+assert_contains "fields in compact mode no error" "ID:" "$OUT"
+
+# ─────────────────────────────────────────────
+# Feature 4: Search Context Snippets
+# ─────────────────────────────────────────────
+echo ""
+echo "--- Search Context Snippets ---"
+
+cd "$WORKDIR"
+OUT=$($ITR search "logout" -f json)
+HAS_SNIPPETS=$(jq_val "$OUT" "d[0].get('context_snippets') is not None")
+assert_eq "search has context_snippets" "True" "$HAS_SNIPPETS"
+
+OUT=$($ITR search "logout")
+assert_contains "search compact has SNIPPET" "SNIPPET[" "$OUT"
+
+# ─────────────────────────────────────────────
+# Feature 5: Audit/Event Log
+# ─────────────────────────────────────────────
+echo ""
+echo "--- Audit/Event Log ---"
+
+LOG_DIR=$(mktemp -d)
+ITR_DB_PATH="$LOG_DIR/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$LOG_DIR/.itr.db" $ITR add "Log test issue" -f json >/dev/null
+ITR_DB_PATH="$LOG_DIR/.itr.db" $ITR update 1 --priority high -f json >/dev/null
+
+# Log for issue
+OUT=$(ITR_DB_PATH="$LOG_DIR/.itr.db" $ITR log 1 -f json)
+LOG_COUNT=$(jq_val "$OUT" "len(d)")
+[ "$LOG_COUNT" -ge 1 ] && pass "log records events" || fail "log records events" "got $LOG_COUNT"
+FIELD=$(jq_val "$OUT" "d[0]['field']")
+assert_eq "log event field" "priority" "$FIELD"
+
+# Log with ITR_AGENT
+ITR_AGENT=test-logger ITR_DB_PATH="$LOG_DIR/.itr.db" $ITR update 1 --status in-progress -f json >/dev/null
+OUT=$(ITR_DB_PATH="$LOG_DIR/.itr.db" $ITR log 1 -f json)
+AGENT=$(jq_val "$OUT" "[e for e in d if e['field']=='status'][0]['agent']")
+assert_eq "log records ITR_AGENT" "test-logger" "$AGENT"
+
+# Global log
+OUT=$(ITR_DB_PATH="$LOG_DIR/.itr.db" $ITR log -f json)
+[ "$(jq_val "$OUT" "len(d)")" -ge 1 ] && pass "global log has events" || fail "global log has events" "empty"
+
+rm -rf "$LOG_DIR"
+
+# ─────────────────────────────────────────────
+# Feature 6: Relations
+# ─────────────────────────────────────────────
+echo ""
+echo "--- Relations ---"
+
+REL_DIR=$(mktemp -d)
+ITR_DB_PATH="$REL_DIR/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$REL_DIR/.itr.db" $ITR add "Issue A" -f json >/dev/null
+ITR_DB_PATH="$REL_DIR/.itr.db" $ITR add "Issue B" -f json >/dev/null
+ITR_DB_PATH="$REL_DIR/.itr.db" $ITR add "Issue C" -f json >/dev/null
+
+# Relate
+OUT=$(ITR_DB_PATH="$REL_DIR/.itr.db" $ITR relate 1 --to 2 --relation-type related -f json)
+CREATED=$(jq_val "$OUT" "d['created']")
+assert_eq "relate creates relation" "True" "$CREATED"
+
+# Idempotent
+OUT=$(ITR_DB_PATH="$REL_DIR/.itr.db" $ITR relate 1 --to 2 --relation-type related -f json)
+CREATED=$(jq_val "$OUT" "d['created']")
+assert_eq "relate idempotent" "False" "$CREATED"
+
+# Bidirectional display
+OUT=$(ITR_DB_PATH="$REL_DIR/.itr.db" $ITR get 2 -f json)
+REL_COUNT=$(jq_val "$OUT" "len(d.get('relations', []))")
+assert_eq "relation shown on target" "1" "$REL_COUNT"
+
+# --duplicate-of on close
+OUT=$(ITR_DB_PATH="$REL_DIR/.itr.db" $ITR close 3 --duplicate-of 1 -f json)
+assert_eq "duplicate-of closes issue" "done" "$(jq_val "$OUT" "d['status']")"
+assert_contains "duplicate-of sets reason" "Duplicate of #1" "$(jq_val "$OUT" "d['close_reason']")"
+
+# Unrelate
+OUT=$(ITR_DB_PATH="$REL_DIR/.itr.db" $ITR unrelate 1 --from 2 -f json)
+REMOVED=$(jq_val "$OUT" "d['removed']")
+assert_eq "unrelate removes" "True" "$REMOVED"
+
+# Graph includes relation edges
+ITR_DB_PATH="$REL_DIR/.itr.db" $ITR relate 1 --to 2 --relation-type supersedes >/dev/null
+OUT=$(ITR_DB_PATH="$REL_DIR/.itr.db" $ITR graph --all -f json)
+HAS_REL_EDGE=$(jq_val "$OUT" "any(e['type'] in ('related','duplicate','supersedes') for e in d.get('edges', []))")
+assert_eq "graph includes relation edges" "True" "$HAS_REL_EDGE"
+
+rm -rf "$REL_DIR"
+
+# ─────────────────────────────────────────────
+# Feature 7: FTS5 Full-Text Search
+# ─────────────────────────────────────────────
+echo ""
+echo "--- FTS5 Full-Text Search ---"
+
+FTS_DIR=$(mktemp -d)
+ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR add "Authentication system" -c "JWT token validation" -f json >/dev/null
+ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR add "Payment gateway" -c "Stripe integration" -f json >/dev/null
+
+# Reindex
+OUT=$(ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR reindex -f json)
+INDEXED=$(jq_val "$OUT" "d['indexed']")
+assert_eq "reindex counts issues" "2" "$INDEXED"
+
+# FTS search works
+OUT=$(ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR search "JWT" -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+assert_eq "FTS search finds JWT" "1" "$COUNT"
+
+# FTS search by context
+OUT=$(ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR search "Stripe" -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+assert_eq "FTS search finds Stripe" "1" "$COUNT"
+
+rm -rf "$FTS_DIR"
+
+# ─────────────────────────────────────────────
 echo ""
 echo "==============================="
 echo "Results: $PASS passed, $FAIL failed"

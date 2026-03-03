@@ -10,10 +10,14 @@ pub fn run(conn: &Connection, export_format: &str) -> Result<(), ItrError> {
     for issue in issues {
         let notes = db::get_notes(conn, issue.id)?;
         let blocked_by = db::get_blockers(conn, issue.id)?;
+        let events = db::get_events_for_issue(conn, issue.id)?;
+        let relations = db::get_relations(conn, issue.id)?;
         export_items.push(ExportData {
             issue,
             notes,
             blocked_by,
+            events,
+            relations,
         });
     }
 

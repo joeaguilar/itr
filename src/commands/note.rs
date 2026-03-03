@@ -2,6 +2,7 @@ use crate::db;
 use crate::error::ItrError;
 use crate::format::Format;
 use rusqlite::Connection;
+use std::env;
 use std::io::{self, IsTerminal, Read};
 
 pub fn run(
@@ -11,6 +12,12 @@ pub fn run(
     agent: &str,
     fmt: Format,
 ) -> Result<(), ItrError> {
+    // Fall back to ITR_AGENT if agent is empty
+    let agent = if agent.is_empty() {
+        env::var("ITR_AGENT").unwrap_or_default()
+    } else {
+        agent.to_string()
+    };
     let content = match text {
         Some(t) => t,
         None => {
@@ -27,7 +34,7 @@ pub fn run(
         }
     };
 
-    let note = db::add_note(conn, id, &content, agent)?;
+    let note = db::add_note(conn, id, &content, &agent)?;
 
     match fmt {
         Format::Json => {
@@ -39,7 +46,10 @@ pub fn run(
             } else {
                 format!(" ({})", note.agent)
             };
-            println!("NOTE:{} ISSUE:{}{} {}", note.id, note.issue_id, agent_str, note.content);
+            println!(
+                "NOTE:{} ISSUE:{}{} {}",
+                note.id, note.issue_id, agent_str, note.content
+            );
         }
     }
 

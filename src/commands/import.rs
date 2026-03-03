@@ -35,7 +35,7 @@ pub fn run(
         input
             .lines()
             .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str(l))
+            .map(serde_json::from_str)
             .collect::<Result<Vec<_>, _>>()?
     };
 
@@ -46,11 +46,9 @@ pub fn run(
     for item in &items {
         let issue = &item.issue;
 
-        if merge {
-            if db::issue_exists(&tx, issue.id).unwrap_or(false) {
-                skipped += 1;
-                continue;
-            }
+        if merge && db::issue_exists(&tx, issue.id).unwrap_or(false) {
+            skipped += 1;
+            continue;
         }
 
         let files_json = serde_json::to_string(&issue.files)?;
@@ -58,8 +56,8 @@ pub fn run(
         let skills_json = serde_json::to_string(&issue.skills)?;
 
         tx.execute(
-            "INSERT OR REPLACE INTO issues (id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            "INSERT OR REPLACE INTO issues (id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at, assigned_to)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 issue.id,
                 issue.title,
@@ -75,6 +73,7 @@ pub fn run(
                 issue.close_reason,
                 issue.created_at,
                 issue.updated_at,
+                issue.assigned_to,
             ],
         )?;
 

@@ -46,7 +46,11 @@ impl UrgencyConfig {
 
         let keys: Vec<(&str, &mut f64)> = vec![];
         // We'll load each key individually since we can't easily iterate mut refs
-        Self::load_key(conn, "urgency.priority.critical", &mut config.priority_critical);
+        Self::load_key(
+            conn,
+            "urgency.priority.critical",
+            &mut config.priority_critical,
+        );
         Self::load_key(conn, "urgency.priority.high", &mut config.priority_high);
         Self::load_key(conn, "urgency.priority.medium", &mut config.priority_medium);
         Self::load_key(conn, "urgency.priority.low", &mut config.priority_low);
@@ -145,7 +149,7 @@ pub fn compute_urgency_with_breakdown(
 
     // Age factor
     let age_days = days_since(&issue.created_at);
-    let age_factor = (age_days / 10.0).min(1.0).max(0.0);
+    let age_factor = (age_days / 10.0).clamp(0.0, 1.0);
     let age_val = config.age * age_factor;
     score += age_val;
     components.push(("age".to_string(), age_val));

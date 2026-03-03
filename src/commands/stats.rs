@@ -33,6 +33,7 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     let mut active_count = 0i64;
     let mut oldest_open: Option<OldestOpen> = None;
     let mut by_skills: HashMap<String, i64> = HashMap::new();
+    let mut by_assignee: HashMap<String, i64> = HashMap::new();
 
     for issue in &all_issues {
         *by_status.entry(issue.status.clone()).or_insert(0) += 1;
@@ -53,6 +54,9 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
 
             for skill in &issue.skills {
                 *by_skills.entry(skill.clone()).or_insert(0) += 1;
+            }
+            if !issue.assigned_to.is_empty() {
+                *by_assignee.entry(issue.assigned_to.clone()).or_insert(0) += 1;
             }
 
             // Track oldest open
@@ -95,6 +99,7 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
         ready: ready_count,
         avg_urgency,
         by_skills,
+        by_assignee,
         oldest_open,
     };
 

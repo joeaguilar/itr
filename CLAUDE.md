@@ -15,6 +15,17 @@ cargo install --path .         # Install to ~/.cargo/bin
 ./tests/integration.sh ./target/debug/itr  # Run against debug build
 ```
 
+A `justfile` provides shortcuts (requires [just](https://github.com/casey/just)):
+
+```bash
+just test          # release build + integration tests
+just test-debug    # debug build + integration tests
+just lint          # cargo clippy --all-targets -- -D warnings
+just fmt           # cargo fmt --all
+just verify        # release + lint + test + fmt-check (full pre-push validation)
+just ci            # fmt-check + lint + test
+```
+
 There are no unit tests yet — only the shell-based integration test suite in `tests/integration.sh`. The test suite uses `python3 -c` with `json.load` for JSON parsing (not `jq`).
 
 ## Architecture
@@ -28,8 +39,8 @@ Always invoke as `itr` (on PATH). Never use full binary paths like `~/.cargo/bin
 ### Key Modules
 
 - **`cli.rs`** — Clap `#[derive(Parser)]` definitions for all commands and subcommands. Adding a new command means: add variant to `Commands` enum here, add match arm in `main.rs::run_command`, create handler in `src/commands/`.
-- **`db.rs`** — All SQLite operations. Contains the schema as a const string, CRUD functions for issues/notes/dependencies/config, cycle detection via BFS, and the walk-up `.itr.db` finder. This is the largest file (~600 lines).
-- **`models.rs`** — All data structs (`Issue`, `Note`, `IssueDetail`, `IssueSummary`, `BatchAddInput`, `GraphOutput`, `Stats`, `ExportData`). Uses `serde` derive for JSON serialization. `IssueDetail` uses `#[serde(flatten)]` on its `issue` field.
+- **`db.rs`** — All SQLite operations. Contains the schema as a const string, CRUD functions for issues/notes/dependencies/config, cycle detection via BFS, and the walk-up `.itr.db` finder. This is the largest file (~730 lines).
+- **`models.rs`** — All data structs (`Issue`, `Note`, `IssueDetail`, `IssueSummary`, `BatchAddInput`, `GraphOutput`, `Stats`, `ExportData`, `SearchResult`, `UrgencyBreakdown`). Uses `serde` derive for JSON serialization. `IssueDetail` uses `#[serde(flatten)]` on its `issue` field.
 - **`urgency.rs`** — Urgency scoring engine. Scores are never stored — always computed fresh from current state. `UrgencyConfig` loads coefficients from the `config` table with hardcoded defaults. The `compute_urgency_with_breakdown` function returns both the score and a component breakdown.
 - **`format.rs`** — Output formatting for three modes: `compact` (token-efficient default), `json`, `pretty` (human tables/DOT graphs). Each data type has its own `format_*` function.
 - **`normalize.rs`** — Fuzzy matching for priority/kind/status values. Normalizes synonyms (e.g., `urgent`→`critical`, `wip`→`in-progress`). Called before validation in add, update, and batch commands.
@@ -37,11 +48,11 @@ Always invoke as `itr` (on PATH). Never use full binary paths like `~/.cargo/bin
 
 ### Command Handlers (`src/commands/`)
 
-Each file exports a `run()` function that takes `&Connection`, command-specific args, and `Format`. Commands return `Result<(), ItrError>` and print to stdout directly. The `depend.rs` module also exports `run_undepend`. The `config.rs` module exports `run_list`, `run_get`, `run_set`, `run_reset`.
+Each file exports a `run()` function that takes `&Connection`, command-specific args, and `Format`. Commands return `Result<(), ItrError>` and print to stdout directly. The `depend.rs` module also exports `run_undepend`. The `config.rs` module exports `run_list`, `run_get`, `run_set`, `run_reset`. Several CLI commands are aliases that dispatch to existing handlers: `show <ID>` → `get::run`, `show` (no ID) → `list::run`, `claim`/`start` → `next::run` with `claim=true`, `create` → `add`.
 
 ### Database
 
-Four tables: `issues`, `dependencies`, `notes`, `config`. Schema defined as a const in `db.rs`. WAL mode, foreign keys enabled. `files` and `tags` are JSON arrays stored in TEXT columns. DB is found by walking up from cwd, or via `ITR_DB_PATH` env var or `--db` flag.
+Four tables: `issues`, `dependencies`, `notes`, `config`. Schema defined as a const in `db.rs`. WAL mode, foreign keys enabled. `files`, `tags`, and `skills` are JSON arrays stored in TEXT columns. DB is found by walking up from cwd, or via `ITR_DB_PATH` env var or `--db` flag. The `skills` field represents agent capabilities required for an issue, and can be used to filter in `list`, `search`, `next`, `ready`, and `claim` commands.
 
 ### Exit Codes
 

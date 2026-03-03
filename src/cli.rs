@@ -17,6 +17,10 @@ pub struct Cli {
     /// Suppress non-essential output
     #[arg(short, long, global = true)]
     pub quiet: bool,
+
+    /// Comma-separated list of fields to include in JSON output
+    #[arg(long, global = true)]
+    pub fields: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -70,6 +74,10 @@ pub enum Commands {
         #[arg(long)]
         parent: Option<i64>,
 
+        /// Assign to agent
+        #[arg(long)]
+        assigned_to: Option<String>,
+
         /// Read a JSON issue object from stdin
         #[arg(long)]
         stdin_json: bool,
@@ -112,6 +120,10 @@ pub enum Commands {
         /// Show children of an epic
         #[arg(long)]
         parent: Option<i64>,
+
+        /// Filter by assignee
+        #[arg(long)]
+        assigned_to: Option<String>,
 
         /// Sort by: urgency|priority|created|updated|id
         #[arg(long, default_value = "urgency")]
@@ -173,6 +185,10 @@ pub enum Commands {
         #[arg(long)]
         parent: Option<i64>,
 
+        /// Assign to agent
+        #[arg(long)]
+        assigned_to: Option<String>,
+
         /// Append a tag (repeatable)
         #[arg(long)]
         add_tag: Vec<String>,
@@ -209,6 +225,10 @@ pub enum Commands {
         /// Close as wontfix instead of done
         #[arg(long)]
         wontfix: bool,
+
+        /// Close as duplicate of another issue (creates relation + closes)
+        #[arg(long)]
+        duplicate_of: Option<i64>,
     },
 
     /// Append a note to an issue
@@ -253,6 +273,14 @@ pub enum Commands {
         /// Filter by skill (repeatable, AND logic)
         #[arg(long)]
         skill: Vec<String>,
+
+        /// Agent name for assignment (falls back to ITR_AGENT env var)
+        #[arg(long)]
+        agent: Option<String>,
+
+        /// Filter by assignee
+        #[arg(long)]
+        assigned_to: Option<String>,
     },
 
     /// List all unblocked, non-terminal issues by urgency
@@ -268,12 +296,22 @@ pub enum Commands {
         /// Filter by skill (repeatable, AND logic)
         #[arg(long)]
         skill: Vec<String>,
+
+        /// Filter by assignee
+        #[arg(long)]
+        assigned_to: Option<String>,
     },
 
-    /// Bulk operations
+    /// Bulk operations (batch add)
     Batch {
         #[command(subcommand)]
         action: BatchAction,
+    },
+
+    /// Bulk close or update issues matching filters
+    Bulk {
+        #[command(subcommand)]
+        action: BulkAction,
     },
 
     /// Output the dependency graph
@@ -336,7 +374,71 @@ pub enum Commands {
         /// Filter by skill (repeatable, AND logic)
         #[arg(long)]
         skill: Vec<String>,
+
+        /// Agent name for assignment (falls back to ITR_AGENT env var)
+        #[arg(long)]
+        agent: Option<String>,
+
+        /// Filter by assignee
+        #[arg(long)]
+        assigned_to: Option<String>,
     },
+
+    /// Assign an issue to an agent
+    Assign {
+        /// Issue ID
+        id: i64,
+
+        /// Agent name
+        agent: String,
+    },
+
+    /// Unassign an issue
+    Unassign {
+        /// Issue ID
+        id: i64,
+    },
+
+    /// View event history (audit log)
+    Log {
+        /// Issue ID (omit for recent events across all issues)
+        id: Option<i64>,
+
+        /// Max events to show
+        #[arg(short = 'n', long, default_value = "50")]
+        limit: usize,
+
+        /// Only show events since this timestamp (ISO 8601)
+        #[arg(long)]
+        since: Option<String>,
+    },
+
+    /// Create a relation between two issues
+    Relate {
+        /// Source issue ID
+        id: i64,
+
+        /// Target issue ID
+        #[arg(long)]
+        to: i64,
+
+        /// Relation type: duplicate|related|supersedes
+        #[arg(long, visible_alias = "type", default_value = "related")]
+        relation_type: String,
+    },
+
+    /// Remove a relation between two issues
+    Unrelate {
+        /// Source issue ID
+        id: i64,
+
+        /// Target issue ID
+        #[arg(long)]
+        from: i64,
+    },
+
+    /// Rebuild the full-text search index
+    Reindex,
 
     /// Search issues by text across all fields
     Search {
@@ -363,6 +465,10 @@ pub enum Commands {
         #[arg(long)]
         skill: Vec<String>,
 
+        /// Filter by assignee
+        #[arg(long)]
+        assigned_to: Option<String>,
+
         /// Max results
         #[arg(short = 'n', long)]
         limit: Option<usize>,
@@ -382,6 +488,91 @@ pub enum Commands {
 pub enum BatchAction {
     /// Bulk-create issues from JSON array on stdin
     Add,
+}
+
+#[derive(Subcommand)]
+pub enum BulkAction {
+    /// Close all issues matching filters
+    Close {
+        /// Close reason
+        #[arg(long)]
+        reason: Option<String>,
+
+        /// Close as wontfix instead of done
+        #[arg(long)]
+        wontfix: bool,
+
+        /// Filter by status
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Filter by priority
+        #[arg(long)]
+        priority: Option<String>,
+
+        /// Filter by kind
+        #[arg(long)]
+        kind: Option<String>,
+
+        /// Filter by tag
+        #[arg(long)]
+        tag: Option<String>,
+
+        /// Filter by skill
+        #[arg(long)]
+        skill: Option<String>,
+
+        /// Filter by assignee
+        #[arg(long)]
+        assigned_to: Option<String>,
+
+        /// Preview without applying changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Update fields on all issues matching filters
+    Update {
+        /// New status
+        #[arg(long)]
+        set_status: Option<String>,
+
+        /// New priority
+        #[arg(long)]
+        set_priority: Option<String>,
+
+        /// Add a tag to matched issues
+        #[arg(long)]
+        add_tag: Option<String>,
+
+        /// Filter by status
+        #[arg(long, visible_alias = "filter-status")]
+        status: Option<String>,
+
+        /// Filter by priority
+        #[arg(long, visible_alias = "filter-priority")]
+        priority: Option<String>,
+
+        /// Filter by kind
+        #[arg(long)]
+        kind: Option<String>,
+
+        /// Filter by tag
+        #[arg(long)]
+        tag: Option<String>,
+
+        /// Filter by skill
+        #[arg(long)]
+        skill: Option<String>,
+
+        /// Filter by assignee
+        #[arg(long)]
+        assigned_to: Option<String>,
+
+        /// Preview without applying changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]

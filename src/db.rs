@@ -1,5 +1,5 @@
 use crate::error::ItrError;
-use crate::models::{Issue, Note};
+use crate::models::{Event, Issue, Note, Relation};
 use rusqlite::{params, Connection};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -94,6 +94,10 @@ pub fn open_db(path: &Path) -> Result<Connection, ItrError> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     migrate_add_skills(&conn)?;
+    migrate_add_assigned_to(&conn)?;
+    migrate_add_events(&conn)?;
+    migrate_add_relations(&conn)?;
+    try_create_fts(&conn);
     Ok(conn)
 }
 
@@ -104,6 +108,64 @@ fn migrate_add_skills(conn: &Connection) -> Result<(), ItrError> {
         .any(|col| col.as_deref() == Ok("skills"));
     if !has_skills {
         conn.execute_batch("ALTER TABLE issues ADD COLUMN skills TEXT NOT NULL DEFAULT '[]';")?;
+    }
+    Ok(())
+}
+
+fn migrate_add_assigned_to(conn: &Connection) -> Result<(), ItrError> {
+    let has_col: bool = conn
+        .prepare("PRAGMA table_info(issues)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .any(|col| col.as_deref() == Ok("assigned_to"));
+    if !has_col {
+        conn.execute_batch("ALTER TABLE issues ADD COLUMN assigned_to TEXT NOT NULL DEFAULT '';")?;
+    }
+    Ok(())
+}
+
+fn migrate_add_events(conn: &Connection) -> Result<(), ItrError> {
+    let has_table: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='events'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_table {
+        conn.execute_batch(
+            "CREATE TABLE events (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_id    INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+                field       TEXT NOT NULL,
+                old_value   TEXT NOT NULL DEFAULT '',
+                new_value   TEXT NOT NULL DEFAULT '',
+                agent       TEXT NOT NULL DEFAULT '',
+                created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            );
+            CREATE INDEX idx_events_issue ON events(issue_id);
+            CREATE INDEX idx_events_created ON events(created_at);",
+        )?;
+    }
+    Ok(())
+}
+
+fn migrate_add_relations(conn: &Connection) -> Result<(), ItrError> {
+    let has_table: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='relations'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_table {
+        conn.execute_batch(
+            "CREATE TABLE relations (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_id       INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+                target_id       INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+                relation_type   TEXT NOT NULL CHECK(relation_type IN ('duplicate', 'related', 'supersedes')),
+                created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                UNIQUE(source_id, target_id, relation_type)
+            );
+            CREATE INDEX idx_relations_source ON relations(source_id);
+            CREATE INDEX idx_relations_target ON relations(target_id);",
+        )?;
     }
     Ok(())
 }
@@ -120,6 +182,7 @@ pub fn get_schema_sql() -> &'static str {
 
 // --- Issue CRUD ---
 
+#[allow(clippy::too_many_arguments)]
 pub fn insert_issue(
     conn: &Connection,
     title: &str,
@@ -131,24 +194,27 @@ pub fn insert_issue(
     skills: &[String],
     acceptance: &str,
     parent_id: Option<i64>,
+    assigned_to: &str,
 ) -> Result<Issue, ItrError> {
     let files_json = serde_json::to_string(files)?;
     let tags_json = serde_json::to_string(tags)?;
     let skills_json = serde_json::to_string(skills)?;
 
     conn.execute(
-        "INSERT INTO issues (title, priority, kind, context, files, tags, skills, acceptance, parent_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![title, priority, kind, context, files_json, tags_json, skills_json, acceptance, parent_id],
+        "INSERT INTO issues (title, priority, kind, context, files, tags, skills, acceptance, parent_id, assigned_to)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![title, priority, kind, context, files_json, tags_json, skills_json, acceptance, parent_id, assigned_to],
     )?;
 
     let id = conn.last_insert_rowid();
-    get_issue(conn, id)
+    let issue = get_issue(conn, id)?;
+    fts_index_issue(conn, &issue);
+    Ok(issue)
 }
 
 pub fn get_issue(conn: &Connection, id: i64) -> Result<Issue, ItrError> {
     conn.query_row(
-        "SELECT id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at
+        "SELECT id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at, assigned_to
          FROM issues WHERE id = ?1",
         params![id],
         |row| {
@@ -167,6 +233,7 @@ pub fn get_issue(conn: &Connection, id: i64) -> Result<Issue, ItrError> {
                 close_reason: row.get(11)?,
                 created_at: row.get(12)?,
                 updated_at: row.get(13)?,
+                assigned_to: row.get(14)?,
             })
         },
     )
@@ -189,6 +256,7 @@ fn parse_json_array(s: String) -> Vec<String> {
     serde_json::from_str(&s).unwrap_or_default()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn list_issues(
     conn: &Connection,
     statuses: &[String],
@@ -200,9 +268,10 @@ pub fn list_issues(
     parent_id: Option<i64>,
     all: bool,
     skills: &[String],
+    assigned_to: Option<&str>,
 ) -> Result<Vec<Issue>, ItrError> {
     let mut sql = String::from(
-        "SELECT id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at FROM issues WHERE 1=1",
+        "SELECT id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at, assigned_to FROM issues WHERE 1=1",
     );
     let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -256,7 +325,14 @@ pub fn list_issues(
         param_values.push(Box::new(pid));
     }
 
-    let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|b| b.as_ref()).collect();
+    if let Some(agent) = assigned_to {
+        let p = param_values.len() + 1;
+        sql.push_str(&format!(" AND assigned_to = ?{}", p));
+        param_values.push(Box::new(agent.to_string()));
+    }
+
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+        param_values.iter().map(|b| b.as_ref()).collect();
     let mut stmt = conn.prepare(&sql)?;
     let issues: Vec<Issue> = stmt
         .query_map(params_ref.as_slice(), |row| {
@@ -275,6 +351,7 @@ pub fn list_issues(
                 close_reason: row.get(11)?,
                 created_at: row.get(12)?,
                 updated_at: row.get(13)?,
+                assigned_to: row.get(14)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -317,16 +394,35 @@ pub fn list_issues(
     Ok(issues)
 }
 
-pub fn update_issue_field(conn: &Connection, id: i64, field: &str, value: &str) -> Result<(), ItrError> {
+pub fn update_issue_field(
+    conn: &Connection,
+    id: i64,
+    field: &str,
+    value: &str,
+) -> Result<(), ItrError> {
     if !issue_exists(conn, id)? {
         return Err(ItrError::NotFound(id));
     }
     let sql = format!("UPDATE issues SET {} = ?1 WHERE id = ?2", field);
     conn.execute(&sql, params![value, id])?;
+
+    // Re-index FTS for searchable fields
+    match field {
+        "title" | "context" | "acceptance" | "tags" | "files" | "skills" | "close_reason" => {
+            if let Ok(issue) = get_issue(conn, id) {
+                fts_index_issue(conn, &issue);
+            }
+        }
+        _ => {}
+    }
     Ok(())
 }
 
-pub fn update_issue_parent(conn: &Connection, id: i64, parent_id: Option<i64>) -> Result<(), ItrError> {
+pub fn update_issue_parent(
+    conn: &Connection,
+    id: i64,
+    parent_id: Option<i64>,
+) -> Result<(), ItrError> {
     if !issue_exists(conn, id)? {
         return Err(ItrError::NotFound(id));
     }
@@ -339,7 +435,11 @@ pub fn update_issue_parent(conn: &Connection, id: i64, parent_id: Option<i64>) -
 
 // --- Dependencies ---
 
-pub fn add_dependency(conn: &Connection, blocker_id: i64, blocked_id: i64) -> Result<bool, ItrError> {
+pub fn add_dependency(
+    conn: &Connection,
+    blocker_id: i64,
+    blocked_id: i64,
+) -> Result<bool, ItrError> {
     if !issue_exists(conn, blocker_id)? {
         return Err(ItrError::NotFound(blocker_id));
     }
@@ -374,7 +474,11 @@ pub fn add_dependency(conn: &Connection, blocker_id: i64, blocked_id: i64) -> Re
     Ok(true)
 }
 
-pub fn remove_dependency(conn: &Connection, blocker_id: i64, blocked_id: i64) -> Result<(), ItrError> {
+pub fn remove_dependency(
+    conn: &Connection,
+    blocker_id: i64,
+    blocked_id: i64,
+) -> Result<(), ItrError> {
     if !issue_exists(conn, blocker_id)? {
         return Err(ItrError::NotFound(blocker_id));
     }
@@ -403,9 +507,7 @@ fn has_path(conn: &Connection, from_id: i64, to_id: i64) -> Result<bool, ItrErro
             continue;
         }
         // Follow: what does `current` block? (current is a blocker_id, find blocked_ids)
-        let mut stmt = conn.prepare(
-            "SELECT blocked_id FROM dependencies WHERE blocker_id = ?1",
-        )?;
+        let mut stmt = conn.prepare("SELECT blocked_id FROM dependencies WHERE blocker_id = ?1")?;
         let blocked: Vec<i64> = stmt
             .query_map(params![current], |row| row.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -419,9 +521,7 @@ fn has_path(conn: &Connection, from_id: i64, to_id: i64) -> Result<bool, ItrErro
 }
 
 pub fn get_blockers(conn: &Connection, issue_id: i64) -> Result<Vec<i64>, ItrError> {
-    let mut stmt = conn.prepare(
-        "SELECT blocker_id FROM dependencies WHERE blocked_id = ?1",
-    )?;
+    let mut stmt = conn.prepare("SELECT blocker_id FROM dependencies WHERE blocked_id = ?1")?;
     let ids: Vec<i64> = stmt
         .query_map(params![issue_id], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -429,9 +529,7 @@ pub fn get_blockers(conn: &Connection, issue_id: i64) -> Result<Vec<i64>, ItrErr
 }
 
 pub fn get_blocking(conn: &Connection, issue_id: i64) -> Result<Vec<i64>, ItrError> {
-    let mut stmt = conn.prepare(
-        "SELECT blocked_id FROM dependencies WHERE blocker_id = ?1",
-    )?;
+    let mut stmt = conn.prepare("SELECT blocked_id FROM dependencies WHERE blocker_id = ?1")?;
     let ids: Vec<i64> = stmt
         .query_map(params![issue_id], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -463,7 +561,10 @@ pub fn blocks_active_issues(conn: &Connection, issue_id: i64) -> Result<bool, It
 }
 
 /// Get issues that become unblocked when `closed_id` is resolved.
-pub fn get_newly_unblocked(conn: &Connection, closed_id: i64) -> Result<Vec<(i64, String)>, ItrError> {
+pub fn get_newly_unblocked(
+    conn: &Connection,
+    closed_id: i64,
+) -> Result<Vec<(i64, String)>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT i.id, i.title FROM issues i
          JOIN dependencies d ON d.blocked_id = i.id
@@ -478,16 +579,19 @@ pub fn get_newly_unblocked(conn: &Connection, closed_id: i64) -> Result<Vec<(i64
          )",
     )?;
     let results: Vec<(i64, String)> = stmt
-        .query_map(params![closed_id], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?
+        .query_map(params![closed_id], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(results)
 }
 
 // --- Notes ---
 
-pub fn add_note(conn: &Connection, issue_id: i64, content: &str, agent: &str) -> Result<Note, ItrError> {
+pub fn add_note(
+    conn: &Connection,
+    issue_id: i64,
+    content: &str,
+    agent: &str,
+) -> Result<Note, ItrError> {
     if !issue_exists(conn, issue_id)? {
         return Err(ItrError::NotFound(issue_id));
     }
@@ -672,7 +776,7 @@ pub fn config_reset(conn: &Connection) -> Result<(), ItrError> {
 
 pub fn all_issues(conn: &Connection) -> Result<Vec<Issue>, ItrError> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at
+        "SELECT id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at, assigned_to
          FROM issues ORDER BY id",
     )?;
     let issues: Vec<Issue> = stmt
@@ -692,6 +796,7 @@ pub fn all_issues(conn: &Connection) -> Result<Vec<Issue>, ItrError> {
                 close_reason: row.get(11)?,
                 created_at: row.get(12)?,
                 updated_at: row.get(13)?,
+                assigned_to: row.get(14)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -708,9 +813,8 @@ pub fn all_dependencies(conn: &Connection) -> Result<Vec<(i64, i64)>, ItrError> 
 
 #[allow(dead_code)]
 pub fn all_notes(conn: &Connection) -> Result<Vec<Note>, ItrError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, issue_id, content, agent, created_at FROM notes ORDER BY id",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, issue_id, content, agent, created_at FROM notes ORDER BY id")?;
     let notes: Vec<Note> = stmt
         .query_map([], |row| {
             Ok(Note {
@@ -723,4 +827,279 @@ pub fn all_notes(conn: &Connection) -> Result<Vec<Note>, ItrError> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(notes)
+}
+
+// --- Events (Audit Log) ---
+
+pub fn record_event(
+    conn: &Connection,
+    issue_id: i64,
+    field: &str,
+    old_value: &str,
+    new_value: &str,
+) -> Result<(), ItrError> {
+    let agent = env::var("ITR_AGENT").unwrap_or_default();
+    conn.execute(
+        "INSERT INTO events (issue_id, field, old_value, new_value, agent)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![issue_id, field, old_value, new_value, agent],
+    )?;
+    Ok(())
+}
+
+pub fn get_events_for_issue(conn: &Connection, issue_id: i64) -> Result<Vec<Event>, ItrError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, issue_id, field, old_value, new_value, agent, created_at
+         FROM events WHERE issue_id = ?1 ORDER BY created_at ASC",
+    )?;
+    let events: Vec<Event> = stmt
+        .query_map(params![issue_id], |row| {
+            Ok(Event {
+                id: row.get(0)?,
+                issue_id: row.get(1)?,
+                field: row.get(2)?,
+                old_value: row.get(3)?,
+                new_value: row.get(4)?,
+                agent: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(events)
+}
+
+pub fn get_recent_events(
+    conn: &Connection,
+    limit: usize,
+    since: Option<&str>,
+) -> Result<Vec<Event>, ItrError> {
+    let (sql, param_values): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+        if let Some(since_ts) = since {
+            (
+                "SELECT id, issue_id, field, old_value, new_value, agent, created_at
+                 FROM events WHERE created_at >= ?1 ORDER BY created_at DESC LIMIT ?2"
+                    .to_string(),
+                vec![Box::new(since_ts.to_string()), Box::new(limit as i64)],
+            )
+        } else {
+            (
+                "SELECT id, issue_id, field, old_value, new_value, agent, created_at
+                 FROM events ORDER BY created_at DESC LIMIT ?1"
+                    .to_string(),
+                vec![Box::new(limit as i64)],
+            )
+        };
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
+        param_values.iter().map(|b| b.as_ref()).collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let events: Vec<Event> = stmt
+        .query_map(params_ref.as_slice(), |row| {
+            Ok(Event {
+                id: row.get(0)?,
+                issue_id: row.get(1)?,
+                field: row.get(2)?,
+                old_value: row.get(3)?,
+                new_value: row.get(4)?,
+                agent: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(events)
+}
+
+// --- Relations ---
+
+pub fn add_relation(
+    conn: &Connection,
+    source_id: i64,
+    target_id: i64,
+    relation_type: &str,
+) -> Result<bool, ItrError> {
+    if source_id == target_id {
+        return Err(ItrError::InvalidValue {
+            field: "relation".to_string(),
+            value: "self".to_string(),
+            valid: "source and target must be different issues".to_string(),
+        });
+    }
+    if !issue_exists(conn, source_id)? {
+        return Err(ItrError::NotFound(source_id));
+    }
+    if !issue_exists(conn, target_id)? {
+        return Err(ItrError::NotFound(target_id));
+    }
+
+    let exists: bool = conn.query_row(
+        "SELECT COUNT(*) > 0 FROM relations WHERE source_id = ?1 AND target_id = ?2 AND relation_type = ?3",
+        params![source_id, target_id, relation_type],
+        |row| row.get(0),
+    )?;
+    if exists {
+        return Ok(false);
+    }
+
+    conn.execute(
+        "INSERT INTO relations (source_id, target_id, relation_type) VALUES (?1, ?2, ?3)",
+        params![source_id, target_id, relation_type],
+    )?;
+
+    record_event(
+        conn,
+        source_id,
+        "relation_added",
+        "",
+        &format!("{}:{}", relation_type, target_id),
+    )?;
+    Ok(true)
+}
+
+pub fn remove_relation(
+    conn: &Connection,
+    source_id: i64,
+    target_id: i64,
+) -> Result<bool, ItrError> {
+    if !issue_exists(conn, source_id)? {
+        return Err(ItrError::NotFound(source_id));
+    }
+    if !issue_exists(conn, target_id)? {
+        return Err(ItrError::NotFound(target_id));
+    }
+
+    let deleted = conn.execute(
+        "DELETE FROM relations WHERE source_id = ?1 AND target_id = ?2",
+        params![source_id, target_id],
+    )?;
+
+    if deleted > 0 {
+        record_event(
+            conn,
+            source_id,
+            "relation_removed",
+            &format!("{}", target_id),
+            "",
+        )?;
+    }
+    Ok(deleted > 0)
+}
+
+pub fn get_relations(conn: &Connection, issue_id: i64) -> Result<Vec<Relation>, ItrError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, source_id, target_id, relation_type, created_at
+         FROM relations WHERE source_id = ?1 OR target_id = ?1
+         ORDER BY created_at ASC",
+    )?;
+    let relations: Vec<Relation> = stmt
+        .query_map(params![issue_id], |row| {
+            Ok(Relation {
+                id: row.get(0)?,
+                source_id: row.get(1)?,
+                target_id: row.get(2)?,
+                relation_type: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(relations)
+}
+
+pub fn all_relations(conn: &Connection) -> Result<Vec<Relation>, ItrError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, source_id, target_id, relation_type, created_at
+         FROM relations ORDER BY id",
+    )?;
+    let relations: Vec<Relation> = stmt
+        .query_map([], |row| {
+            Ok(Relation {
+                id: row.get(0)?,
+                source_id: row.get(1)?,
+                target_id: row.get(2)?,
+                relation_type: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(relations)
+}
+
+// --- FTS5 Full-Text Search ---
+
+pub fn has_fts(conn: &Connection) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='issues_fts'",
+        [],
+        |row| row.get::<_, bool>(0),
+    )
+    .unwrap_or(false)
+}
+
+/// Attempt to create the FTS5 virtual table. Silently fails if FTS5 is not available.
+fn try_create_fts(conn: &Connection) {
+    let _ = conn.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS issues_fts USING fts5(
+            title, context, acceptance, tags_text, files_text, skills_text, close_reason,
+            content='', content_rowid=id
+        );",
+    );
+}
+
+/// Index a single issue into FTS. Called after insert/update.
+pub fn fts_index_issue(conn: &Connection, issue: &Issue) {
+    if !has_fts(conn) {
+        return;
+    }
+    let tags_text = issue.tags.join(" ");
+    let files_text = issue.files.join(" ");
+    let skills_text = issue.skills.join(" ");
+
+    // Delete old entry, then insert new
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO issues_fts(rowid, title, context, acceptance, tags_text, files_text, skills_text, close_reason)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![issue.id, issue.title, issue.context, issue.acceptance, tags_text, files_text, skills_text, issue.close_reason],
+    );
+}
+
+/// Rebuild the entire FTS index from scratch.
+pub fn fts_rebuild(conn: &Connection) -> Result<(), ItrError> {
+    // Drop and recreate
+    let _ = conn.execute_batch("DROP TABLE IF EXISTS issues_fts;");
+    try_create_fts(conn);
+
+    if !has_fts(conn) {
+        return Err(ItrError::InvalidValue {
+            field: "fts5".to_string(),
+            value: "unavailable".to_string(),
+            valid: "SQLite must be compiled with FTS5 support".to_string(),
+        });
+    }
+
+    let issues = all_issues(conn)?;
+    for issue in &issues {
+        fts_index_issue(conn, issue);
+    }
+    Ok(())
+}
+
+/// Search using FTS5 MATCH. Returns issue IDs sorted by rank.
+pub fn fts_search(conn: &Connection, query: &str) -> Result<Vec<i64>, ItrError> {
+    // Escape FTS5 special characters and build OR query for each term
+    let terms: Vec<&str> = query.split_whitespace().collect();
+    if terms.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Build FTS5 query: each term is quoted, joined with AND
+    let fts_query: String = terms
+        .iter()
+        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+
+    let mut stmt =
+        conn.prepare("SELECT rowid FROM issues_fts WHERE issues_fts MATCH ?1 ORDER BY rank")?;
+    let ids: Vec<i64> = stmt
+        .query_map(params![fts_query], |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ids)
 }

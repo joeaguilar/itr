@@ -5,6 +5,7 @@ use crate::models::IssueSummary;
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     conn: &Connection,
     all: bool,
@@ -16,6 +17,7 @@ pub fn run(
     blocked_only: bool,
     include_blocked: bool,
     parent: Option<i64>,
+    assigned_to: Option<String>,
     sort: &str,
     limit: Option<usize>,
     fmt: Format,
@@ -31,6 +33,7 @@ pub fn run(
         parent,
         all,
         &skills,
+        assigned_to.as_deref(),
     )?;
 
     if issues.is_empty() {
@@ -59,18 +62,29 @@ pub fn run(
                 files: i.files.clone(),
                 skills: i.skills.clone(),
                 acceptance: i.acceptance.clone(),
+                assigned_to: i.assigned_to.clone(),
             }
         })
         .collect();
 
     // Sort
     match sort {
-        "urgency" => summaries.sort_by(|a, b| b.urgency.partial_cmp(&a.urgency).unwrap_or(std::cmp::Ordering::Equal)),
-        "priority" => summaries.sort_by(|a, b| priority_ord(&a.priority).cmp(&priority_ord(&b.priority))),
+        "urgency" => summaries.sort_by(|a, b| {
+            b.urgency
+                .partial_cmp(&a.urgency)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        "priority" => {
+            summaries.sort_by(|a, b| priority_ord(&a.priority).cmp(&priority_ord(&b.priority)))
+        }
         "created" => {} // already ordered by insertion
         "updated" => {} // would need updated_at on summary
         "id" => summaries.sort_by_key(|s| s.id),
-        _ => summaries.sort_by(|a, b| b.urgency.partial_cmp(&a.urgency).unwrap_or(std::cmp::Ordering::Equal)),
+        _ => summaries.sort_by(|a, b| {
+            b.urgency
+                .partial_cmp(&a.urgency)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
     }
 
     // Limit

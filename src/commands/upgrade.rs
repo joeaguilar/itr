@@ -18,7 +18,10 @@ pub fn run(no_pull: bool, source_dir: Option<String>, fmt: Format) -> Result<(),
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(ItrError::UpgradeFailed(format!("git pull failed: {}", stderr.trim())));
+            return Err(ItrError::UpgradeFailed(format!(
+                "git pull failed: {}",
+                stderr.trim()
+            )));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -34,7 +37,10 @@ pub fn run(no_pull: bool, source_dir: Option<String>, fmt: Format) -> Result<(),
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ItrError::UpgradeFailed(format!("cargo build failed: {}", stderr.trim())));
+        return Err(ItrError::UpgradeFailed(format!(
+            "cargo build failed: {}",
+            stderr.trim()
+        )));
     }
 
     // Copy built binary to current exe location
@@ -81,7 +87,8 @@ fn find_source_dir(override_dir: Option<String>) -> Result<PathBuf, ItrError> {
             return Ok(p);
         }
         return Err(ItrError::UpgradeFailed(format!(
-            "'{}' does not contain itr Cargo.toml", d
+            "'{}' does not contain itr Cargo.toml",
+            d
         )));
     }
 

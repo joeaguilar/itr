@@ -10,6 +10,7 @@ pub fn run(
     limit: Option<usize>,
     status: Option<String>,
     skills: Vec<String>,
+    assigned_to: Option<String>,
     fmt: Format,
 ) -> Result<(), ItrError> {
     let statuses = match status {
@@ -29,6 +30,7 @@ pub fn run(
         None,
         false,
         &skills,
+        assigned_to.as_deref(),
     )?;
 
     if issues.is_empty() {
@@ -56,6 +58,7 @@ pub fn run(
                 files: i.files.clone(),
                 skills: i.skills.clone(),
                 acceptance: i.acceptance.clone(),
+                assigned_to: i.assigned_to.clone(),
             }
         })
         .collect();

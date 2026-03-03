@@ -12,13 +12,19 @@ pub fn run(conn: &Connection, fix: bool, fmt: Format) -> Result<(), ItrError> {
     for (blocker, blocked) in &orphaned_deps {
         problems.push(Problem {
             kind: "orphaned_dependency".to_string(),
-            message: format!("Dependency {}->{} references missing issue", blocker, blocked),
+            message: format!(
+                "Dependency {}->{} references missing issue",
+                blocker, blocked
+            ),
             fixable: true,
         });
     }
     if fix && !orphaned_deps.is_empty() {
         fix_orphaned_deps(conn)?;
-        fixed.push(format!("Removed {} orphaned dependencies", orphaned_deps.len()));
+        fixed.push(format!(
+            "Removed {} orphaned dependencies",
+            orphaned_deps.len()
+        ));
     }
 
     // 2. Circular dependency detection
@@ -69,6 +75,29 @@ pub fn run(conn: &Connection, fix: bool, fmt: Format) -> Result<(), ItrError> {
             "Removed {} stale blocker relationships",
             done_blockers.len()
         ));
+    }
+
+    // 6. FTS index health
+    if db::has_fts(conn) {
+        // FTS exists, check if it's in sync
+        let issue_count = db::all_issues(conn)?.len();
+        let fts_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM issues_fts", [], |row| row.get(0))
+            .unwrap_or(0);
+        if (fts_count as usize) != issue_count {
+            problems.push(Problem {
+                kind: "fts_stale".to_string(),
+                message: format!(
+                    "FTS index has {} entries but {} issues exist",
+                    fts_count, issue_count
+                ),
+                fixable: true,
+            });
+            if fix {
+                db::fts_rebuild(conn)?;
+                fixed.push("Rebuilt FTS index".to_string());
+            }
+        }
     }
 
     // Output
@@ -175,7 +204,10 @@ fn can_reach(conn: &Connection, from: i64, to: i64) -> Result<bool, ItrError> {
     Ok(false)
 }
 
-fn find_stuck_in_progress(conn: &Connection, max_days: i64) -> Result<Vec<(i64, String, i64)>, ItrError> {
+fn find_stuck_in_progress(
+    conn: &Connection,
+    max_days: i64,
+) -> Result<Vec<(i64, String, i64)>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT id, title, CAST((julianday('now') - julianday(updated_at)) AS INTEGER) as days
          FROM issues

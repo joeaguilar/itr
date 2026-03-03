@@ -29,11 +29,13 @@ pub fn run(
 
     let status = if wontfix { "wontfix" } else { "done" };
 
-    // Verify issue exists
-    let _issue = db::get_issue(conn, id)?;
+    // Capture old values for event recording
+    let old_issue = db::get_issue(conn, id)?;
 
+    db::record_event(conn, id, "status", &old_issue.status, status)?;
     db::update_issue_field(conn, id, "status", status)?;
     if !reason.is_empty() {
+        db::record_event(conn, id, "close_reason", &old_issue.close_reason, &reason)?;
         db::update_issue_field(conn, id, "close_reason", &reason)?;
     }
 
@@ -55,6 +57,7 @@ pub fn run(
         notes,
         urgency_breakdown: Some(breakdown),
         children: None,
+        relations: vec![],
     };
 
     // Get unblocked issues
@@ -66,12 +69,10 @@ pub fn run(
             let mut value = serde_json::to_value(&detail)?;
             let unblocked_list: Vec<serde_json::Value> = unblocked
                 .iter()
-                .map(|(uid, utitle)| {
-                    serde_json::json!({"id": uid, "title": utitle})
-                })
+                .map(|(uid, utitle)| serde_json::json!({"id": uid, "title": utitle}))
                 .collect();
             value["unblocked"] = serde_json::Value::Array(unblocked_list);
-            println!("{}", value);
+            format::println_json(&value.to_string());
         }
         _ => {
             println!("{}", format::format_issue_detail(&detail, fmt));

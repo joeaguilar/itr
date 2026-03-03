@@ -9,7 +9,19 @@ pub fn run(conn: &Connection, all: bool, fmt: Format) -> Result<(), ItrError> {
     let issues = if all {
         db::all_issues(conn)?
     } else {
-        db::list_issues(conn, &[], &[], &[], &[], false, true, None, false, &[])?
+        db::list_issues(
+            conn,
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+            true,
+            None,
+            false,
+            &[],
+            None,
+        )?
     };
 
     let config = UrgencyConfig::load(conn);
@@ -32,7 +44,7 @@ pub fn run(conn: &Connection, all: bool, fmt: Format) -> Result<(), ItrError> {
         })
         .collect();
 
-    let edges: Vec<GraphEdge> = deps
+    let mut edges: Vec<GraphEdge> = deps
         .iter()
         .filter(|(blocker, blocked)| issue_ids.contains(blocker) && issue_ids.contains(blocked))
         .map(|(blocker, blocked)| GraphEdge {
@@ -41,6 +53,18 @@ pub fn run(conn: &Connection, all: bool, fmt: Format) -> Result<(), ItrError> {
             edge_type: "blocks".to_string(),
         })
         .collect();
+
+    // Add relation edges
+    let relations = db::all_relations(conn)?;
+    for rel in &relations {
+        if issue_ids.contains(&rel.source_id) && issue_ids.contains(&rel.target_id) {
+            edges.push(GraphEdge {
+                from: rel.source_id,
+                to: rel.target_id,
+                edge_type: rel.relation_type.clone(),
+            });
+        }
+    }
 
     let graph = GraphOutput { nodes, edges };
 

@@ -1,4 +1,47 @@
-use crate::models::{IssueDetail, IssueSummary, SearchResult, Stats, GraphOutput, UnblockedIssue};
+use crate::error::ItrError;
+use crate::models::{
+    Event, GraphOutput, IssueDetail, IssueSummary, Relation, SearchResult, Stats, UnblockedIssue,
+};
+use std::cell::RefCell;
+
+thread_local! {
+    static FIELDS_FILTER: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
+}
+
+pub fn set_fields_filter(fields: Vec<String>) {
+    FIELDS_FILTER.with(|f| {
+        *f.borrow_mut() = Some(fields);
+    });
+}
+
+/// Apply field filtering to a JSON string if --fields was set, returning the filtered string
+fn apply_fields_filter(json_str: &str) -> String {
+    FIELDS_FILTER.with(|f| {
+        let filter = f.borrow();
+        if let Some(ref fields) = *filter {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
+                let filtered = filter_json_fields(value, fields);
+                return filtered.to_string();
+            }
+        }
+        json_str.to_string()
+    })
+}
+
+/// Print JSON output, applying field filtering if --fields was set
+pub fn println_json(json_str: &str) {
+    FIELDS_FILTER.with(|f| {
+        let filter = f.borrow();
+        if let Some(ref fields) = *filter {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(json_str) {
+                let filtered = filter_json_fields(value, fields);
+                println!("{}", filtered);
+                return;
+            }
+        }
+        println!("{}", json_str);
+    });
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Format {
@@ -26,7 +69,7 @@ impl Format {
 
 pub fn format_issue_detail(detail: &IssueDetail, fmt: Format) -> String {
     match fmt {
-        Format::Json => serde_json::to_string(detail).unwrap_or_default(),
+        Format::Json => apply_fields_filter(&serde_json::to_string(detail).unwrap_or_default()),
         Format::Compact => format_issue_detail_compact(detail),
         Format::Pretty => format_issue_detail_pretty(detail),
     }
@@ -42,13 +85,21 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
     if !d.blocked_by.is_empty() {
         first.push_str(&format!(
             " BLOCKED_BY:{}",
-            d.blocked_by.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+            d.blocked_by
+                .iter()
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         ));
     }
     if !d.blocks.is_empty() {
         first.push_str(&format!(
             " BLOCKS:{}",
-            d.blocks.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+            d.blocks
+                .iter()
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
         ));
     }
     lines.push(first);
@@ -62,6 +113,9 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
     if !d.issue.skills.is_empty() {
         lines.push(format!("SKILLS:{}", d.issue.skills.join(",")));
     }
+    if !d.issue.assigned_to.is_empty() {
+        lines.push(format!("ASSIGNED:{}", d.issue.assigned_to));
+    }
     lines.push(format!("TITLE: {}", d.issue.title));
     if !d.issue.context.is_empty() {
         lines.push(format!("CONTEXT: {}", d.issue.context));
@@ -69,8 +123,8 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
     if !d.issue.acceptance.is_empty() {
         lines.push(format!("ACCEPTANCE: {}", d.issue.acceptance));
     }
-    if d.issue.parent_id.is_some() {
-        lines.push(format!("PARENT: {}", d.issue.parent_id.unwrap()));
+    if let Some(pid) = d.issue.parent_id {
+        lines.push(format!("PARENT: {}", pid));
     }
     if !d.issue.close_reason.is_empty() {
         lines.push(format!("CLOSE_REASON: {}", d.issue.close_reason));
@@ -89,6 +143,13 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
         lines.push(parts.join(" "));
     }
 
+    if !d.relations.is_empty() {
+        lines.push("--- RELATIONS ---".to_string());
+        for rel in &d.relations {
+            lines.push(format_relation_compact(rel, d.issue.id));
+        }
+    }
+
     if !d.notes.is_empty() {
         lines.push("--- NOTES ---".to_string());
         for note in &d.notes {
@@ -97,11 +158,28 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
             } else {
                 format!(" ({})", note.agent)
             };
-            lines.push(format!("[{}]{} {}", note.created_at, agent_str, note.content));
+            lines.push(format!(
+                "[{}]{} {}",
+                note.created_at, agent_str, note.content
+            ));
         }
     }
 
     lines.join("\n")
+}
+
+fn format_relation_compact(rel: &Relation, current_id: i64) -> String {
+    if rel.source_id == current_id {
+        format!(
+            "RELATION: {} -> #{} ({})",
+            rel.relation_type, rel.target_id, rel.created_at
+        )
+    } else {
+        format!(
+            "RELATION: {} <- #{} ({})",
+            rel.relation_type, rel.source_id, rel.created_at
+        )
+    }
 }
 
 fn format_issue_detail_pretty(d: &IssueDetail) -> String {
@@ -120,6 +198,9 @@ fn format_issue_detail_pretty(d: &IssueDetail) -> String {
     if !d.issue.skills.is_empty() {
         lines.push(format!("  Skills: {}", d.issue.skills.join(", ")));
     }
+    if !d.issue.assigned_to.is_empty() {
+        lines.push(format!("  Assigned to: {}", d.issue.assigned_to));
+    }
     if !d.issue.context.is_empty() {
         lines.push(format!("  Context: {}", d.issue.context));
     }
@@ -129,14 +210,32 @@ fn format_issue_detail_pretty(d: &IssueDetail) -> String {
     if !d.blocked_by.is_empty() {
         lines.push(format!(
             "  Blocked by: {}",
-            d.blocked_by.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
+            d.blocked_by
+                .iter()
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
     }
     if !d.blocks.is_empty() {
         lines.push(format!(
             "  Blocks: {}",
-            d.blocks.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(", ")
+            d.blocks
+                .iter()
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         ));
+    }
+    if !d.relations.is_empty() {
+        lines.push("  Relations:".to_string());
+        for rel in &d.relations {
+            if rel.source_id == d.issue.id {
+                lines.push(format!("    {} -> #{}", rel.relation_type, rel.target_id));
+            } else {
+                lines.push(format!("    {} <- #{}", rel.relation_type, rel.source_id));
+            }
+        }
     }
     if !d.notes.is_empty() {
         lines.push("  Notes:".to_string());
@@ -151,7 +250,7 @@ fn format_issue_detail_pretty(d: &IssueDetail) -> String {
 
 pub fn format_issue_list(issues: &[IssueSummary], fmt: Format) -> String {
     match fmt {
-        Format::Json => serde_json::to_string(issues).unwrap_or_default(),
+        Format::Json => apply_fields_filter(&serde_json::to_string(issues).unwrap_or_default()),
         Format::Compact => format_issue_list_compact(issues),
         Format::Pretty => format_issue_list_pretty(issues),
     }
@@ -168,7 +267,11 @@ fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
             if !i.blocked_by.is_empty() {
                 first.push_str(&format!(
                     " BLOCKED_BY:{}",
-                    i.blocked_by.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
+                    i.blocked_by
+                        .iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
                 ));
             }
             let mut lines = vec![first];
@@ -180,6 +283,9 @@ fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
             }
             if !i.skills.is_empty() {
                 lines.push(format!("SKILLS:{}", i.skills.join(",")));
+            }
+            if !i.assigned_to.is_empty() {
+                lines.push(format!("ASSIGNED:{}", i.assigned_to));
             }
             lines.push(format!("TITLE: {}", i.title));
             if !i.acceptance.is_empty() {
@@ -200,15 +306,20 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
         " {:>3} | {:>5} | {:11} | {:8} | {:7} | {:40} | Blocked",
         "#", "Urg", "Status", "Pri", "Kind", "Title"
     ));
-    lines.push(format!(
+    lines.push(
         "-----|-------|-------------|----------|---------|------------------------------------------|--------"
-    ));
+            .to_string(),
+    );
     for i in issues {
         let title = truncate_with_ellipsis(&i.title, 40);
         let blocked = if i.blocked_by.is_empty() {
             String::new()
         } else {
-            i.blocked_by.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(", ")
+            i.blocked_by
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         };
         lines.push(format!(
             " {:>3} | {:>5.1} | {:11} | {:8} | {:7} | {:40} | {}",
@@ -257,8 +368,17 @@ fn format_stats_compact(stats: &Stats) -> String {
     if !stats.by_skills.is_empty() {
         let mut skill_pairs: Vec<(&String, &i64)> = stats.by_skills.iter().collect();
         skill_pairs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-        let parts: Vec<String> = skill_pairs.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let parts: Vec<String> = skill_pairs
+            .iter()
+            .map(|(k, v)| format!("{}={}", k, v))
+            .collect();
         lines.push(format!("BY_SKILLS: {}", parts.join(" ")));
+    }
+    if !stats.by_assignee.is_empty() {
+        let mut pairs: Vec<(&String, &i64)> = stats.by_assignee.iter().collect();
+        pairs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        let parts: Vec<String> = pairs.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        lines.push(format!("BY_ASSIGNEE: {}", parts.join(" ")));
     }
     if let Some(ref oldest) = stats.oldest_open {
         lines.push(format!(
@@ -289,7 +409,10 @@ fn format_graph_compact(graph: &GraphOutput) -> String {
         ));
     }
     for edge in &graph.edges {
-        lines.push(format!("EDGE: {} -> {} ({})", edge.from, edge.to, edge.edge_type));
+        lines.push(format!(
+            "EDGE: {} -> {} ({})",
+            edge.from, edge.to, edge.edge_type
+        ));
     }
     lines.join("\n")
 }
@@ -338,7 +461,7 @@ fn truncate_with_ellipsis(s: &str, max_len: usize) -> String {
 
 pub fn format_search_results(results: &[SearchResult], fmt: Format) -> String {
     match fmt {
-        Format::Json => serde_json::to_string(results).unwrap_or_default(),
+        Format::Json => apply_fields_filter(&serde_json::to_string(results).unwrap_or_default()),
         Format::Compact => format_search_compact(results),
         Format::Pretty => format_search_pretty(results),
     }
@@ -350,13 +473,21 @@ fn format_search_compact(results: &[SearchResult]) -> String {
         .map(|r| {
             let mut first = format!(
                 "ID:{} STATUS:{} PRIORITY:{} KIND:{} URGENCY:{:.1} MATCHED:{}",
-                r.id, r.status, r.priority, r.kind, r.urgency,
+                r.id,
+                r.status,
+                r.priority,
+                r.kind,
+                r.urgency,
                 r.matched_fields.join(",")
             );
             if !r.blocked_by.is_empty() {
                 first.push_str(&format!(
                     " BLOCKED_BY:{}",
-                    r.blocked_by.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",")
+                    r.blocked_by
+                        .iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
                 ));
             }
             let mut lines = vec![first];
@@ -369,9 +500,17 @@ fn format_search_compact(results: &[SearchResult]) -> String {
             if !r.skills.is_empty() {
                 lines.push(format!("SKILLS:{}", r.skills.join(",")));
             }
+            if !r.assigned_to.is_empty() {
+                lines.push(format!("ASSIGNED:{}", r.assigned_to));
+            }
             lines.push(format!("TITLE: {}", r.title));
             if !r.acceptance.is_empty() {
                 lines.push(format!("ACCEPTANCE: {}", r.acceptance));
+            }
+            if let Some(ref snippets) = r.context_snippets {
+                for (field, snippet) in snippets {
+                    lines.push(format!("SNIPPET[{}]: {}", field, snippet));
+                }
             }
             lines.join("\n")
         })
@@ -388,9 +527,10 @@ fn format_search_pretty(results: &[SearchResult]) -> String {
         " {:>3} | {:>5} | {:11} | {:8} | {:7} | {:40} | Matched",
         "#", "Urg", "Status", "Pri", "Kind", "Title"
     ));
-    lines.push(format!(
+    lines.push(
         "-----|-------|-------------|----------|---------|------------------------------------------|--------"
-    ));
+            .to_string(),
+    );
     for r in results {
         let title = truncate_with_ellipsis(&r.title, 40);
         let matched = r.matched_fields.join(",");
@@ -400,6 +540,135 @@ fn format_search_pretty(results: &[SearchResult]) -> String {
         ));
     }
     lines.join("\n")
+}
+
+// --- Events (Audit Log) ---
+
+pub fn format_events(events: &[Event], fmt: Format) -> String {
+    match fmt {
+        Format::Json => serde_json::to_string(events).unwrap_or_default(),
+        Format::Compact => format_events_compact(events),
+        Format::Pretty => format_events_pretty(events),
+    }
+}
+
+fn format_events_compact(events: &[Event]) -> String {
+    events
+        .iter()
+        .map(|e| {
+            let agent_str = if e.agent.is_empty() {
+                String::new()
+            } else {
+                format!(" AGENT:{}", e.agent)
+            };
+            format!(
+                "EVENT:{} ISSUE:{} FIELD:{} OLD:{} NEW:{}{} ({})",
+                e.id, e.issue_id, e.field, e.old_value, e.new_value, agent_str, e.created_at
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_events_pretty(events: &[Event]) -> String {
+    if events.is_empty() {
+        return String::new();
+    }
+    let mut lines = Vec::new();
+    lines.push(format!(
+        " {:>4} | {:>5} | {:15} | {:20} | {:20} | {:15} | {}",
+        "ID", "Issue", "Field", "Old", "New", "Agent", "Time"
+    ));
+    lines.push(
+        "------|-------|-----------------|----------------------|----------------------|-----------------|--------------------"
+            .to_string(),
+    );
+    for e in events {
+        let old = truncate_with_ellipsis(&e.old_value, 20);
+        let new = truncate_with_ellipsis(&e.new_value, 20);
+        let agent = truncate_with_ellipsis(&e.agent, 15);
+        lines.push(format!(
+            " {:>4} | {:>5} | {:15} | {:20} | {:20} | {:15} | {}",
+            e.id, e.issue_id, e.field, old, new, agent, e.created_at
+        ));
+    }
+    lines.join("\n")
+}
+
+// --- JSON field filtering ---
+
+const VALID_FIELDS: &[&str] = &[
+    "id",
+    "title",
+    "status",
+    "priority",
+    "kind",
+    "context",
+    "files",
+    "tags",
+    "skills",
+    "acceptance",
+    "parent_id",
+    "assigned_to",
+    "close_reason",
+    "created_at",
+    "updated_at",
+    "urgency",
+    "blocked_by",
+    "blocks",
+    "is_blocked",
+    "notes",
+    "urgency_breakdown",
+    "children",
+    "matched_fields",
+    "unblocked",
+    "context_snippets",
+    "relations",
+];
+
+pub fn parse_fields(fields_str: &str) -> Vec<String> {
+    fields_str
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+pub fn validate_fields(fields: &[String]) -> Result<(), ItrError> {
+    for f in fields {
+        if !VALID_FIELDS.contains(&f.as_str()) {
+            return Err(ItrError::InvalidValue {
+                field: "fields".to_string(),
+                value: f.clone(),
+                valid: VALID_FIELDS.join(", "),
+            });
+        }
+    }
+    Ok(())
+}
+
+pub fn filter_json_fields(value: serde_json::Value, fields: &[String]) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(arr) => serde_json::Value::Array(
+            arr.into_iter()
+                .map(|v| filter_json_object(v, fields))
+                .collect(),
+        ),
+        obj @ serde_json::Value::Object(_) => filter_json_object(obj, fields),
+        other => other,
+    }
+}
+
+fn filter_json_object(value: serde_json::Value, fields: &[String]) -> serde_json::Value {
+    if let serde_json::Value::Object(map) = value {
+        let filtered: serde_json::Map<String, serde_json::Value> = map
+            .into_iter()
+            .filter(|(k, _)| fields.iter().any(|f| f == k))
+            .collect();
+        serde_json::Value::Object(filtered)
+    } else {
+        value
+    }
 }
 
 // --- Unblocked notifications ---
@@ -430,7 +699,7 @@ pub fn format_unblocked(issues: &[(i64, String)], fmt: Format) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{IssueSummary, GraphOutput, GraphNode};
+    use crate::models::{GraphNode, GraphOutput, IssueSummary};
 
     // --- truncate_with_ellipsis unit tests ---
 
@@ -517,13 +786,15 @@ mod tests {
             files: vec![],
             skills: vec![],
             acceptance: String::new(),
+            assigned_to: String::new(),
         }
     }
 
     #[test]
     fn pretty_list_with_em_dash_title_does_not_panic() {
         // This is the exact title from the original bug report
-        let title = "Set up justfile for Rust workspace — verify, build, run, test, fmt, clippy targets";
+        let title =
+            "Set up justfile for Rust workspace — verify, build, run, test, fmt, clippy targets";
         let issues = vec![make_summary(title)];
         let result = format_issue_list(&issues, Format::Pretty);
         assert!(result.contains("..."));

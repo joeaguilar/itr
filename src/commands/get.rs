@@ -16,7 +16,19 @@ pub fn run(conn: &Connection, id: i64, fmt: Format) -> Result<(), ItrError> {
 
     // If epic, get children
     let children = if issue.kind == "epic" {
-        let child_issues = db::list_issues(conn, &[], &[], &[], &[], false, true, Some(issue.id), true, &[])?;
+        let child_issues = db::list_issues(
+            conn,
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+            true,
+            Some(issue.id),
+            true,
+            &[],
+            None,
+        )?;
         let child_summaries: Vec<IssueSummary> = child_issues
             .iter()
             .map(|i| {
@@ -36,6 +48,7 @@ pub fn run(conn: &Connection, id: i64, fmt: Format) -> Result<(), ItrError> {
                     files: i.files.clone(),
                     skills: i.skills.clone(),
                     acceptance: i.acceptance.clone(),
+                    assigned_to: i.assigned_to.clone(),
                 }
             })
             .collect();
@@ -57,6 +70,7 @@ pub fn run(conn: &Connection, id: i64, fmt: Format) -> Result<(), ItrError> {
         notes,
         urgency_breakdown: Some(breakdown),
         children,
+        relations: db::get_relations(conn, id)?,
     };
 
     println!("{}", format::format_issue_detail(&detail, fmt));

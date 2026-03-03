@@ -29,6 +29,9 @@ pub enum ItrError {
 
     #[error("Upgrade failed: {0}")]
     UpgradeFailed(String),
+
+    #[error("At least one filter is required for bulk operations")]
+    NoFilters,
 }
 
 impl ItrError {
@@ -42,6 +45,7 @@ impl ItrError {
             ItrError::Parse(_) => 1,
             ItrError::Io(_) => 1,
             ItrError::UpgradeFailed(_) => 1,
+            ItrError::NoFilters => 1,
         }
     }
 
@@ -55,6 +59,7 @@ impl ItrError {
             ItrError::Parse(_) => "PARSE_ERROR",
             ItrError::Io(_) => "IO_ERROR",
             ItrError::UpgradeFailed(_) => "UPGRADE_FAILED",
+            ItrError::NoFilters => "NO_FILTERS",
         }
     }
 }

@@ -52,7 +52,12 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
             tags.push("_needs_review".to_string());
         }
 
-        let skills: Vec<String> = item.skills.iter().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
+        let skills: Vec<String> = item
+            .skills
+            .iter()
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
         let issue = db::insert_issue(
             &tx,
             &item.title,
@@ -64,6 +69,7 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
             &skills,
             &item.acceptance,
             item.parent_id,
+            &item.assigned_to,
         )?;
         created_ids.push(issue.id);
         item_review_notes.push(review_notes);
@@ -82,11 +88,12 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
         for dep in &item.blocked_by {
             let blocker_id = if let Some(s) = dep.as_str() {
                 if let Some(stripped) = s.strip_prefix('@') {
-                    let batch_idx: usize = stripped.parse().map_err(|_| ItrError::InvalidValue {
-                        field: "blocked_by".to_string(),
-                        value: s.to_string(),
-                        valid: "@N where N is a batch index".to_string(),
-                    })?;
+                    let batch_idx: usize =
+                        stripped.parse().map_err(|_| ItrError::InvalidValue {
+                            field: "blocked_by".to_string(),
+                            value: s.to_string(),
+                            valid: "@N where N is a batch index".to_string(),
+                        })?;
                     if batch_idx >= created_ids.len() {
                         return Err(ItrError::InvalidValue {
                             field: "blocked_by".to_string(),
@@ -137,6 +144,7 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
             notes,
             urgency_breakdown: Some(breakdown),
             children: None,
+            relations: vec![],
         });
     }
 

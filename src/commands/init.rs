@@ -25,9 +25,10 @@ pub fn run(agents_md: bool, fmt: Format, db_override: Option<&str>) -> Result<()
     };
 
     if agents_md {
-        let agents_dir = db_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| {
-            env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-        });
+        let agents_dir = db_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         append_agents_md(&agents_dir)?;
     }
 
@@ -49,7 +50,7 @@ pub fn run(agents_md: bool, fmt: Format, db_override: Option<&str>) -> Result<()
     Ok(())
 }
 
-fn append_agents_md(cwd: &PathBuf) -> Result<(), ItrError> {
+fn append_agents_md(cwd: &std::path::Path) -> Result<(), ItrError> {
     let agents_path = cwd.join("AGENTS.md");
     let block = r#"
 ## Issue Tracking

@@ -7,6 +7,7 @@ use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 use std::io::{self, Read};
 
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     conn: &Connection,
     title: Option<String>,
@@ -19,66 +20,95 @@ pub fn run(
     acceptance: Option<String>,
     blocked_by: Option<String>,
     parent: Option<i64>,
+    assigned_to: Option<String>,
     stdin_json: bool,
     fmt: Format,
 ) -> Result<(), ItrError> {
-    let (title, priority, kind, context, files_vec, tags_vec, skills_vec, acceptance, parent_id, blocked_by_ids) =
-        if stdin_json {
-            let mut input = String::new();
-            io::stdin().read_to_string(&mut input)?;
-            let data: BatchAddInput = serde_json::from_str(&input)?;
-            let blocked: Vec<i64> = data
-                .blocked_by
+    let (
+        title,
+        priority,
+        kind,
+        context,
+        files_vec,
+        tags_vec,
+        skills_vec,
+        acceptance,
+        parent_id,
+        assigned_to,
+        blocked_by_ids,
+    ) = if stdin_json {
+        let mut input = String::new();
+        io::stdin().read_to_string(&mut input)?;
+        let data: BatchAddInput = serde_json::from_str(&input)?;
+        let blocked: Vec<i64> = data.blocked_by.iter().filter_map(|v| v.as_i64()).collect();
+        (
+            data.title,
+            data.priority,
+            data.kind,
+            data.context,
+            data.files,
+            data.tags,
+            data.skills
                 .iter()
-                .filter_map(|v| v.as_i64())
-                .collect();
-            (
-                data.title,
-                data.priority,
-                data.kind,
-                data.context,
-                data.files,
-                data.tags,
-                data.skills.iter().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect(),
-                data.acceptance,
-                data.parent_id,
-                blocked,
-            )
-        } else {
-            let title = title.ok_or_else(|| ItrError::InvalidValue {
-                field: "title".to_string(),
-                value: String::new(),
-                valid: "non-empty string".to_string(),
-            })?;
-            let files_vec: Vec<String> = files
-                .map(|f| f.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
-                .unwrap_or_default();
-            let tags_vec: Vec<String> = tags
-                .map(|t| t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
-                .unwrap_or_default();
-            let skills_vec: Vec<String> = skills
-                .map(|s| s.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect())
-                .unwrap_or_default();
-            let blocked_by_ids: Vec<i64> = blocked_by
-                .map(|b| {
-                    b.split(',')
-                        .filter_map(|s| s.trim().parse::<i64>().ok())
-                        .collect()
-                })
-                .unwrap_or_default();
-            (
-                title,
-                priority.to_string(),
-                kind.to_string(),
-                context.unwrap_or_default(),
-                files_vec,
-                tags_vec,
-                skills_vec,
-                acceptance.unwrap_or_default(),
-                parent,
-                blocked_by_ids,
-            )
-        };
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            data.acceptance,
+            data.parent_id,
+            data.assigned_to,
+            blocked,
+        )
+    } else {
+        let title = title.ok_or_else(|| ItrError::InvalidValue {
+            field: "title".to_string(),
+            value: String::new(),
+            valid: "non-empty string".to_string(),
+        })?;
+        let files_vec: Vec<String> = files
+            .map(|f| {
+                f.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let tags_vec: Vec<String> = tags
+            .map(|t| {
+                t.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let skills_vec: Vec<String> = skills
+            .map(|s| {
+                s.split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let blocked_by_ids: Vec<i64> = blocked_by
+            .map(|b| {
+                b.split(',')
+                    .filter_map(|s| s.trim().parse::<i64>().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        (
+            title,
+            priority.to_string(),
+            kind.to_string(),
+            context.unwrap_or_default(),
+            files_vec,
+            tags_vec,
+            skills_vec,
+            acceptance.unwrap_or_default(),
+            parent,
+            assigned_to.unwrap_or_default(),
+            blocked_by_ids,
+        )
+    };
 
     let priority = normalize::normalize_priority(&priority);
     let kind = normalize::normalize_kind(&kind);
@@ -122,6 +152,7 @@ pub fn run(
         &skills_vec,
         &acceptance,
         parent_id,
+        &assigned_to,
     )?;
 
     // Add review notes
@@ -151,6 +182,7 @@ pub fn run(
         notes,
         urgency_breakdown: Some(breakdown),
         children: None,
+        relations: vec![],
     };
 
     println!("{}", format::format_issue_detail(&detail, fmt));

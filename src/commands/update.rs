@@ -21,6 +21,7 @@ pub fn run(
     skills: Option<String>,
     acceptance: Option<String>,
     parent: Option<i64>,
+    assigned_to: Option<String>,
     add_tags: Vec<String>,
     remove_tags: Vec<String>,
     add_files: Vec<String>,
@@ -29,8 +30,8 @@ pub fn run(
     remove_skills: Vec<String>,
     fmt: Format,
 ) -> Result<(), ItrError> {
-    // Validate issue exists
-    let _issue = db::get_issue(conn, id)?;
+    // Capture old values for event recording
+    let old_issue = db::get_issue(conn, id)?;
 
     let status = status.map(|s| normalize::normalize_status(&s));
     let priority = priority.map(|p| normalize::normalize_priority(&p));
@@ -40,53 +41,76 @@ pub fn run(
 
     if let Some(ref s) = status {
         match validate_status(s) {
-            Ok(()) => { db::update_issue_field(conn, id, "status", s)?; }
+            Ok(()) => {
+                db::record_event(conn, id, "status", &old_issue.status, s)?;
+                db::update_issue_field(conn, id, "status", s)?;
+            }
             Err(_) => {
                 review_notes.push(format!(
                     "REVIEW: status '{}' not recognized, defaulted to 'open'. Valid: open, in-progress, done, wontfix",
                     s
                 ));
+                db::record_event(conn, id, "status", &old_issue.status, "open")?;
                 db::update_issue_field(conn, id, "status", "open")?;
             }
         }
     }
     if let Some(ref p) = priority {
         match validate_priority(p) {
-            Ok(()) => { db::update_issue_field(conn, id, "priority", p)?; }
+            Ok(()) => {
+                db::record_event(conn, id, "priority", &old_issue.priority, p)?;
+                db::update_issue_field(conn, id, "priority", p)?;
+            }
             Err(_) => {
                 review_notes.push(format!(
                     "REVIEW: priority '{}' not recognized, defaulted to 'medium'. Valid: critical, high, medium, low",
                     p
                 ));
+                db::record_event(conn, id, "priority", &old_issue.priority, "medium")?;
                 db::update_issue_field(conn, id, "priority", "medium")?;
             }
         }
     }
     if let Some(ref k) = kind {
         match validate_kind(k) {
-            Ok(()) => { db::update_issue_field(conn, id, "kind", k)?; }
+            Ok(()) => {
+                db::record_event(conn, id, "kind", &old_issue.kind, k)?;
+                db::update_issue_field(conn, id, "kind", k)?;
+            }
             Err(_) => {
                 review_notes.push(format!(
                     "REVIEW: kind '{}' not recognized, defaulted to 'task'. Valid: bug, feature, task, epic",
                     k
                 ));
+                db::record_event(conn, id, "kind", &old_issue.kind, "task")?;
                 db::update_issue_field(conn, id, "kind", "task")?;
             }
         }
     }
     if let Some(ref t) = title {
+        db::record_event(conn, id, "title", &old_issue.title, t)?;
         db::update_issue_field(conn, id, "title", t)?;
     }
     if let Some(ref c) = context {
+        db::record_event(conn, id, "context", &old_issue.context, c)?;
         db::update_issue_field(conn, id, "context", c)?;
     }
     if let Some(ref a) = acceptance {
+        db::record_event(conn, id, "acceptance", &old_issue.acceptance, a)?;
         db::update_issue_field(conn, id, "acceptance", a)?;
+    }
+    if let Some(ref a) = assigned_to {
+        db::record_event(conn, id, "assigned_to", &old_issue.assigned_to, a)?;
+        db::update_issue_field(conn, id, "assigned_to", a)?;
     }
 
     // Handle files
     if let Some(ref f) = files {
-        let file_list: Vec<String> = f.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let file_list: Vec<String> = f
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         let json = serde_json::to_string(&file_list)?;
         db::update_issue_field(conn, id, "files", &json)?;
     } else if !add_files.is_empty() || !remove_files.is_empty() {
@@ -104,7 +128,11 @@ pub fn run(
 
     // Handle tags
     if let Some(ref t) = tags {
-        let tag_list: Vec<String> = t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let tag_list: Vec<String> = t
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
         let json = serde_json::to_string(&tag_list)?;
         db::update_issue_field(conn, id, "tags", &json)?;
     } else if !add_tags.is_empty() || !remove_tags.is_empty() {
@@ -122,7 +150,11 @@ pub fn run(
 
     // Handle skills
     if let Some(ref s) = skills {
-        let skill_list: Vec<String> = s.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
+        let skill_list: Vec<String> = s
+            .split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect();
         let json = serde_json::to_string(&skill_list)?;
         db::update_issue_field(conn, id, "skills", &json)?;
     } else if !add_skills.is_empty() || !remove_skills.is_empty() {
@@ -134,7 +166,10 @@ pub fn run(
                 current_skills.push(lowered);
             }
         }
-        let remove_lowered: Vec<String> = remove_skills.iter().map(|s| s.trim().to_lowercase()).collect();
+        let remove_lowered: Vec<String> = remove_skills
+            .iter()
+            .map(|s| s.trim().to_lowercase())
+            .collect();
         current_skills.retain(|s| !remove_lowered.contains(s));
         let json = serde_json::to_string(&current_skills)?;
         db::update_issue_field(conn, id, "skills", &json)?;
@@ -176,6 +211,7 @@ pub fn run(
         notes,
         urgency_breakdown: Some(breakdown),
         children: None,
+        relations: vec![],
     };
 
     // Check for newly unblocked issues
@@ -199,7 +235,7 @@ pub fn run(
                     .collect();
                 value["unblocked"] = serde_json::Value::Array(list);
             }
-            println!("{}", value);
+            format::println_json(&value.to_string());
         }
         _ => {
             println!("{}", format::format_issue_detail(&detail, fmt));

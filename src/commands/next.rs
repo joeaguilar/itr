@@ -4,8 +4,16 @@ use crate::format::{self, Format};
 use crate::models::IssueDetail;
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
+use std::env;
 
-pub fn run(conn: &Connection, claim: bool, skills: Vec<String>, fmt: Format) -> Result<(), ItrError> {
+pub fn run(
+    conn: &Connection,
+    claim: bool,
+    skills: Vec<String>,
+    agent: Option<String>,
+    assigned_to: Option<String>,
+    fmt: Format,
+) -> Result<(), ItrError> {
     // Get all open, unblocked issues
     let issues = db::list_issues(
         conn,
@@ -18,6 +26,7 @@ pub fn run(conn: &Connection, claim: bool, skills: Vec<String>, fmt: Format) -> 
         None,
         false,
         &skills,
+        assigned_to.as_deref(),
     )?;
 
     if issues.is_empty() {
@@ -44,9 +53,15 @@ pub fn run(conn: &Connection, claim: bool, skills: Vec<String>, fmt: Format) -> 
     // Claim if requested
     if claim {
         db::update_issue_field(conn, issue.id, "status", "in-progress")?;
+
+        // Resolve agent name: explicit flag > ITR_AGENT env var
+        let agent_name = agent.or_else(|| env::var("ITR_AGENT").ok().filter(|s| !s.is_empty()));
+        if let Some(ref name) = agent_name {
+            db::update_issue_field(conn, issue.id, "assigned_to", name)?;
+        }
     }
 
-    // Re-read if claimed (status changed)
+    // Re-read if claimed (status/assigned_to may have changed)
     let issue = if claim {
         db::get_issue(conn, issue.id)?
     } else {
@@ -68,6 +83,7 @@ pub fn run(conn: &Connection, claim: bool, skills: Vec<String>, fmt: Format) -> 
         notes,
         urgency_breakdown: Some(breakdown),
         children: None,
+        relations: vec![],
     };
 
     println!("{}", format::format_issue_detail(&detail, fmt));
