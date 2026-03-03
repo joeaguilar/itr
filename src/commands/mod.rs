@@ -1,4 +1,5 @@
 pub mod add;
+pub mod agent_info;
 pub mod assign;
 pub mod batch;
 pub mod bulk;

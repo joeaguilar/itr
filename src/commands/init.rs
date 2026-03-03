@@ -1,3 +1,4 @@
+use crate::agent_docs::AGENT_DOCS;
 use crate::db;
 use crate::error::ItrError;
 use crate::format::Format;
@@ -52,16 +53,6 @@ pub fn run(agents_md: bool, fmt: Format, db_override: Option<&str>) -> Result<()
 
 fn append_agents_md(cwd: &std::path::Path) -> Result<(), ItrError> {
     let agents_path = cwd.join("AGENTS.md");
-    let block = r#"
-## Issue Tracking
-
-This project uses `itr` for issue tracking. Always use `itr` directly (it is on your PATH).
-Do NOT use full paths like ~/.cargo/bin/itr or ./target/release/itr.
-
-Before starting work, run `itr ready -f json` to find the next actionable task.
-After completing work, run `itr close <ID> "reason"`.
-File discovered issues with `itr add`. Always run `itr note <ID> "summary"` before ending a session.
-"#;
 
     if agents_path.exists() {
         let content = fs::read_to_string(&agents_path)?;
@@ -69,10 +60,11 @@ File discovered issues with `itr add`. Always run `itr note <ID> "summary"` befo
             return Ok(()); // already has it
         }
         let mut content = content;
-        content.push_str(block);
+        content.push('\n');
+        content.push_str(AGENT_DOCS);
         fs::write(&agents_path, content)?;
     } else {
-        fs::write(&agents_path, block.trim_start())?;
+        fs::write(&agents_path, AGENT_DOCS)?;
     }
     Ok(())
 }

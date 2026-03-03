@@ -943,6 +943,45 @@ assert_eq "FTS search finds Stripe" "1" "$COUNT"
 rm -rf "$FTS_DIR"
 
 # ─────────────────────────────────────────────
+echo "--- agent-info ---"
+# ─────────────────────────────────────────────
+
+OUT=$($ITR agent-info)
+assert_contains "agent-info mentions ITR_AGENT" "ITR_AGENT" "$OUT"
+assert_contains "agent-info mentions --fields" "--fields" "$OUT"
+assert_contains "agent-info mentions claim" "itr claim" "$OUT"
+assert_contains "agent-info mentions skills" "--skill" "$OUT"
+assert_contains "agent-info mentions urgency" "urgency" "$OUT"
+assert_contains "agent-info mentions multi-agent" "Multi-Agent" "$OUT"
+
+OUT=$($ITR agent-info -f json)
+GUIDE=$(jq_val "$OUT" "d['guide']")
+assert_contains "agent-info json has guide field" "ITR_AGENT" "$GUIDE"
+
+# ─────────────────────────────────────────────
+echo "--- init --agents-md (comprehensive) ---"
+# ─────────────────────────────────────────────
+
+AGENTS_DIR=$(mktemp -d)
+cd "$AGENTS_DIR"
+$ITR init --agents-md >/dev/null
+[ -f AGENTS.md ] && pass "agents-md creates AGENTS.md (comprehensive)" || fail "agents-md creates AGENTS.md (comprehensive)" "file missing"
+AGENTS_CONTENT=$(cat AGENTS.md)
+assert_contains "AGENTS.md has ITR_AGENT" "ITR_AGENT" "$AGENTS_CONTENT"
+assert_contains "AGENTS.md has --fields" "--fields" "$AGENTS_CONTENT"
+assert_contains "AGENTS.md has claim" "itr claim" "$AGENTS_CONTENT"
+assert_contains "AGENTS.md has skills" "--skill" "$AGENTS_CONTENT"
+assert_contains "AGENTS.md has urgency" "urgency" "$AGENTS_CONTENT"
+
+# idempotency: running again should not duplicate
+$ITR init --agents-md >/dev/null
+AGENTS_COUNT=$(grep -c "## Issue Tracking" AGENTS.md)
+assert_eq "agents-md idempotent (one header)" "1" "$AGENTS_COUNT"
+
+cd "$WORKDIR"
+rm -rf "$AGENTS_DIR"
+
+# ─────────────────────────────────────────────
 echo ""
 echo "==============================="
 echo "Results: $PASS passed, $FAIL failed"

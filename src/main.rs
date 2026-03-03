@@ -1,3 +1,4 @@
+mod agent_docs;
 mod cli;
 mod commands;
 mod db;
@@ -40,6 +41,7 @@ fn main() {
 
     let result = match cli.command {
         Commands::Init { agents_md } => commands::init::run(agents_md, fmt, cli.db.as_deref()),
+        Commands::AgentInfo => commands::agent_info::run(fmt),
         Commands::Schema => commands::schema::run(fmt),
         Commands::Upgrade {
             no_pull,
@@ -71,7 +73,12 @@ fn run_command(
     fmt: Format,
 ) -> Result<(), error::ItrError> {
     match command {
-        Commands::Init { .. } | Commands::Schema | Commands::Upgrade { .. } => unreachable!(),
+        Commands::Init { .. }
+        | Commands::AgentInfo
+        | Commands::Schema
+        | Commands::Upgrade { .. } => {
+            unreachable!()
+        }
 
         Commands::Add {
             title,

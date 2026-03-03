@@ -355,6 +355,9 @@ pub enum Commands {
         action: ConfigAction,
     },
 
+    /// Print the full agent usage guide (no database required)
+    AgentInfo,
+
     /// Dump the current database schema
     Schema,
 
