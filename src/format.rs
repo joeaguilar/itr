@@ -59,6 +59,9 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
     if !d.issue.files.is_empty() {
         lines.push(format!("FILES:{}", d.issue.files.join(",")));
     }
+    if !d.issue.skills.is_empty() {
+        lines.push(format!("SKILLS:{}", d.issue.skills.join(",")));
+    }
     lines.push(format!("TITLE: {}", d.issue.title));
     if !d.issue.context.is_empty() {
         lines.push(format!("CONTEXT: {}", d.issue.context));
@@ -113,6 +116,9 @@ fn format_issue_detail_pretty(d: &IssueDetail) -> String {
     }
     if !d.issue.files.is_empty() {
         lines.push(format!("  Files: {}", d.issue.files.join(", ")));
+    }
+    if !d.issue.skills.is_empty() {
+        lines.push(format!("  Skills: {}", d.issue.skills.join(", ")));
     }
     if !d.issue.context.is_empty() {
         lines.push(format!("  Context: {}", d.issue.context));
@@ -171,6 +177,9 @@ fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
             }
             if !i.files.is_empty() {
                 lines.push(format!("FILES:{}", i.files.join(",")));
+            }
+            if !i.skills.is_empty() {
+                lines.push(format!("SKILLS:{}", i.skills.join(",")));
             }
             lines.push(format!("TITLE: {}", i.title));
             if !i.acceptance.is_empty() {
@@ -245,6 +254,12 @@ fn format_stats_compact(stats: &Stats) -> String {
     ));
     lines.push(format!("BLOCKED:{} READY:{}", stats.blocked, stats.ready));
     lines.push(format!("AVG_URGENCY:{:.1}", stats.avg_urgency));
+    if !stats.by_skills.is_empty() {
+        let mut skill_pairs: Vec<(&String, &i64)> = stats.by_skills.iter().collect();
+        skill_pairs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        let parts: Vec<String> = skill_pairs.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        lines.push(format!("BY_SKILLS: {}", parts.join(" ")));
+    }
     if let Some(ref oldest) = stats.oldest_open {
         lines.push(format!(
             "OLDEST_OPEN: ID:{} DAYS:{} \"{}\"",
@@ -350,6 +365,9 @@ fn format_search_compact(results: &[SearchResult]) -> String {
             }
             if !r.files.is_empty() {
                 lines.push(format!("FILES:{}", r.files.join(",")));
+            }
+            if !r.skills.is_empty() {
+                lines.push(format!("SKILLS:{}", r.skills.join(",")));
             }
             lines.push(format!("TITLE: {}", r.title));
             if !r.acceptance.is_empty() {
@@ -497,6 +515,7 @@ mod tests {
             blocked_by: vec![],
             tags: vec![],
             files: vec![],
+            skills: vec![],
             acceptance: String::new(),
         }
     }

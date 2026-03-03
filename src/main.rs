@@ -59,12 +59,13 @@ fn run_command(
             context,
             files,
             tags,
+            skills,
             acceptance,
             blocked_by,
             parent,
             stdin_json,
         } => commands::add::run(
-            conn, title, &priority, &kind, context, files, tags, acceptance, blocked_by, parent,
+            conn, title, &priority, &kind, context, files, tags, skills, acceptance, blocked_by, parent,
             stdin_json, fmt,
         ),
 
@@ -74,6 +75,7 @@ fn run_command(
             priority,
             kind,
             tag,
+            skill,
             blocked,
             include_blocked,
             parent,
@@ -82,10 +84,10 @@ fn run_command(
         } => {
             // When no filters are given, default to showing all non-terminal issues (including blocked)
             let no_filters = status.is_empty() && priority.is_empty()
-                && kind.is_empty() && tag.is_empty() && !blocked && parent.is_none();
+                && kind.is_empty() && tag.is_empty() && skill.is_empty() && !blocked && parent.is_none();
             let effective_include_blocked = include_blocked || (no_filters && !all);
             commands::list::run(
-                conn, all, status, priority, kind, tag, blocked, effective_include_blocked, parent, &sort,
+                conn, all, status, priority, kind, tag, skill, blocked, effective_include_blocked, parent, &sort,
                 limit, fmt,
             )
         }
@@ -101,15 +103,18 @@ fn run_command(
             context,
             files,
             tags,
+            skills,
             acceptance,
             parent,
             add_tag,
             remove_tag,
             add_file,
             remove_file,
+            add_skill,
+            remove_skill,
         } => commands::update::run(
-            conn, id, status, priority, kind, title, context, files, tags, acceptance, parent,
-            add_tag, remove_tag, add_file, remove_file, fmt,
+            conn, id, status, priority, kind, title, context, files, tags, skills, acceptance, parent,
+            add_tag, remove_tag, add_file, remove_file, add_skill, remove_skill, fmt,
         ),
 
         Commands::Close {
@@ -124,9 +129,9 @@ fn run_command(
 
         Commands::Undepend { id, on } => commands::depend::run_undepend(conn, id, on, fmt),
 
-        Commands::Next { claim } => commands::next::run(conn, claim, fmt),
+        Commands::Next { claim, skill } => commands::next::run(conn, claim, skill, fmt),
 
-        Commands::Ready { limit, status } => commands::ready::run(conn, limit, status, fmt),
+        Commands::Ready { limit, status, skill } => commands::ready::run(conn, limit, status, skill, fmt),
 
         Commands::Batch { action } => match action {
             BatchAction::Add => commands::batch::run_add(conn, fmt),
@@ -155,10 +160,11 @@ fn run_command(
             status,
             priority,
             kind,
+            skill,
             limit,
-        } => commands::search::run(conn, &query, all, status, priority, kind, limit, fmt),
+        } => commands::search::run(conn, &query, all, status, priority, kind, skill, limit, fmt),
 
-        Commands::Claim => commands::next::run(conn, true, fmt),
+        Commands::Claim { skill } => commands::next::run(conn, true, skill, fmt),
 
         Commands::Show { id: Some(id), .. } => commands::get::run(conn, id, fmt),
         Commands::Show { id: None, all } => {
@@ -166,7 +172,7 @@ fn run_command(
                 eprintln!("hint: use `itr list --all` for full filtering options");
             }
             commands::list::run(
-                conn, all, vec![], vec![], vec![], vec![], false, true, None, "urgency",
+                conn, all, vec![], vec![], vec![], vec![], vec![], false, true, None, "urgency",
                 None, fmt,
             )
         }

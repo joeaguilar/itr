@@ -32,6 +32,7 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     let mut urgency_sum = 0.0f64;
     let mut active_count = 0i64;
     let mut oldest_open: Option<OldestOpen> = None;
+    let mut by_skills: HashMap<String, i64> = HashMap::new();
 
     for issue in &all_issues {
         *by_status.entry(issue.status.clone()).or_insert(0) += 1;
@@ -49,6 +50,10 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
             let urg = urgency::compute_urgency(issue, &config, conn);
             urgency_sum += urg;
             active_count += 1;
+
+            for skill in &issue.skills {
+                *by_skills.entry(skill.clone()).or_insert(0) += 1;
+            }
 
             // Track oldest open
             if issue.status == "open" {
@@ -89,6 +94,7 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
         blocked: blocked_count,
         ready: ready_count,
         avg_urgency,
+        by_skills,
         oldest_open,
     };
 

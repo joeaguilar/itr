@@ -12,6 +12,7 @@ pub fn run(
     statuses: Vec<String>,
     priorities: Vec<String>,
     kinds: Vec<String>,
+    skills: Vec<String>,
     limit: Option<usize>,
     fmt: Format,
 ) -> Result<(), ItrError> {
@@ -54,10 +55,21 @@ pub fn run(
             blocked_by,
             tags: issue.tags,
             files: issue.files,
+            skills: issue.skills,
             acceptance: issue.acceptance,
             matched_fields,
         });
     }
+
+    // Filter by skills (AND logic)
+    let mut results = if !skills.is_empty() {
+        results
+            .into_iter()
+            .filter(|r| skills.iter().all(|s| r.skills.contains(s)))
+            .collect()
+    } else {
+        results
+    };
 
     // Sort by urgency descending
     results.sort_by(|a, b| {
@@ -107,6 +119,11 @@ fn compute_matched_fields(
     let files_text = issue.files.join(" ");
     if check(&files_text) {
         fields.push("files".to_string());
+    }
+    // Check skills as joined text
+    let skills_text = issue.skills.join(" ");
+    if check(&skills_text) {
+        fields.push("skills".to_string());
     }
     // Check notes
     if notes.iter().any(|n| check(&n.content)) {

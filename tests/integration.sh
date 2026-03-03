@@ -614,6 +614,113 @@ assert_eq "ITR_DB_PATH override works" "1" "$COUNT"
 rm -rf "$ENV_DIR"
 
 # ─────────────────────────────────────────────
+# Skills
+# ─────────────────────────────────────────────
+echo ""
+echo "--- Skills ---"
+
+SKILLS_DIR=$(mktemp -d)
+ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR init >/dev/null
+
+# Add issue with --skills
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR add "needs rust review" --skills "Rust-Review,Database" -f json)
+SKILLS=$(jq_val "$OUT" "d['skills']")
+assert_eq "add --skills stores lowercased" "['rust-review', 'database']" "$SKILLS"
+
+# Add issue without skills
+ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR add "no skills task" -f json >/dev/null
+
+# Add issue with different skills
+ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR add "needs db" --skills "database" -f json >/dev/null
+
+# List filter by skill returns only matching
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR list --skill rust-review -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+assert_eq "list --skill filters correctly" "1" "$COUNT"
+ID=$(jq_val "$OUT" "d[0]['id']")
+assert_eq "list --skill returns correct issue" "1" "$ID"
+
+# List filter by skill AND logic (multiple skills)
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR list --skill rust-review --skill database -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+assert_eq "list --skill AND logic" "1" "$COUNT"
+
+# List filter by database only returns 2 issues
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR list --skill database -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+assert_eq "list --skill database returns 2" "2" "$COUNT"
+
+# Update --skills (full replace)
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR update 1 --skills "alpha,beta" -f json)
+SKILLS=$(jq_val "$OUT" "d['skills']")
+assert_eq "update --skills replaces" "['alpha', 'beta']" "$SKILLS"
+
+# Update --add-skill
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR update 1 --add-skill gamma -f json)
+SKILLS=$(jq_val "$OUT" "d['skills']")
+assert_eq "update --add-skill appends" "['alpha', 'beta', 'gamma']" "$SKILLS"
+
+# Update --add-skill deduplicates
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR update 1 --add-skill alpha -f json)
+SKILLS=$(jq_val "$OUT" "d['skills']")
+assert_eq "update --add-skill deduplicates" "['alpha', 'beta', 'gamma']" "$SKILLS"
+
+# Update --remove-skill
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR update 1 --remove-skill beta -f json)
+SKILLS=$(jq_val "$OUT" "d['skills']")
+assert_eq "update --remove-skill removes" "['alpha', 'gamma']" "$SKILLS"
+
+# Next --skill returns skill-matched issue
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR next --skill database -f json)
+ID=$(jq_val "$OUT" "d['id']")
+assert_eq "next --skill returns matched issue" "3" "$ID"
+
+# Ready --skill filter
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR ready --skill database -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+assert_eq "ready --skill filters" "1" "$COUNT"
+
+# Search finds skills text + matched_fields includes "skills"
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR search gamma -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+assert_eq "search finds skills text" "1" "$COUNT"
+MATCHED=$(jq_val "$OUT" "'skills' in d[0]['matched_fields']")
+assert_eq "search matched_fields includes skills" "True" "$MATCHED"
+
+# Stats includes by_skills
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR stats -f json)
+HAS_BY_SKILLS=$(jq_val "$OUT" "'by_skills' in d")
+assert_eq "stats has by_skills" "True" "$HAS_BY_SKILLS"
+DB_COUNT=$(jq_val "$OUT" "d['by_skills'].get('database', 0)")
+assert_eq "stats by_skills counts correctly" "1" "$DB_COUNT"
+
+# Batch add with skills
+echo '[{"title":"batch skill","skills":["Ops","Deploy"]}]' | ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR batch add -f json >/dev/null
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR get 4 -f json)
+SKILLS=$(jq_val "$OUT" "d['skills']")
+assert_eq "batch add with skills (lowercased)" "['ops', 'deploy']" "$SKILLS"
+
+# Export/import round-trip preserves skills
+EXPORT_FILE="$SKILLS_DIR/export.jsonl"
+ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR export > "$EXPORT_FILE"
+IMPORT_DIR=$(mktemp -d)
+ITR_DB_PATH="$IMPORT_DIR/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$IMPORT_DIR/.itr.db" $ITR import --file "$EXPORT_FILE" >/dev/null
+OUT=$(ITR_DB_PATH="$IMPORT_DIR/.itr.db" $ITR get 1 -f json)
+SKILLS=$(jq_val "$OUT" "d['skills']")
+assert_eq "export/import round-trip preserves skills" "['alpha', 'gamma']" "$SKILLS"
+rm -rf "$IMPORT_DIR"
+
+# Claim --skill
+OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR claim --skill database -f json)
+ID=$(jq_val "$OUT" "d['id']")
+STATUS=$(jq_val "$OUT" "d['status']")
+assert_eq "claim --skill picks right issue" "3" "$ID"
+assert_eq "claim --skill sets in-progress" "in-progress" "$STATUS"
+
+rm -rf "$SKILLS_DIR"
+
+# ─────────────────────────────────────────────
 echo ""
 echo "==============================="
 echo "Results: $PASS passed, $FAIL failed"

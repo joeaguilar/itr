@@ -18,12 +18,15 @@ pub fn run(
     context: Option<String>,
     files: Option<String>,
     tags: Option<String>,
+    skills: Option<String>,
     acceptance: Option<String>,
     parent: Option<i64>,
     add_tags: Vec<String>,
     remove_tags: Vec<String>,
     add_files: Vec<String>,
     remove_files: Vec<String>,
+    add_skills: Vec<String>,
+    remove_skills: Vec<String>,
     fmt: Format,
 ) -> Result<(), ItrError> {
     // Validate issue exists
@@ -115,6 +118,26 @@ pub fn run(
         current_tags.retain(|t| !remove_tags.contains(t));
         let json = serde_json::to_string(&current_tags)?;
         db::update_issue_field(conn, id, "tags", &json)?;
+    }
+
+    // Handle skills
+    if let Some(ref s) = skills {
+        let skill_list: Vec<String> = s.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
+        let json = serde_json::to_string(&skill_list)?;
+        db::update_issue_field(conn, id, "skills", &json)?;
+    } else if !add_skills.is_empty() || !remove_skills.is_empty() {
+        let current_issue = db::get_issue(conn, id)?;
+        let mut current_skills = current_issue.skills.clone();
+        for s in &add_skills {
+            let lowered = s.trim().to_lowercase();
+            if !lowered.is_empty() && !current_skills.contains(&lowered) {
+                current_skills.push(lowered);
+            }
+        }
+        let remove_lowered: Vec<String> = remove_skills.iter().map(|s| s.trim().to_lowercase()).collect();
+        current_skills.retain(|s| !remove_lowered.contains(s));
+        let json = serde_json::to_string(&current_skills)?;
+        db::update_issue_field(conn, id, "skills", &json)?;
     }
 
     if let Some(pid) = parent {

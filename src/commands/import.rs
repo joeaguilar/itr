@@ -55,10 +55,11 @@ pub fn run(
 
         let files_json = serde_json::to_string(&issue.files)?;
         let tags_json = serde_json::to_string(&issue.tags)?;
+        let skills_json = serde_json::to_string(&issue.skills)?;
 
         tx.execute(
-            "INSERT OR REPLACE INTO issues (id, title, status, priority, kind, context, files, tags, acceptance, parent_id, close_reason, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT OR REPLACE INTO issues (id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 issue.id,
                 issue.title,
@@ -68,6 +69,7 @@ pub fn run(
                 issue.context,
                 files_json,
                 tags_json,
+                skills_json,
                 issue.acceptance,
                 issue.parent_id,
                 issue.close_reason,

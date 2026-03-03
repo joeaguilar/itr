@@ -15,13 +15,14 @@ pub fn run(
     context: Option<String>,
     files: Option<String>,
     tags: Option<String>,
+    skills: Option<String>,
     acceptance: Option<String>,
     blocked_by: Option<String>,
     parent: Option<i64>,
     stdin_json: bool,
     fmt: Format,
 ) -> Result<(), ItrError> {
-    let (title, priority, kind, context, files_vec, tags_vec, acceptance, parent_id, blocked_by_ids) =
+    let (title, priority, kind, context, files_vec, tags_vec, skills_vec, acceptance, parent_id, blocked_by_ids) =
         if stdin_json {
             let mut input = String::new();
             io::stdin().read_to_string(&mut input)?;
@@ -38,6 +39,7 @@ pub fn run(
                 data.context,
                 data.files,
                 data.tags,
+                data.skills.iter().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect(),
                 data.acceptance,
                 data.parent_id,
                 blocked,
@@ -54,6 +56,9 @@ pub fn run(
             let tags_vec: Vec<String> = tags
                 .map(|t| t.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
                 .unwrap_or_default();
+            let skills_vec: Vec<String> = skills
+                .map(|s| s.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect())
+                .unwrap_or_default();
             let blocked_by_ids: Vec<i64> = blocked_by
                 .map(|b| {
                     b.split(',')
@@ -68,6 +73,7 @@ pub fn run(
                 context.unwrap_or_default(),
                 files_vec,
                 tags_vec,
+                skills_vec,
                 acceptance.unwrap_or_default(),
                 parent,
                 blocked_by_ids,
@@ -113,6 +119,7 @@ pub fn run(
         &context,
         &files_vec,
         &tags_vec,
+        &skills_vec,
         &acceptance,
         parent_id,
     )?;

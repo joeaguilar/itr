@@ -20,7 +20,7 @@ check:
 
 # Install to ~/.cargo/bin
 install: release
-    cargo install --path .
+    cargo install --path . --force
 
 # ─── Test ────────────────────────────────────────────────────────────
 

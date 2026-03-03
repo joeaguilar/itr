@@ -12,6 +12,7 @@ pub fn run(
     priorities: Vec<String>,
     kinds: Vec<String>,
     tags: Vec<String>,
+    skills: Vec<String>,
     blocked_only: bool,
     include_blocked: bool,
     parent: Option<i64>,
@@ -29,6 +30,7 @@ pub fn run(
         include_blocked,
         parent,
         all,
+        &skills,
     )?;
 
     if issues.is_empty() {
@@ -55,6 +57,7 @@ pub fn run(
                 blocked_by,
                 tags: i.tags.clone(),
                 files: i.files.clone(),
+                skills: i.skills.clone(),
                 acceptance: i.acceptance.clone(),
             }
         })

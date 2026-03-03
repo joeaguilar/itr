@@ -54,6 +54,10 @@ pub enum Commands {
         #[arg(short, long, visible_alias = "tag")]
         tags: Option<String>,
 
+        /// Comma-separated skills (agent capabilities required)
+        #[arg(long)]
+        skills: Option<String>,
+
         /// Acceptance criteria
         #[arg(short, long)]
         acceptance: Option<String>,
@@ -92,6 +96,10 @@ pub enum Commands {
         /// Filter by tag (repeatable, AND logic)
         #[arg(long, visible_alias = "tags")]
         tag: Vec<String>,
+
+        /// Filter by skill (repeatable, AND logic)
+        #[arg(long)]
+        skill: Vec<String>,
 
         /// Only show blocked issues
         #[arg(long)]
@@ -153,6 +161,10 @@ pub enum Commands {
         #[arg(short, long, visible_alias = "tag")]
         tags: Option<String>,
 
+        /// Replace skills list (comma-separated)
+        #[arg(long)]
+        skills: Option<String>,
+
         /// Replace acceptance criteria
         #[arg(short, long)]
         acceptance: Option<String>,
@@ -176,6 +188,14 @@ pub enum Commands {
         /// Remove a file (repeatable)
         #[arg(long)]
         remove_file: Vec<String>,
+
+        /// Append a skill (repeatable)
+        #[arg(long)]
+        add_skill: Vec<String>,
+
+        /// Remove a skill (repeatable)
+        #[arg(long)]
+        remove_skill: Vec<String>,
     },
 
     /// Close an issue (shorthand for update --status done)
@@ -229,6 +249,10 @@ pub enum Commands {
         /// Also set the issue to in-progress
         #[arg(long)]
         claim: bool,
+
+        /// Filter by skill (repeatable, AND logic)
+        #[arg(long)]
+        skill: Vec<String>,
     },
 
     /// List all unblocked, non-terminal issues by urgency
@@ -240,6 +264,10 @@ pub enum Commands {
         /// Filter by status within ready set
         #[arg(long)]
         status: Option<String>,
+
+        /// Filter by skill (repeatable, AND logic)
+        #[arg(long)]
+        skill: Vec<String>,
     },
 
     /// Bulk operations
@@ -304,7 +332,11 @@ pub enum Commands {
 
     /// Claim the highest-urgency unblocked issue (shorthand for next --claim)
     #[command(visible_alias = "start")]
-    Claim,
+    Claim {
+        /// Filter by skill (repeatable, AND logic)
+        #[arg(long)]
+        skill: Vec<String>,
+    },
 
     /// Search issues by text across all fields
     Search {
@@ -326,6 +358,10 @@ pub enum Commands {
         /// Filter by kind (repeatable)
         #[arg(short, long)]
         kind: Vec<String>,
+
+        /// Filter by skill (repeatable, AND logic)
+        #[arg(long)]
+        skill: Vec<String>,
 
         /// Max results
         #[arg(short = 'n', long)]

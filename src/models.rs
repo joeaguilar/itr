@@ -10,6 +10,8 @@ pub struct Issue {
     pub context: String,
     pub files: Vec<String>,
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub skills: Vec<String>,
     pub acceptance: String,
     pub parent_id: Option<i64>,
     pub close_reason: String,
@@ -53,6 +55,7 @@ pub struct IssueSummary {
     pub blocked_by: Vec<i64>,
     pub tags: Vec<String>,
     pub files: Vec<String>,
+    pub skills: Vec<String>,
     pub acceptance: String,
 }
 
@@ -80,6 +83,8 @@ pub struct BatchAddInput {
     pub files: Vec<String>,
     #[serde(default)]
     pub tags: Vec<String>,
+    #[serde(default)]
+    pub skills: Vec<String>,
     #[serde(default)]
     pub acceptance: String,
     #[serde(default)]
@@ -128,6 +133,7 @@ pub struct Stats {
     pub blocked: i64,
     pub ready: i64,
     pub avg_urgency: f64,
+    pub by_skills: std::collections::HashMap<String, i64>,
     pub oldest_open: Option<OldestOpen>,
 }
 
@@ -150,6 +156,7 @@ pub struct SearchResult {
     pub blocked_by: Vec<i64>,
     pub tags: Vec<String>,
     pub files: Vec<String>,
+    pub skills: Vec<String>,
     pub acceptance: String,
     pub matched_fields: Vec<String>,
 }

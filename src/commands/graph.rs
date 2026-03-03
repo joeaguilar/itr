@@ -9,7 +9,7 @@ pub fn run(conn: &Connection, all: bool, fmt: Format) -> Result<(), ItrError> {
     let issues = if all {
         db::all_issues(conn)?
     } else {
-        db::list_issues(conn, &[], &[], &[], &[], false, true, None, false)?
+        db::list_issues(conn, &[], &[], &[], &[], false, true, None, false, &[])?
     };
 
     let config = UrgencyConfig::load(conn);

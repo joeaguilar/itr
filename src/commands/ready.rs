@@ -9,6 +9,7 @@ pub fn run(
     conn: &Connection,
     limit: Option<usize>,
     status: Option<String>,
+    skills: Vec<String>,
     fmt: Format,
 ) -> Result<(), ItrError> {
     let statuses = match status {
@@ -27,6 +28,7 @@ pub fn run(
         false, // exclude blocked
         None,
         false,
+        &skills,
     )?;
 
     if issues.is_empty() {
@@ -52,6 +54,7 @@ pub fn run(
                 blocked_by,
                 tags: i.tags.clone(),
                 files: i.files.clone(),
+                skills: i.skills.clone(),
                 acceptance: i.acceptance.clone(),
             }
         })

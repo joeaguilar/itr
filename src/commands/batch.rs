@@ -52,6 +52,7 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
             tags.push("_needs_review".to_string());
         }
 
+        let skills: Vec<String> = item.skills.iter().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
         let issue = db::insert_issue(
             &tx,
             &item.title,
@@ -60,6 +61,7 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
             &item.context,
             &item.files,
             &tags,
+            &skills,
             &item.acceptance,
             item.parent_id,
         )?;

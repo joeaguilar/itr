@@ -5,7 +5,7 @@ use crate::models::IssueDetail;
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 
-pub fn run(conn: &Connection, claim: bool, fmt: Format) -> Result<(), ItrError> {
+pub fn run(conn: &Connection, claim: bool, skills: Vec<String>, fmt: Format) -> Result<(), ItrError> {
     // Get all open, unblocked issues
     let issues = db::list_issues(
         conn,
@@ -17,6 +17,7 @@ pub fn run(conn: &Connection, claim: bool, fmt: Format) -> Result<(), ItrError> 
         false,
         None,
         false,
+        &skills,
     )?;
 
     if issues.is_empty() {

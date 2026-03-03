@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS issues (
     context         TEXT NOT NULL DEFAULT '',
     files           TEXT NOT NULL DEFAULT '[]',
     tags            TEXT NOT NULL DEFAULT '[]',
+    skills          TEXT NOT NULL DEFAULT '[]',
     acceptance      TEXT NOT NULL DEFAULT '',
     parent_id       INTEGER REFERENCES issues(id) ON DELETE SET NULL,
     close_reason    TEXT NOT NULL DEFAULT '',
@@ -92,7 +93,19 @@ pub fn find_db(override_path: Option<&str>) -> Result<PathBuf, ItrError> {
 pub fn open_db(path: &Path) -> Result<Connection, ItrError> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+    migrate_add_skills(&conn)?;
     Ok(conn)
+}
+
+fn migrate_add_skills(conn: &Connection) -> Result<(), ItrError> {
+    let has_skills: bool = conn
+        .prepare("PRAGMA table_info(issues)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .any(|col| col.as_deref() == Ok("skills"));
+    if !has_skills {
+        conn.execute_batch("ALTER TABLE issues ADD COLUMN skills TEXT NOT NULL DEFAULT '[]';")?;
+    }
+    Ok(())
 }
 
 pub fn init_db(path: &Path) -> Result<Connection, ItrError> {
@@ -115,16 +128,18 @@ pub fn insert_issue(
     context: &str,
     files: &[String],
     tags: &[String],
+    skills: &[String],
     acceptance: &str,
     parent_id: Option<i64>,
 ) -> Result<Issue, ItrError> {
     let files_json = serde_json::to_string(files)?;
     let tags_json = serde_json::to_string(tags)?;
+    let skills_json = serde_json::to_string(skills)?;
 
     conn.execute(
-        "INSERT INTO issues (title, priority, kind, context, files, tags, acceptance, parent_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![title, priority, kind, context, files_json, tags_json, acceptance, parent_id],
+        "INSERT INTO issues (title, priority, kind, context, files, tags, skills, acceptance, parent_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![title, priority, kind, context, files_json, tags_json, skills_json, acceptance, parent_id],
     )?;
 
     let id = conn.last_insert_rowid();
@@ -133,7 +148,7 @@ pub fn insert_issue(
 
 pub fn get_issue(conn: &Connection, id: i64) -> Result<Issue, ItrError> {
     conn.query_row(
-        "SELECT id, title, status, priority, kind, context, files, tags, acceptance, parent_id, close_reason, created_at, updated_at
+        "SELECT id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at
          FROM issues WHERE id = ?1",
         params![id],
         |row| {
@@ -146,11 +161,12 @@ pub fn get_issue(conn: &Connection, id: i64) -> Result<Issue, ItrError> {
                 context: row.get(5)?,
                 files: parse_json_array(row.get::<_, String>(6)?),
                 tags: parse_json_array(row.get::<_, String>(7)?),
-                acceptance: row.get(8)?,
-                parent_id: row.get(9)?,
-                close_reason: row.get(10)?,
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
+                skills: parse_json_array(row.get::<_, String>(8)?),
+                acceptance: row.get(9)?,
+                parent_id: row.get(10)?,
+                close_reason: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
             })
         },
     )
@@ -183,9 +199,10 @@ pub fn list_issues(
     include_blocked: bool,
     parent_id: Option<i64>,
     all: bool,
+    skills: &[String],
 ) -> Result<Vec<Issue>, ItrError> {
     let mut sql = String::from(
-        "SELECT id, title, status, priority, kind, context, files, tags, acceptance, parent_id, close_reason, created_at, updated_at FROM issues WHERE 1=1",
+        "SELECT id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at FROM issues WHERE 1=1",
     );
     let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -252,11 +269,12 @@ pub fn list_issues(
                 context: row.get(5)?,
                 files: parse_json_array(row.get::<_, String>(6)?),
                 tags: parse_json_array(row.get::<_, String>(7)?),
-                acceptance: row.get(8)?,
-                parent_id: row.get(9)?,
-                close_reason: row.get(10)?,
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
+                skills: parse_json_array(row.get::<_, String>(8)?),
+                acceptance: row.get(9)?,
+                parent_id: row.get(10)?,
+                close_reason: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -266,6 +284,16 @@ pub fn list_issues(
         issues
             .into_iter()
             .filter(|i| tags.iter().all(|t| i.tags.contains(t)))
+            .collect()
+    } else {
+        issues
+    };
+
+    // Filter by skills (AND logic)
+    let issues = if !skills.is_empty() {
+        issues
+            .into_iter()
+            .filter(|i| skills.iter().all(|s| i.skills.contains(s)))
             .collect()
     } else {
         issues
@@ -541,11 +569,12 @@ pub fn search_issue_ids(
         let p5 = base + 5;
         let p6 = base + 6;
         let p7 = base + 7;
+        let p8 = base + 8;
         sql.push_str(&format!(
-            " AND (i.title LIKE ?{} OR i.context LIKE ?{} OR i.acceptance LIKE ?{} OR i.close_reason LIKE ?{} OR i.tags LIKE ?{} OR i.files LIKE ?{} OR n.content LIKE ?{})",
-            p1, p2, p3, p4, p5, p6, p7
+            " AND (i.title LIKE ?{} OR i.context LIKE ?{} OR i.acceptance LIKE ?{} OR i.close_reason LIKE ?{} OR i.tags LIKE ?{} OR i.files LIKE ?{} OR i.skills LIKE ?{} OR n.content LIKE ?{})",
+            p1, p2, p3, p4, p5, p6, p7, p8
         ));
-        for _ in 0..7 {
+        for _ in 0..8 {
             param_values.push(Box::new(pattern.clone()));
         }
     }
@@ -643,7 +672,7 @@ pub fn config_reset(conn: &Connection) -> Result<(), ItrError> {
 
 pub fn all_issues(conn: &Connection) -> Result<Vec<Issue>, ItrError> {
     let mut stmt = conn.prepare(
-        "SELECT id, title, status, priority, kind, context, files, tags, acceptance, parent_id, close_reason, created_at, updated_at
+        "SELECT id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at
          FROM issues ORDER BY id",
     )?;
     let issues: Vec<Issue> = stmt
@@ -657,11 +686,12 @@ pub fn all_issues(conn: &Connection) -> Result<Vec<Issue>, ItrError> {
                 context: row.get(5)?,
                 files: parse_json_array(row.get::<_, String>(6)?),
                 tags: parse_json_array(row.get::<_, String>(7)?),
-                acceptance: row.get(8)?,
-                parent_id: row.get(9)?,
-                close_reason: row.get(10)?,
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
+                skills: parse_json_array(row.get::<_, String>(8)?),
+                acceptance: row.get(9)?,
+                parent_id: row.get(10)?,
+                close_reason: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
