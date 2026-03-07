@@ -244,11 +244,17 @@ pub fn run_close(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), It
             .map(|(id, title)| UnblockedIssue { id, title })
             .collect();
 
+        let notes = if item.reason.is_empty() {
+            vec![]
+        } else {
+            vec![item.reason.clone()]
+        };
+
         results.push(BatchItemResult {
             id: item.id,
             outcome: "ok".to_string(),
             error: None,
-            notes: vec![],
+            notes,
             unblocked,
             issue: None,
         });

@@ -1022,6 +1022,9 @@ assert_contains "batch close error msg" "not found" "$R1_ERR"
 R2_OUTCOME=$(jq_val "$OUT" "d['results'][2]['outcome']")
 assert_eq "batch close item 2 ok" "ok" "$R2_OUTCOME"
 
+# Close reason appears in result notes
+assert_eq "batch close reason in notes" "Done in sprint" "$(jq_val "$OUT" "d['results'][0]['notes'][0]")"
+
 # Check unblocked reporting (issue 3 was blocked by issue 1)
 UNBLOCKED=$(jq_val "$OUT" "len(d['results'][0].get('unblocked', []))")
 assert_eq "batch close reports unblocked" "1" "$UNBLOCKED"
@@ -1042,9 +1045,11 @@ assert_eq "batch close idempotent re-close ok" "ok" "$RE_OUTCOME"
 RE_NOTE=$(jq_val "$OUT" "len(d['results'][0].get('notes', []))")
 assert_eq "batch close idempotent has note" "1" "$RE_NOTE"
 
-# Compact output format
+# Compact output format — reason appears in NOTE line
 OUT=$(echo '[{"id":3,"reason":"cleanup"}]' | ITR_DB_PATH="$BC_DIR/.itr.db" $ITR batch close)
 assert_contains "batch close compact output" "BATCH_CLOSE" "$OUT"
+assert_contains "batch close compact shows reason" "cleanup" "$OUT"
+
 
 rm -rf "$BC_DIR"
 
