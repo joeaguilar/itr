@@ -6,6 +6,7 @@ use std::process::Command;
 
 pub fn run(no_pull: bool, source_dir: Option<String>, fmt: Format) -> Result<(), ItrError> {
     let src = find_source_dir(source_dir)?;
+    let old_version = env!("ITR_VERSION").to_string();
 
     let mut pulled_changes = false;
 
@@ -43,8 +44,18 @@ pub fn run(no_pull: bool, source_dir: Option<String>, fmt: Format) -> Result<(),
         )));
     }
 
-    // Copy built binary to current exe location
+    // Get new version from the freshly built binary
     let built = src.join("target/release/itr");
+    let new_version = Command::new(&built)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().trim_start_matches("itr ").to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    // Copy built binary to current exe location
     let current_exe = env::current_exe()
         .map_err(|e| ItrError::UpgradeFailed(format!("cannot find current exe: {}", e)))?;
 
@@ -60,6 +71,8 @@ pub fn run(no_pull: bool, source_dir: Option<String>, fmt: Format) -> Result<(),
         Format::Json => {
             let out = serde_json::json!({
                 "action": "upgrade",
+                "old_version": old_version,
+                "new_version": new_version,
                 "source": src.to_string_lossy(),
                 "binary": current_exe.to_string_lossy(),
                 "pulled": !no_pull,
@@ -68,7 +81,8 @@ pub fn run(no_pull: bool, source_dir: Option<String>, fmt: Format) -> Result<(),
             println!("{}", out);
         }
         _ => {
-            println!("UPGRADE: rebuilt from {}", src.display());
+            println!("UPGRADE: {} -> {}", old_version, new_version);
+            println!("  rebuilt from {}", src.display());
             if pulled_changes {
                 println!("  new changes pulled from remote");
             }
