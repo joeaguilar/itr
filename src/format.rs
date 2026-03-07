@@ -15,6 +15,16 @@ pub fn set_fields_filter(fields: Vec<String>) {
     });
 }
 
+fn get_fields_filter() -> Option<Vec<String>> {
+    FIELDS_FILTER.with(|f| f.borrow().clone())
+}
+
+/// Returns true if `name` should be included in output.
+/// When no --fields filter is set, all fields are included.
+fn field_enabled(fields: &Option<Vec<String>>, name: &str) -> bool {
+    fields.as_ref().map_or(true, |f| f.iter().any(|x| x == name))
+}
+
 /// Apply field filtering to a JSON string if --fields was set, returning the filtered string
 fn apply_fields_filter(json_str: &str) -> String {
     FIELDS_FILTER.with(|f| {
@@ -77,15 +87,29 @@ pub fn format_issue_detail(detail: &IssueDetail, fmt: Format) -> String {
 }
 
 fn format_issue_detail_compact(d: &IssueDetail) -> String {
+    let fields = get_fields_filter();
+    let on = |name: &str| field_enabled(&fields, name);
     let mut lines = Vec::new();
 
-    let mut first = format!(
-        "ID:{} STATUS:{} PRIORITY:{} KIND:{} URGENCY:{:.1}",
-        d.issue.id, d.issue.status, d.issue.priority, d.issue.kind, d.urgency
-    );
-    if !d.blocked_by.is_empty() {
-        first.push_str(&format!(
-            " BLOCKED_BY:{}",
+    let mut first_parts = Vec::new();
+    if on("id") {
+        first_parts.push(format!("ID:{}", d.issue.id));
+    }
+    if on("status") {
+        first_parts.push(format!("STATUS:{}", d.issue.status));
+    }
+    if on("priority") {
+        first_parts.push(format!("PRIORITY:{}", d.issue.priority));
+    }
+    if on("kind") {
+        first_parts.push(format!("KIND:{}", d.issue.kind));
+    }
+    if on("urgency") {
+        first_parts.push(format!("URGENCY:{:.1}", d.urgency));
+    }
+    if on("blocked_by") && !d.blocked_by.is_empty() {
+        first_parts.push(format!(
+            "BLOCKED_BY:{}",
             d.blocked_by
                 .iter()
                 .map(|i| i.to_string())
@@ -93,9 +117,9 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
                 .join(",")
         ));
     }
-    if !d.blocks.is_empty() {
-        first.push_str(&format!(
-            " BLOCKS:{}",
+    if on("blocks") && !d.blocks.is_empty() {
+        first_parts.push(format!(
+            "BLOCKS:{}",
             d.blocks
                 .iter()
                 .map(|i| i.to_string())
@@ -103,55 +127,67 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
                 .join(",")
         ));
     }
-    lines.push(first);
+    if !first_parts.is_empty() {
+        lines.push(first_parts.join(" "));
+    }
 
-    if !d.issue.tags.is_empty() {
+    if on("tags") && !d.issue.tags.is_empty() {
         lines.push(format!("TAGS:{}", d.issue.tags.join(",")));
     }
-    if !d.issue.files.is_empty() {
+    if on("files") && !d.issue.files.is_empty() {
         lines.push(format!("FILES:{}", d.issue.files.join(",")));
     }
-    if !d.issue.skills.is_empty() {
+    if on("skills") && !d.issue.skills.is_empty() {
         lines.push(format!("SKILLS:{}", d.issue.skills.join(",")));
     }
-    if !d.issue.assigned_to.is_empty() {
+    if on("assigned_to") && !d.issue.assigned_to.is_empty() {
         lines.push(format!("ASSIGNED:{}", d.issue.assigned_to));
     }
-    lines.push(format!("TITLE: {}", d.issue.title));
-    if !d.issue.context.is_empty() {
+    if on("title") {
+        lines.push(format!("TITLE: {}", d.issue.title));
+    }
+    if on("context") && !d.issue.context.is_empty() {
         lines.push(format!("CONTEXT: {}", d.issue.context));
     }
-    if !d.issue.acceptance.is_empty() {
+    if on("acceptance") && !d.issue.acceptance.is_empty() {
         lines.push(format!("ACCEPTANCE: {}", d.issue.acceptance));
     }
-    if let Some(pid) = d.issue.parent_id {
-        lines.push(format!("PARENT: {}", pid));
+    if on("parent_id") {
+        if let Some(pid) = d.issue.parent_id {
+            lines.push(format!("PARENT: {}", pid));
+        }
     }
-    if !d.issue.close_reason.is_empty() {
+    if on("close_reason") && !d.issue.close_reason.is_empty() {
         lines.push(format!("CLOSE_REASON: {}", d.issue.close_reason));
     }
-    lines.push(format!("CREATED: {}", d.issue.created_at));
-    lines.push(format!("UPDATED: {}", d.issue.updated_at));
-
-    if let Some(ref breakdown) = d.urgency_breakdown {
-        lines.push("--- URGENCY BREAKDOWN ---".to_string());
-        let parts: Vec<String> = breakdown
-            .components
-            .iter()
-            .filter(|(_, v)| *v != 0.0)
-            .map(|(k, v)| format!("{}={:.1}", k, v))
-            .collect();
-        lines.push(parts.join(" "));
+    if on("created_at") {
+        lines.push(format!("CREATED: {}", d.issue.created_at));
+    }
+    if on("updated_at") {
+        lines.push(format!("UPDATED: {}", d.issue.updated_at));
     }
 
-    if !d.relations.is_empty() {
+    if on("urgency_breakdown") {
+        if let Some(ref breakdown) = d.urgency_breakdown {
+            lines.push("--- URGENCY BREAKDOWN ---".to_string());
+            let parts: Vec<String> = breakdown
+                .components
+                .iter()
+                .filter(|(_, v)| *v != 0.0)
+                .map(|(k, v)| format!("{}={:.1}", k, v))
+                .collect();
+            lines.push(parts.join(" "));
+        }
+    }
+
+    if on("relations") && !d.relations.is_empty() {
         lines.push("--- RELATIONS ---".to_string());
         for rel in &d.relations {
             lines.push(format_relation_compact(rel, d.issue.id));
         }
     }
 
-    if !d.notes.is_empty() {
+    if on("notes") && !d.notes.is_empty() {
         lines.push("--- NOTES ---".to_string());
         for note in &d.notes {
             let agent_str = if note.agent.is_empty() {
@@ -258,16 +294,30 @@ pub fn format_issue_list(issues: &[IssueSummary], fmt: Format) -> String {
 }
 
 fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
+    let fields = get_fields_filter();
+    let on = |name: &str| field_enabled(&fields, name);
     issues
         .iter()
         .map(|i| {
-            let mut first = format!(
-                "ID:{} STATUS:{} PRIORITY:{} KIND:{} URGENCY:{:.1}",
-                i.id, i.status, i.priority, i.kind, i.urgency
-            );
-            if !i.blocked_by.is_empty() {
-                first.push_str(&format!(
-                    " BLOCKED_BY:{}",
+            let mut first_parts = Vec::new();
+            if on("id") {
+                first_parts.push(format!("ID:{}", i.id));
+            }
+            if on("status") {
+                first_parts.push(format!("STATUS:{}", i.status));
+            }
+            if on("priority") {
+                first_parts.push(format!("PRIORITY:{}", i.priority));
+            }
+            if on("kind") {
+                first_parts.push(format!("KIND:{}", i.kind));
+            }
+            if on("urgency") {
+                first_parts.push(format!("URGENCY:{:.1}", i.urgency));
+            }
+            if on("blocked_by") && !i.blocked_by.is_empty() {
+                first_parts.push(format!(
+                    "BLOCKED_BY:{}",
                     i.blocked_by
                         .iter()
                         .map(|x| x.to_string())
@@ -275,23 +325,26 @@ fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
                         .join(",")
                 ));
             }
-            let mut lines = vec![first];
-            if !i.tags.is_empty() {
+            let mut lines = vec![first_parts.join(" ")];
+            if on("tags") && !i.tags.is_empty() {
                 lines.push(format!("TAGS:{}", i.tags.join(",")));
             }
-            if !i.files.is_empty() {
+            if on("files") && !i.files.is_empty() {
                 lines.push(format!("FILES:{}", i.files.join(",")));
             }
-            if !i.skills.is_empty() {
+            if on("skills") && !i.skills.is_empty() {
                 lines.push(format!("SKILLS:{}", i.skills.join(",")));
             }
-            if !i.assigned_to.is_empty() {
+            if on("assigned_to") && !i.assigned_to.is_empty() {
                 lines.push(format!("ASSIGNED:{}", i.assigned_to));
             }
-            lines.push(format!("TITLE: {}", i.title));
-            if !i.acceptance.is_empty() {
+            if on("title") {
+                lines.push(format!("TITLE: {}", i.title));
+            }
+            if on("acceptance") && !i.acceptance.is_empty() {
                 lines.push(format!("ACCEPTANCE: {}", i.acceptance));
             }
+            lines.retain(|l| !l.is_empty());
             lines.join("\n")
         })
         .collect::<Vec<_>>()
@@ -302,30 +355,71 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
     if issues.is_empty() {
         return String::new();
     }
-    let mut lines = Vec::new();
-    lines.push(format!(
-        " {:>3} | {:>5} | {:11} | {:8} | {:7} | {:40} | Blocked",
-        "#", "Urg", "Status", "Pri", "Kind", "Title"
-    ));
-    lines.push(
-        "-----|-------|-------------|----------|---------|------------------------------------------|--------"
-            .to_string(),
-    );
+    let fields = get_fields_filter();
+    let on = |name: &str| field_enabled(&fields, name);
+
+    // (field_name, header, width, right_align)
+    // width=0 → last column, no padding
+    let all_cols: &[(&str, &str, usize, bool)] = &[
+        ("id", "#", 3, true),
+        ("urgency", "Urg", 5, true),
+        ("status", "Status", 11, false),
+        ("priority", "Pri", 8, false),
+        ("kind", "Kind", 7, false),
+        ("title", "Title", 40, false),
+        ("blocked_by", "Blocked", 0, false),
+    ];
+    let cols: Vec<&(&str, &str, usize, bool)> =
+        all_cols.iter().filter(|(f, _, _, _)| on(f)).collect();
+    if cols.is_empty() {
+        return String::new();
+    }
+
+    let header_parts: Vec<String> = cols
+        .iter()
+        .map(|(_, h, w, right)| {
+            if *w == 0 {
+                h.to_string()
+            } else if *right {
+                format!("{:>width$}", h, width = w)
+            } else {
+                format!("{:<width$}", h, width = w)
+            }
+        })
+        .collect();
+    let header = format!(" {}", header_parts.join(" | "));
+    let separator: String = header.chars().map(|c| if c == '|' { '|' } else { '-' }).collect();
+
+    let mut lines = vec![header, separator];
     for i in issues {
-        let title = truncate_with_ellipsis(&i.title, 40);
-        let blocked = if i.blocked_by.is_empty() {
-            String::new()
-        } else {
-            i.blocked_by
-                .iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        lines.push(format!(
-            " {:>3} | {:>5.1} | {:11} | {:8} | {:7} | {:40} | {}",
-            i.id, i.urgency, i.status, i.priority, i.kind, title, blocked
-        ));
+        let cell_parts: Vec<String> = cols
+            .iter()
+            .map(|(f, _, w, right)| {
+                let val = match *f {
+                    "id" => format!("{}", i.id),
+                    "urgency" => format!("{:.1}", i.urgency),
+                    "status" => i.status.clone(),
+                    "priority" => i.priority.clone(),
+                    "kind" => i.kind.clone(),
+                    "title" => truncate_with_ellipsis(&i.title, 40),
+                    "blocked_by" => i
+                        .blocked_by
+                        .iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    _ => String::new(),
+                };
+                if *w == 0 {
+                    val
+                } else if *right {
+                    format!("{:>width$}", val, width = w)
+                } else {
+                    format!("{:<width$}", val, width = w)
+                }
+            })
+            .collect();
+        lines.push(format!(" {}", cell_parts.join(" | ")));
     }
     lines.join("\n")
 }

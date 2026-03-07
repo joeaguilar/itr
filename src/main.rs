@@ -55,11 +55,9 @@ fn main() {
         }
     }
 
-    // Store fields in a thread-local for JSON filtering
+    // Store fields in a thread-local for all output formats
     if let Some(f) = fields {
-        if fmt.is_json() {
-            format::set_fields_filter(f);
-        }
+        format::set_fields_filter(f);
     }
 
     let result = match cli.command {

@@ -822,9 +822,19 @@ FIELD_EXIT=$?
 set -e
 assert_eq "invalid field exits 1" "1" "$FIELD_EXIT"
 
-# Fields ignored in compact mode (should not error)
+# --fields restricts compact output
 OUT=$($ITR list --fields id,title 2>&1)
-assert_contains "fields in compact mode no error" "ID:" "$OUT"
+assert_contains "fields compact has ID" "ID:" "$OUT"
+assert_contains "fields compact has TITLE" "TITLE:" "$OUT"
+[ "$(echo "$OUT" | grep -c "STATUS:")" -eq 0 ] && pass "fields compact omits STATUS" || fail "fields compact omits STATUS" "STATUS: found in output"
+[ "$(echo "$OUT" | grep -c "PRIORITY:")" -eq 0 ] && pass "fields compact omits PRIORITY" || fail "fields compact omits PRIORITY" "PRIORITY: found in output"
+
+# --fields restricts pretty table columns
+OUT=$($ITR list -f pretty --fields id,title,blocked_by 2>&1)
+assert_contains "fields pretty has title col" "Title" "$OUT"
+assert_contains "fields pretty has blocked col" "Blocked" "$OUT"
+[ "$(echo "$OUT" | grep -c "Status")" -eq 0 ] && pass "fields pretty omits Status col" || fail "fields pretty omits Status col" "Status found in output"
+[ "$(echo "$OUT" | grep -c "Kind")" -eq 0 ] && pass "fields pretty omits Kind col" || fail "fields pretty omits Kind col" "Kind found in output"
 
 # ─────────────────────────────────────────────
 # Feature 4: Search Context Snippets
