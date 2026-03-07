@@ -238,6 +238,25 @@ fn parse_json_array(s: String) -> Vec<String> {
     serde_json::from_str(&s).unwrap_or_default()
 }
 
+/// Append an `AND column IN (?, ?, ...)` clause to the SQL string,
+/// pushing values into param_values. Returns the number of placeholders added.
+fn append_in_clause(
+    sql: &mut String,
+    param_values: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    column: &str,
+    values: &[String],
+) {
+    let placeholders: Vec<String> = values
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", param_values.len() + i + 1))
+        .collect();
+    sql.push_str(&format!(" AND {} IN ({})", column, placeholders.join(",")));
+    for v in values {
+        param_values.push(Box::new(v.clone()));
+    }
+}
+
 fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
     Ok(Issue {
         id: row.get(0)?,
@@ -311,46 +330,19 @@ pub fn list_issues(
 
     if !all {
         if !statuses.is_empty() {
-            let placeholders: Vec<String> = statuses
-                .iter()
-                .enumerate()
-                .map(|(i, _)| format!("?{}", param_values.len() + i + 1))
-                .collect();
-            sql.push_str(&format!(" AND status IN ({})", placeholders.join(",")));
-            for s in statuses {
-                param_values.push(Box::new(s.clone()));
-            }
+            append_in_clause(&mut sql, &mut param_values, "status", statuses);
         } else {
-            let p1 = param_values.len() + 1;
-            let p2 = param_values.len() + 2;
-            sql.push_str(&format!(" AND status IN (?{}, ?{})", p1, p2));
-            param_values.push(Box::new("open".to_string()));
-            param_values.push(Box::new("in-progress".to_string()));
+            let defaults = vec!["open".to_string(), "in-progress".to_string()];
+            append_in_clause(&mut sql, &mut param_values, "status", &defaults);
         }
     }
 
     if !priorities.is_empty() {
-        let placeholders: Vec<String> = priorities
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", param_values.len() + i + 1))
-            .collect();
-        sql.push_str(&format!(" AND priority IN ({})", placeholders.join(",")));
-        for p in priorities {
-            param_values.push(Box::new(p.clone()));
-        }
+        append_in_clause(&mut sql, &mut param_values, "priority", priorities);
     }
 
     if !kinds.is_empty() {
-        let placeholders: Vec<String> = kinds
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", param_values.len() + i + 1))
-            .collect();
-        sql.push_str(&format!(" AND kind IN ({})", placeholders.join(",")));
-        for k in kinds {
-            param_values.push(Box::new(k.clone()));
-        }
+        append_in_clause(&mut sql, &mut param_values, "kind", kinds);
     }
 
     if let Some(pid) = parent_id {
@@ -697,46 +689,19 @@ pub fn search_issue_ids(
     // Status filter
     if !all {
         if !statuses.is_empty() {
-            let placeholders: Vec<String> = statuses
-                .iter()
-                .enumerate()
-                .map(|(i, _)| format!("?{}", param_values.len() + i + 1))
-                .collect();
-            sql.push_str(&format!(" AND i.status IN ({})", placeholders.join(",")));
-            for s in statuses {
-                param_values.push(Box::new(s.clone()));
-            }
+            append_in_clause(&mut sql, &mut param_values, "i.status", statuses);
         } else {
-            let p1 = param_values.len() + 1;
-            let p2 = param_values.len() + 2;
-            sql.push_str(&format!(" AND i.status IN (?{}, ?{})", p1, p2));
-            param_values.push(Box::new("open".to_string()));
-            param_values.push(Box::new("in-progress".to_string()));
+            let defaults = vec!["open".to_string(), "in-progress".to_string()];
+            append_in_clause(&mut sql, &mut param_values, "i.status", &defaults);
         }
     }
 
     if !priorities.is_empty() {
-        let placeholders: Vec<String> = priorities
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", param_values.len() + i + 1))
-            .collect();
-        sql.push_str(&format!(" AND i.priority IN ({})", placeholders.join(",")));
-        for p in priorities {
-            param_values.push(Box::new(p.clone()));
-        }
+        append_in_clause(&mut sql, &mut param_values, "i.priority", priorities);
     }
 
     if !kinds.is_empty() {
-        let placeholders: Vec<String> = kinds
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", param_values.len() + i + 1))
-            .collect();
-        sql.push_str(&format!(" AND i.kind IN ({})", placeholders.join(",")));
-        for k in kinds {
-            param_values.push(Box::new(k.clone()));
-        }
+        append_in_clause(&mut sql, &mut param_values, "i.kind", kinds);
     }
 
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =

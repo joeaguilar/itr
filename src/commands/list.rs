@@ -1,4 +1,4 @@
-use super::build_issue_summary;
+use super::{build_issue_summary, sort_by_urgency_desc};
 use crate::db;
 use crate::error::{self, ItrError};
 use crate::format::{self, Format};
@@ -51,22 +51,14 @@ pub fn run(
 
     // Sort
     match sort {
-        "urgency" => summaries.sort_by(|a, b| {
-            b.urgency
-                .partial_cmp(&a.urgency)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }),
+        "urgency" => sort_by_urgency_desc(&mut summaries),
         "priority" => {
             summaries.sort_by(|a, b| priority_ord(&a.priority).cmp(&priority_ord(&b.priority)))
         }
         "created" => {} // already ordered by insertion
         "updated" => {} // would need updated_at on summary
         "id" => summaries.sort_by_key(|s| s.id),
-        _ => summaries.sort_by(|a, b| {
-            b.urgency
-                .partial_cmp(&a.urgency)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }),
+        _ => sort_by_urgency_desc(&mut summaries),
     }
 
     // Limit

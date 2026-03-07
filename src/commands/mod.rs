@@ -27,9 +27,11 @@ pub mod upgrade;
 
 use crate::db;
 use crate::error::ItrError;
+use crate::format::{self, Format};
 use crate::models::{IssueSummary, IssueDetail, Issue};
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
+use std::cmp::Ordering;
 
 /// Build an `IssueSummary` for a single issue: compute urgency, resolve blockers.
 pub fn build_issue_summary(conn: &Connection, issue: &Issue, config: &UrgencyConfig) -> IssueSummary {
@@ -50,6 +52,32 @@ pub fn build_issue_summary(conn: &Connection, issue: &Issue, config: &UrgencyCon
         skills: issue.skills.clone(),
         acceptance: issue.acceptance.clone(),
         assigned_to: issue.assigned_to.clone(),
+    }
+}
+
+/// Sort by urgency descending (highest first).
+pub fn sort_by_urgency_desc<T: HasUrgency>(items: &mut [T]) {
+    items.sort_by(|a, b| {
+        b.urgency_val()
+            .partial_cmp(&a.urgency_val())
+            .unwrap_or(Ordering::Equal)
+    });
+}
+
+/// Trait for types that have an urgency score.
+pub trait HasUrgency {
+    fn urgency_val(&self) -> f64;
+}
+
+impl HasUrgency for IssueSummary {
+    fn urgency_val(&self) -> f64 {
+        self.urgency
+    }
+}
+
+impl HasUrgency for crate::models::SearchResult {
+    fn urgency_val(&self) -> f64 {
+        self.urgency
     }
 }
 
@@ -78,4 +106,35 @@ pub fn build_issue_detail(
         children: None,
         relations: vec![],
     })
+}
+
+/// Print an `IssueDetail` along with any newly-unblocked issues.
+/// Used by close.rs and update.rs after modifying an issue.
+pub fn print_detail_with_unblocked(
+    detail: &IssueDetail,
+    unblocked: &[(i64, String)],
+    fmt: Format,
+) {
+    match fmt {
+        Format::Json => {
+            let mut value = serde_json::to_value(detail).unwrap_or_default();
+            if !unblocked.is_empty() {
+                let list: Vec<serde_json::Value> = unblocked
+                    .iter()
+                    .map(|(uid, utitle)| serde_json::json!({"id": uid, "title": utitle}))
+                    .collect();
+                value["unblocked"] = serde_json::Value::Array(list);
+            }
+            format::println_json(&value.to_string());
+        }
+        _ => {
+            println!("{}", format::format_issue_detail(detail, fmt));
+            if !unblocked.is_empty() {
+                let unblocked_str = format::format_unblocked(unblocked, fmt);
+                if !unblocked_str.is_empty() {
+                    println!("{}", unblocked_str);
+                }
+            }
+        }
+    }
 }

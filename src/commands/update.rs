@@ -1,8 +1,8 @@
 use crate::normalize::{validate_kind, validate_priority, validate_status};
-use crate::commands::build_issue_detail;
+use crate::commands::{build_issue_detail, print_detail_with_unblocked};
 use crate::db;
 use crate::error::ItrError;
-use crate::format::{self, Format};
+use crate::format::Format;
 use crate::normalize;
 use crate::urgency::UrgencyConfig;
 use crate::util;
@@ -185,28 +185,7 @@ pub fn run(
         vec![]
     };
 
-    match fmt {
-        Format::Json => {
-            let mut value = serde_json::to_value(&detail)?;
-            if !unblocked.is_empty() {
-                let list: Vec<serde_json::Value> = unblocked
-                    .iter()
-                    .map(|(uid, utitle)| serde_json::json!({"id": uid, "title": utitle}))
-                    .collect();
-                value["unblocked"] = serde_json::Value::Array(list);
-            }
-            format::println_json(&value.to_string());
-        }
-        _ => {
-            println!("{}", format::format_issue_detail(&detail, fmt));
-            if !unblocked.is_empty() {
-                let unblocked_str = format::format_unblocked(&unblocked, fmt);
-                if !unblocked_str.is_empty() {
-                    println!("{}", unblocked_str);
-                }
-            }
-        }
-    }
+    print_detail_with_unblocked(&detail, &unblocked, fmt);
 
     Ok(())
 }

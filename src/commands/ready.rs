@@ -1,4 +1,4 @@
-use super::build_issue_summary;
+use super::{build_issue_summary, sort_by_urgency_desc};
 use crate::db;
 use crate::error::{self, ItrError};
 use crate::format::{self, Format};
@@ -47,11 +47,7 @@ pub fn run(
         .collect();
 
     // Sort by urgency descending
-    summaries.sort_by(|a, b| {
-        b.urgency
-            .partial_cmp(&a.urgency)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sort_by_urgency_desc(&mut summaries);
 
     if let Some(n) = limit {
         summaries.truncate(n);

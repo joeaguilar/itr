@@ -1,3 +1,4 @@
+use super::sort_by_urgency_desc;
 use crate::db;
 use crate::error::{self, ItrError};
 use crate::format::{self, Format};
@@ -123,11 +124,7 @@ pub fn run(
     }
 
     // Sort by urgency descending
-    results.sort_by(|a, b| {
-        b.urgency
-            .partial_cmp(&a.urgency)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    sort_by_urgency_desc(&mut results);
 
     if let Some(n) = limit {
         results.truncate(n);
