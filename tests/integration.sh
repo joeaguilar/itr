@@ -1113,6 +1113,41 @@ assert_contains "batch update compact output" "BATCH_UPDATE" "$OUT"
 rm -rf "$BU_DIR"
 
 # ─────────────────────────────────────────────
+# Sub-agent E2E
+# ─────────────────────────────────────────────
+echo ""
+echo "--- Sub-agent E2E ---"
+
+SA_DIR=$(mktemp -d)
+ITR_DB_PATH="$SA_DIR/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$SA_DIR/.itr.db" $ITR add "Sub-agent task" -f json >/dev/null
+SA_ID=1
+
+# Claim via next --claim with ITR_AGENT
+OUT=$(ITR_AGENT=test-sub-agent ITR_DB_PATH="$SA_DIR/.itr.db" $ITR next --claim -f json)
+assert_eq "sub-agent claim assigned_to" "test-sub-agent" "$(jq_val "$OUT" "d['assigned_to']")"
+
+# Add a note with ITR_AGENT
+OUT=$(ITR_AGENT=test-sub-agent ITR_DB_PATH="$SA_DIR/.itr.db" $ITR note $SA_ID "Working on it" -f json)
+assert_eq "sub-agent note agent" "test-sub-agent" "$(jq_val "$OUT" "d['agent']")"
+
+# Close the issue with ITR_AGENT
+ITR_AGENT=test-sub-agent ITR_DB_PATH="$SA_DIR/.itr.db" $ITR close $SA_ID "Done" -f json >/dev/null
+
+# Verify all log events have agent == "test-sub-agent"
+LOG=$(ITR_DB_PATH="$SA_DIR/.itr.db" $ITR log $SA_ID -f json)
+EVENT_COUNT=$(jq_val "$LOG" "len(d)")
+assert_eq "sub-agent log has events" "True" "$(jq_val "$LOG" "len(d) > 0")"
+BAD_AGENTS=$(jq_val "$LOG" "len([e for e in d if e['agent'] != 'test-sub-agent'])")
+assert_eq "sub-agent all events tagged" "0" "$BAD_AGENTS"
+
+# Verify final state is done
+OUT=$(ITR_DB_PATH="$SA_DIR/.itr.db" $ITR get $SA_ID -f json)
+assert_eq "sub-agent final status done" "done" "$(jq_val "$OUT" "d['status']")"
+
+rm -rf "$SA_DIR"
+
+# ─────────────────────────────────────────────
 echo ""
 echo "==============================="
 echo "Results: $PASS passed, $FAIL failed"
