@@ -356,6 +356,7 @@ pub enum Commands {
     },
 
     /// Print the full agent usage guide (no database required)
+    #[command(visible_alias = "getting-started")]
     AgentInfo,
 
     /// Dump the current database schema
@@ -491,6 +492,10 @@ pub enum Commands {
 pub enum BatchAction {
     /// Bulk-create issues from JSON array on stdin
     Add,
+    /// Bulk-close issues from JSON array on stdin (per-issue reasons)
+    Close,
+    /// Bulk-update issues from JSON array on stdin (per-issue changes)
+    Update,
 }
 
 #[derive(Subcommand)]

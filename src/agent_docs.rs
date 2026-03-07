@@ -48,8 +48,12 @@ itr close <ID> "reason"        # Close when done
 
 **Bulk Operations:**
 - `itr batch add` — Bulk-create from JSON array on stdin
-- `itr bulk close` — Close all matching filters (--status, --priority, --kind, --tag, --skill, --assigned-to, --dry-run)
+- `itr batch close` — Bulk-close from JSON array on stdin (per-issue reasons, soft fallback)
+- `itr batch update` — Bulk-update from JSON array on stdin (per-issue changes, soft fallback)
+- `itr bulk close` — Close all matching filters (--reason, --wontfix, --status, --priority, --kind, --tag, --skill, --assigned-to, --dry-run)
 - `itr bulk update` — Update matching issues (--set-status, --set-priority, --add-tag, --dry-run)
+
+Prefer `batch close`/`batch update` when you need per-issue control. Prefer `bulk close`/`bulk update` when a single filter covers all targets.
 
 **Assignment:**
 - `itr assign <ID> <agent>` — Assign issue to agent

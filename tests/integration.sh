@@ -958,6 +958,12 @@ OUT=$($ITR agent-info -f json)
 GUIDE=$(jq_val "$OUT" "d['guide']")
 assert_contains "agent-info json has guide field" "ITR_AGENT" "$GUIDE"
 
+OUT=$($ITR getting-started)
+assert_contains "getting-started alias works" "ITR_AGENT" "$OUT"
+
+OUT=$($ITR getting started)
+assert_contains "getting started (two words) works" "ITR_AGENT" "$OUT"
+
 # ─────────────────────────────────────────────
 echo "--- init --agents-md (comprehensive) ---"
 # ─────────────────────────────────────────────
@@ -980,6 +986,131 @@ assert_eq "agents-md idempotent (one header)" "1" "$AGENTS_COUNT"
 
 cd "$WORKDIR"
 rm -rf "$AGENTS_DIR"
+
+# ─────────────────────────────────────────────
+# batch close
+# ─────────────────────────────────────────────
+echo ""
+echo "--- batch close ---"
+
+BC_DIR=$(mktemp -d)
+ITR_DB_PATH="$BC_DIR/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$BC_DIR/.itr.db" $ITR add "BC issue 1" -f json >/dev/null
+ITR_DB_PATH="$BC_DIR/.itr.db" $ITR add "BC issue 2" -f json >/dev/null
+ITR_DB_PATH="$BC_DIR/.itr.db" $ITR add "BC issue 3" -f json >/dev/null
+
+# Set up dependency: issue 3 blocked by issue 1
+ITR_DB_PATH="$BC_DIR/.itr.db" $ITR depend 3 --on 1 >/dev/null
+
+# Batch close: 2 valid (one with reason, one wontfix) + 1 invalid ID
+OUT=$(echo '[{"id":1,"reason":"Done in sprint"},{"id":99},{"id":2,"wontfix":true,"reason":"Not needed"}]' | ITR_DB_PATH="$BC_DIR/.itr.db" $ITR batch close -f json)
+TOTAL=$(jq_val "$OUT" "d['summary']['total']")
+OK=$(jq_val "$OUT" "d['summary']['ok']")
+ERR=$(jq_val "$OUT" "d['summary']['error']")
+assert_eq "batch close total" "3" "$TOTAL"
+assert_eq "batch close ok count" "2" "$OK"
+assert_eq "batch close error count" "1" "$ERR"
+
+# Check per-item outcomes
+R0_OUTCOME=$(jq_val "$OUT" "d['results'][0]['outcome']")
+assert_eq "batch close item 0 ok" "ok" "$R0_OUTCOME"
+R1_OUTCOME=$(jq_val "$OUT" "d['results'][1]['outcome']")
+assert_eq "batch close item 1 error" "error" "$R1_OUTCOME"
+R1_ERR=$(jq_val "$OUT" "d['results'][1]['error']")
+assert_contains "batch close error msg" "not found" "$R1_ERR"
+R2_OUTCOME=$(jq_val "$OUT" "d['results'][2]['outcome']")
+assert_eq "batch close item 2 ok" "ok" "$R2_OUTCOME"
+
+# Check unblocked reporting (issue 3 was blocked by issue 1)
+UNBLOCKED=$(jq_val "$OUT" "len(d['results'][0].get('unblocked', []))")
+assert_eq "batch close reports unblocked" "1" "$UNBLOCKED"
+UNBLOCKED_ID=$(jq_val "$OUT" "d['results'][0]['unblocked'][0]['id']")
+assert_eq "batch close unblocked id" "3" "$UNBLOCKED_ID"
+
+# Verify issues actually changed status
+OUT_I1=$(ITR_DB_PATH="$BC_DIR/.itr.db" $ITR get 1 -f json)
+assert_eq "batch close issue 1 done" "done" "$(jq_val "$OUT_I1" "d['status']")"
+assert_eq "batch close issue 1 reason" "Done in sprint" "$(jq_val "$OUT_I1" "d['close_reason']")"
+OUT_I2=$(ITR_DB_PATH="$BC_DIR/.itr.db" $ITR get 2 -f json)
+assert_eq "batch close issue 2 wontfix" "wontfix" "$(jq_val "$OUT_I2" "d['status']")"
+
+# Idempotent re-close returns ok
+OUT=$(echo '[{"id":1}]' | ITR_DB_PATH="$BC_DIR/.itr.db" $ITR batch close -f json)
+RE_OUTCOME=$(jq_val "$OUT" "d['results'][0]['outcome']")
+assert_eq "batch close idempotent re-close ok" "ok" "$RE_OUTCOME"
+RE_NOTE=$(jq_val "$OUT" "len(d['results'][0].get('notes', []))")
+assert_eq "batch close idempotent has note" "1" "$RE_NOTE"
+
+# Compact output format
+OUT=$(echo '[{"id":3,"reason":"cleanup"}]' | ITR_DB_PATH="$BC_DIR/.itr.db" $ITR batch close)
+assert_contains "batch close compact output" "BATCH_CLOSE" "$OUT"
+
+rm -rf "$BC_DIR"
+
+# ─────────────────────────────────────────────
+# batch update
+# ─────────────────────────────────────────────
+echo ""
+echo "--- batch update ---"
+
+BU_DIR=$(mktemp -d)
+ITR_DB_PATH="$BU_DIR/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$BU_DIR/.itr.db" $ITR add "BU issue 1" -f json >/dev/null
+ITR_DB_PATH="$BU_DIR/.itr.db" $ITR add "BU issue 2" -f json >/dev/null
+ITR_DB_PATH="$BU_DIR/.itr.db" $ITR add "BU issue 3" -f json >/dev/null
+
+# Set up dependency: issue 3 blocked by issue 1
+ITR_DB_PATH="$BU_DIR/.itr.db" $ITR depend 3 --on 1 >/dev/null
+
+# Batch update: valid status + invalid priority + nonexistent ID
+OUT=$(echo '[{"id":1,"status":"in-progress"},{"id":2,"priority":"bogus","add_tags":["urgent"]},{"id":99,"status":"done"}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update -f json)
+TOTAL=$(jq_val "$OUT" "d['summary']['total']")
+OK=$(jq_val "$OUT" "d['summary']['ok']")
+ERR=$(jq_val "$OUT" "d['summary']['error']")
+REV=$(jq_val "$OUT" "d['summary']['review']")
+assert_eq "batch update total" "3" "$TOTAL"
+assert_eq "batch update ok count" "1" "$OK"
+assert_eq "batch update error count" "1" "$ERR"
+assert_eq "batch update review count" "1" "$REV"
+
+# Check per-item outcomes
+R0_OUTCOME=$(jq_val "$OUT" "d['results'][0]['outcome']")
+assert_eq "batch update item 0 ok" "ok" "$R0_OUTCOME"
+R1_OUTCOME=$(jq_val "$OUT" "d['results'][1]['outcome']")
+assert_eq "batch update item 1 review" "review" "$R1_OUTCOME"
+R2_OUTCOME=$(jq_val "$OUT" "d['results'][2]['outcome']")
+assert_eq "batch update item 2 error" "error" "$R2_OUTCOME"
+
+# Verify valid updates applied
+OUT_I1=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR get 1 -f json)
+assert_eq "batch update issue 1 in-progress" "in-progress" "$(jq_val "$OUT_I1" "d['status']")"
+
+# Verify soft fallback: priority stayed at medium, _needs_review tag added
+OUT_I2=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR get 2 -f json)
+assert_eq "batch update soft fallback keeps priority" "medium" "$(jq_val "$OUT_I2" "d['priority']")"
+HAS_REVIEW_TAG=$(jq_val "$OUT_I2" "'_needs_review' in d.get('tags', [])")
+assert_eq "batch update soft fallback adds _needs_review" "True" "$HAS_REVIEW_TAG"
+# Verify add_tags also applied
+HAS_URGENT_TAG=$(jq_val "$OUT_I2" "'urgent' in d.get('tags', [])")
+assert_eq "batch update add_tags applied" "True" "$HAS_URGENT_TAG"
+
+# Batch update with status change to done triggers unblocked
+OUT=$(echo '[{"id":1,"status":"done"}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update -f json)
+UNBLOCKED=$(jq_val "$OUT" "len(d['results'][0].get('unblocked', []))")
+assert_eq "batch update done triggers unblocked" "1" "$UNBLOCKED"
+
+# Batch update with add_skills
+OUT=$(echo '[{"id":2,"add_skills":["devops","rust"]}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update -f json)
+assert_eq "batch update add_skills ok" "ok" "$(jq_val "$OUT" "d['results'][0]['outcome']")"
+OUT_I2=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR get 2 -f json)
+SKILLS=$(jq_val "$OUT_I2" "d['skills']")
+assert_eq "batch update add_skills applied" "['devops', 'rust']" "$SKILLS"
+
+# Compact output format
+OUT=$(echo '[{"id":3,"assigned_to":"agent-x"}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update)
+assert_contains "batch update compact output" "BATCH_UPDATE" "$OUT"
+
+rm -rf "$BU_DIR"
 
 # ─────────────────────────────────────────────
 echo ""

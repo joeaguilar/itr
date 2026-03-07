@@ -205,6 +205,67 @@ pub struct Event {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchCloseInput {
+    pub id: i64,
+    #[serde(default)]
+    pub reason: String,
+    #[serde(default)]
+    pub wontfix: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchUpdateInput {
+    pub id: i64,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub context: Option<String>,
+    #[serde(default)]
+    pub assigned_to: Option<String>,
+    #[serde(default)]
+    pub add_tags: Vec<String>,
+    #[serde(default)]
+    pub remove_tags: Vec<String>,
+    #[serde(default)]
+    pub add_skills: Vec<String>,
+    #[serde(default)]
+    pub remove_skills: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchItemResult {
+    pub id: i64,
+    pub outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unblocked: Vec<UnblockedIssue>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchSummary {
+    pub total: usize,
+    pub ok: usize,
+    pub error: usize,
+    pub review: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchResult {
+    pub action: String,
+    pub results: Vec<BatchItemResult>,
+    pub summary: BatchSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExportData {
     pub issue: Issue,
     pub notes: Vec<Note>,

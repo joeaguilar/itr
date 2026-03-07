@@ -13,8 +13,30 @@ use cli::{BatchAction, BulkAction, Cli, Commands, ConfigAction};
 use error::handle_error;
 use format::Format;
 
+/// Merge multi-word subcommands that clap can't handle natively.
+/// "getting started" (two args) → "getting-started" (one arg).
+fn preprocess_args() -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    // Look for consecutive "getting" + "started" and merge them.
+    if let Some(pos) = args
+        .iter()
+        .position(|a| a.to_str().map(|s| s.eq_ignore_ascii_case("getting")) == Some(true))
+    {
+        if args
+            .get(pos + 1)
+            .and_then(|a| a.to_str())
+            .map(|s| s.eq_ignore_ascii_case("started"))
+            == Some(true)
+        {
+            args[pos] = "getting-started".into();
+            args.remove(pos + 1);
+        }
+    }
+    args
+}
+
 fn main() {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(preprocess_args());
 
     let fmt = Format::from_str(&cli.format).unwrap_or_else(|| {
         eprintln!(
@@ -232,6 +254,8 @@ fn run_command(
 
         Commands::Batch { action } => match action {
             BatchAction::Add => commands::batch::run_add(conn, fmt),
+            BatchAction::Close => commands::batch::run_close(conn, fmt),
+            BatchAction::Update => commands::batch::run_update(conn, fmt),
         },
 
         Commands::Bulk { action } => match action {

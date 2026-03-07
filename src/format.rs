@@ -1,6 +1,7 @@
 use crate::error::ItrError;
 use crate::models::{
-    Event, GraphOutput, IssueDetail, IssueSummary, Relation, SearchResult, Stats, UnblockedIssue,
+    BatchResult, Event, GraphOutput, IssueDetail, IssueSummary, Relation, SearchResult, Stats,
+    UnblockedIssue,
 };
 use std::cell::RefCell;
 
@@ -694,6 +695,54 @@ pub fn format_unblocked(issues: &[(i64, String)], fmt: Format) -> String {
             .collect::<Vec<_>>()
             .join("\n"),
     }
+}
+
+// --- Batch Results ---
+
+pub fn format_batch_result(result: &BatchResult, fmt: Format) -> String {
+    match fmt {
+        Format::Json => serde_json::to_string(result).unwrap_or_default(),
+        Format::Compact | Format::Pretty => format_batch_result_compact(result),
+    }
+}
+
+fn format_batch_result_compact(result: &BatchResult) -> String {
+    let mut lines = Vec::new();
+    lines.push(format!(
+        "{}: {} items ({} ok, {} error, {} review)",
+        result.action.to_uppercase(),
+        result.summary.total,
+        result.summary.ok,
+        result.summary.error,
+        result.summary.review,
+    ));
+    for item in &result.results {
+        match item.outcome.as_str() {
+            "ok" => {
+                lines.push(format!("  OK:{}", item.id));
+                for ub in &item.unblocked {
+                    lines.push(format!("  UNBLOCKED:{} \"{}\"", ub.id, ub.title));
+                }
+                for note in &item.notes {
+                    lines.push(format!("  NOTE:{} \"{}\"", item.id, note));
+                }
+            }
+            "error" => {
+                let msg = item.error.as_deref().unwrap_or("unknown error");
+                lines.push(format!("  ERROR:{} \"{}\"", item.id, msg));
+            }
+            "review" => {
+                lines.push(format!("  REVIEW:{}", item.id));
+                for note in &item.notes {
+                    lines.push(format!("  NOTE:{} \"{}\"", item.id, note));
+                }
+            }
+            _ => {
+                lines.push(format!("  {}:{}", item.outcome.to_uppercase(), item.id));
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 #[cfg(test)]
