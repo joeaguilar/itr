@@ -1134,6 +1134,41 @@ BC_OUT=$(echo '[{"id":3}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch close -f j
 HAS_SUMMARY=$(echo "$BC_OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print('summary' in d)")
 assert_eq "batch close --fields filters summary" "False" "$HAS_SUMMARY"
 
+# ─────────────────────────────────────────────
+echo ""
+echo "--- batch note ---"
+# ─────────────────────────────────────────────
+
+BN_DIR=$(mktemp -d)
+ITR_DB_PATH="$BN_DIR/.itr.db" $ITR init >/dev/null
+echo '[{"title":"Note A"},{"title":"Note B"}]' | ITR_DB_PATH="$BN_DIR/.itr.db" $ITR batch add -f json >/dev/null
+
+# Batch note: 2 valid + 1 invalid ID
+OUT=$(echo '[{"id":1,"text":"First note"},{"id":99,"text":"Bad"},{"id":2,"text":"Second note","agent":"custom-agent"}]' | ITR_DB_PATH="$BN_DIR/.itr.db" $ITR batch note -f json)
+assert_eq "batch note action" "batch_note" "$(jq_val "$OUT" "d['action']")"
+assert_eq "batch note total" "3" "$(jq_val "$OUT" "d['summary']['total']")"
+assert_eq "batch note ok count" "2" "$(jq_val "$OUT" "d['summary']['ok']")"
+assert_eq "batch note error count" "1" "$(jq_val "$OUT" "d['summary']['error']")"
+assert_eq "batch note item 0 ok" "ok" "$(jq_val "$OUT" "d['results'][0]['outcome']")"
+assert_eq "batch note item 1 error" "error" "$(jq_val "$OUT" "d['results'][1]['outcome']")"
+assert_contains "batch note error msg" "not found" "$(jq_val "$OUT" "d['results'][1]['error']")"
+assert_eq "batch note item 2 ok" "ok" "$(jq_val "$OUT" "d['results'][2]['outcome']")"
+
+# Verify notes actually created
+OUT_I1=$(ITR_DB_PATH="$BN_DIR/.itr.db" $ITR get 1 -f json)
+assert_eq "batch note persisted" "1" "$(jq_val "$OUT_I1" "len(d['notes'])")"
+assert_eq "batch note content" "First note" "$(jq_val "$OUT_I1" "d['notes'][0]['content']")"
+
+# Verify custom agent override
+OUT_I2=$(ITR_DB_PATH="$BN_DIR/.itr.db" $ITR get 2 -f json)
+assert_eq "batch note custom agent" "custom-agent" "$(jq_val "$OUT_I2" "d['notes'][0]['agent']")"
+
+# Compact output
+OUT=$(echo '[{"id":1,"text":"Compact note"}]' | ITR_DB_PATH="$BN_DIR/.itr.db" $ITR batch note)
+assert_contains "batch note compact output" "BATCH_NOTE" "$OUT"
+
+rm -rf "$BN_DIR"
+
 # --dry-run on batch close
 DR_DIR=$(mktemp -d)
 ITR_DB_PATH="$DR_DIR/.itr.db" $ITR init >/dev/null

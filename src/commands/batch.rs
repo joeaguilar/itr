@@ -3,8 +3,8 @@ use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::{
-    BatchAddInput, BatchCloseInput, BatchItemResult, BatchResult, BatchSummary, BatchUpdateInput,
-    IssueDetail, UnblockedIssue,
+    BatchAddInput, BatchCloseInput, BatchItemResult, BatchNoteInput, BatchResult, BatchSummary,
+    BatchUpdateInput, IssueDetail, UnblockedIssue,
 };
 use crate::normalize;
 use crate::urgency::{self, UrgencyConfig};
@@ -463,6 +463,60 @@ pub fn run_update(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), I
         results,
         summary,
         dry_run,
+    };
+
+    println!("{}", format::format_batch_result(&batch_result, fmt));
+
+    Ok(())
+}
+
+pub fn run_note(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
+    let mut input = String::new();
+    io::stdin().read_to_string(&mut input)?;
+
+    let items: Vec<BatchNoteInput> = serde_json::from_str(&input)?;
+
+    let mut results: Vec<BatchItemResult> = Vec::new();
+
+    for item in &items {
+        // Resolve agent: input agent field, else ITR_AGENT env, else empty
+        let agent = if item.agent.is_empty() {
+            std::env::var("ITR_AGENT").unwrap_or_default()
+        } else {
+            item.agent.clone()
+        };
+
+        match db::add_note(conn, item.id, &item.text, &agent) {
+            Ok(note) => {
+                results.push(BatchItemResult {
+                    id: item.id,
+                    outcome: "ok".to_string(),
+                    error: None,
+                    notes: vec![note.content],
+                    unblocked: vec![],
+                    issue: None,
+                });
+            }
+            Err(ItrError::NotFound(_)) => {
+                results.push(BatchItemResult {
+                    id: item.id,
+                    outcome: "error".to_string(),
+                    error: Some(format!("Issue {} not found", item.id)),
+                    notes: vec![],
+                    unblocked: vec![],
+                    issue: None,
+                });
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    let summary = build_summary(&results);
+    let batch_result = BatchResult {
+        action: "batch_note".to_string(),
+        results,
+        summary,
+        dry_run: false,
     };
 
     println!("{}", format::format_batch_result(&batch_result, fmt));

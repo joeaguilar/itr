@@ -256,6 +256,7 @@ fn run_command(
             BatchAction::Add => commands::batch::run_add(conn, fmt),
             BatchAction::Close { dry_run } => commands::batch::run_close(conn, dry_run, fmt),
             BatchAction::Update { dry_run } => commands::batch::run_update(conn, dry_run, fmt),
+            BatchAction::Note => commands::batch::run_note(conn, fmt),
         },
 
         Commands::Bulk { action } => match action {

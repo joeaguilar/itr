@@ -205,6 +205,14 @@ pub struct Event {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchNoteInput {
+    pub id: i64,
+    pub text: String,
+    #[serde(default)]
+    pub agent: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchCloseInput {
     pub id: i64,
     #[serde(default)]

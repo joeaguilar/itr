@@ -504,6 +504,8 @@ pub enum BatchAction {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Bulk-add notes from JSON array on stdin [{id, text, agent?}]
+    Note,
 }
 
 #[derive(Subcommand)]
