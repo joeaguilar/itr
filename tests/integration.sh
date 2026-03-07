@@ -248,13 +248,13 @@ NOTES_COUNT=$(jq_val "$OUT" "len(d['notes'])")
 NOTE_FOUND=$(jq_val "$OUT" "any(n['content'] == 'Investigation started' and n['agent'] == 'test-session' for n in d['notes'])")
 assert_eq "note appended with correct content" "True" "$NOTE_FOUND"
 
-# Stdin note
+# Note with text as argument (replaces former stdin note test)
 BEFORE_COUNT=$NOTES_COUNT
-echo "Piped note content" | $ITR note 1 --agent "pipe-test" >/dev/null
+$ITR note 1 "Piped note content" --agent "pipe-test" >/dev/null
 OUT=$($ITR get 1 -f json)
 NOTES_COUNT=$(jq_val "$OUT" "len(d['notes'])")
 EXPECTED=$((BEFORE_COUNT + 1))
-assert_eq "stdin note appended" "$EXPECTED" "$NOTES_COUNT"
+assert_eq "note appended via arg" "$EXPECTED" "$NOTES_COUNT"
 
 assert_exit "note on nonexistent issue" "1" $ITR note 999 "nope"
 

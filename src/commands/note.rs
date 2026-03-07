@@ -3,8 +3,6 @@ use crate::error::ItrError;
 use crate::format::Format;
 use rusqlite::Connection;
 use std::env;
-use std::io::{self, IsTerminal, Read};
-
 pub fn run(
     conn: &Connection,
     id: i64,
@@ -21,16 +19,11 @@ pub fn run(
     let content = match text {
         Some(t) => t,
         None => {
-            if io::stdin().is_terminal() {
-                return Err(ItrError::InvalidValue {
-                    field: "text".to_string(),
-                    value: String::new(),
-                    valid: "non-empty string or pipe via stdin".to_string(),
-                });
-            }
-            let mut buf = String::new();
-            io::stdin().read_to_string(&mut buf)?;
-            buf.trim().to_string()
+            return Err(ItrError::InvalidValue {
+                field: "text".to_string(),
+                value: String::new(),
+                valid: "non-empty string".to_string(),
+            });
         }
     };
 

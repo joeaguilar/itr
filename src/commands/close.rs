@@ -4,7 +4,6 @@ use crate::format::{self, Format};
 use crate::models::IssueDetail;
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
-use std::io::{self, IsTerminal, Read};
 
 pub fn run(
     conn: &Connection,
@@ -13,19 +12,7 @@ pub fn run(
     wontfix: bool,
     fmt: Format,
 ) -> Result<(), ItrError> {
-    // Read reason from stdin if not provided and stdin is not a TTY
-    let reason = match reason {
-        Some(r) => r,
-        None => {
-            if io::stdin().is_terminal() {
-                String::new()
-            } else {
-                let mut buf = String::new();
-                io::stdin().read_to_string(&mut buf)?;
-                buf.trim().to_string()
-            }
-        }
-    };
+    let reason = reason.unwrap_or_default();
 
     let status = if wontfix { "wontfix" } else { "done" };
 
