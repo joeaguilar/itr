@@ -625,6 +625,15 @@ const VALID_FIELDS: &[&str] = &[
     "unblocked",
     "context_snippets",
     "relations",
+    // Batch result fields
+    "action",
+    "results",
+    "summary",
+    "outcome",
+    "error",
+    "total",
+    "ok",
+    "review",
 ];
 
 pub fn parse_fields(fields_str: &str) -> Vec<String> {
@@ -701,7 +710,7 @@ pub fn format_unblocked(issues: &[(i64, String)], fmt: Format) -> String {
 
 pub fn format_batch_result(result: &BatchResult, fmt: Format) -> String {
     match fmt {
-        Format::Json => serde_json::to_string(result).unwrap_or_default(),
+        Format::Json => apply_fields_filter(&serde_json::to_string(result).unwrap_or_default()),
         Format::Compact | Format::Pretty => format_batch_result_compact(result),
     }
 }

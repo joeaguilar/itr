@@ -1110,6 +1110,24 @@ assert_eq "batch update add_skills applied" "['devops', 'rust']" "$SKILLS"
 OUT=$(echo '[{"id":3,"assigned_to":"agent-x"}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update)
 assert_contains "batch update compact output" "BATCH_UPDATE" "$OUT"
 
+# --fields filtering on batch results
+OUT=$(echo '[{"id":3,"assigned_to":"agent-y"}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update -f json --fields results,summary)
+assert_contains "batch update --fields has results" '"results"' "$OUT"
+assert_contains "batch update --fields has summary" '"summary"' "$OUT"
+# Verify 'action' key is filtered out
+HAS_ACTION=$(echo "$OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print('action' in d)")
+assert_eq "batch update --fields filters action" "False" "$HAS_ACTION"
+
+# --fields on batch add
+BF_OUT=$(echo '[{"title":"Fields test"}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch add -f json --fields id,title)
+KEYS=$(echo "$BF_OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(sorted(d[0].keys()))")
+assert_eq "batch add --fields filters keys" "['id', 'title']" "$KEYS"
+
+# --fields on batch close
+BC_OUT=$(echo '[{"id":3}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch close -f json --fields results)
+HAS_SUMMARY=$(echo "$BC_OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print('summary' in d)")
+assert_eq "batch close --fields filters summary" "False" "$HAS_SUMMARY"
+
 rm -rf "$BU_DIR"
 
 # ─────────────────────────────────────────────

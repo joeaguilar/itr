@@ -153,7 +153,7 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
 
     match fmt {
         Format::Json => {
-            println!("{}", serde_json::to_string(&details)?);
+            format::println_json(&serde_json::to_string(&details)?);
         }
         _ => {
             for detail in &details {
