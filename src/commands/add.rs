@@ -1,9 +1,11 @@
+use crate::commands::build_issue_detail;
 use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
-use crate::models::{BatchAddInput, IssueDetail};
+use crate::models::BatchAddInput;
 use crate::normalize;
-use crate::urgency::{self, UrgencyConfig};
+use crate::urgency::UrgencyConfig;
+use crate::util;
 use rusqlite::Connection;
 use std::io::{self, Read};
 
@@ -67,32 +69,14 @@ pub fn run(
             value: String::new(),
             valid: "non-empty string".to_string(),
         })?;
-        let mut files_vec: Vec<String> = files
-            .map(|f| {
-                f.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let mut files_vec: Vec<String> =
+            files.as_deref().map(util::parse_comma_list).unwrap_or_default();
         files_vec.extend(file.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
-        let mut tags_vec: Vec<String> = tags
-            .map(|t| {
-                t.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let mut tags_vec: Vec<String> =
+            tags.as_deref().map(util::parse_comma_list).unwrap_or_default();
         tags_vec.extend(tag.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
-        let mut skills_vec: Vec<String> = skills
-            .map(|s| {
-                s.split(',')
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let mut skills_vec: Vec<String> =
+            skills.as_deref().map(util::parse_comma_list_lower).unwrap_or_default();
         skills_vec
             .extend(skill.into_iter().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()));
         let blocked_by_ids: Vec<i64> = blocked_by
@@ -174,24 +158,7 @@ pub fn run(
 
     // Build detail for output
     let config = UrgencyConfig::load(conn);
-    let (urg, breakdown) = urgency::compute_urgency_with_breakdown(&issue, &config, conn);
-    let blocked_by = db::get_blockers(conn, issue.id)?;
-    let blocks = db::get_blocking(conn, issue.id)?;
-    let is_blocked = db::is_blocked(conn, issue.id)?;
-    let notes = db::get_notes(conn, issue.id)?;
-
-    let detail = IssueDetail {
-        issue,
-        urgency: urg,
-        blocked_by,
-        blocks,
-        is_blocked,
-        notes,
-        urgency_breakdown: Some(breakdown),
-        children: None,
-        relations: vec![],
-    };
-
+    let detail = build_issue_detail(conn, issue, &config)?;
     println!("{}", format::format_issue_detail(&detail, fmt));
     Ok(())
 }

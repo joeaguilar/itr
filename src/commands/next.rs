@@ -1,7 +1,7 @@
+use crate::commands::build_issue_detail;
 use crate::db;
 use crate::error::{self, ItrError};
 use crate::format::{self, Format};
-use crate::models::IssueDetail;
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 use std::env;
@@ -84,24 +84,7 @@ pub fn run(
         }
     };
 
-    let (urg, breakdown) = urgency::compute_urgency_with_breakdown(&issue, &config, conn);
-    let blocked_by = db::get_blockers(conn, issue.id)?;
-    let blocks = db::get_blocking(conn, issue.id)?;
-    let is_blocked = db::is_blocked(conn, issue.id)?;
-    let notes = db::get_notes(conn, issue.id)?;
-
-    let detail = IssueDetail {
-        issue,
-        urgency: urg,
-        blocked_by,
-        blocks,
-        is_blocked,
-        notes,
-        urgency_breakdown: Some(breakdown),
-        children: None,
-        relations: vec![],
-    };
-
+    let detail = build_issue_detail(conn, issue, &config)?;
     println!("{}", format::format_issue_detail(&detail, fmt));
     Ok(())
 }

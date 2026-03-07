@@ -1,10 +1,11 @@
 use crate::commands::add::{validate_kind, validate_priority, validate_status};
+use crate::commands::build_issue_detail;
 use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
-use crate::models::IssueDetail;
 use crate::normalize;
-use crate::urgency::{self, UrgencyConfig};
+use crate::urgency::UrgencyConfig;
+use crate::util;
 use rusqlite::Connection;
 
 #[allow(clippy::too_many_arguments)]
@@ -109,85 +110,44 @@ pub fn run(
 
     // Handle files
     if files.is_some() || !file.is_empty() {
-        let mut file_list: Vec<String> = files
-            .map(|f| {
-                f.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let mut file_list: Vec<String> =
+            files.as_deref().map(util::parse_comma_list).unwrap_or_default();
         file_list.extend(file.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
         let json = serde_json::to_string(&file_list)?;
         db::update_issue_field(conn, id, "files", &json)?;
     } else if !add_files.is_empty() || !remove_files.is_empty() {
-        let current_issue = db::get_issue(conn, id)?;
-        let mut current_files = current_issue.files.clone();
-        for f in &add_files {
-            if !current_files.contains(f) {
-                current_files.push(f.clone());
-            }
-        }
-        current_files.retain(|f| !remove_files.contains(f));
-        let json = serde_json::to_string(&current_files)?;
+        let current = db::get_issue(conn, id)?;
+        let updated = util::apply_tags(current.files, &add_files, &remove_files);
+        let json = serde_json::to_string(&updated)?;
         db::update_issue_field(conn, id, "files", &json)?;
     }
 
     // Handle tags
     if tags.is_some() || !tag.is_empty() {
-        let mut tag_list: Vec<String> = tags
-            .map(|t| {
-                t.split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let mut tag_list: Vec<String> =
+            tags.as_deref().map(util::parse_comma_list).unwrap_or_default();
         tag_list.extend(tag.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
         let json = serde_json::to_string(&tag_list)?;
         db::update_issue_field(conn, id, "tags", &json)?;
     } else if !add_tags.is_empty() || !remove_tags.is_empty() {
-        let current_issue = db::get_issue(conn, id)?;
-        let mut current_tags = current_issue.tags.clone();
-        for t in &add_tags {
-            if !current_tags.contains(t) {
-                current_tags.push(t.clone());
-            }
-        }
-        current_tags.retain(|t| !remove_tags.contains(t));
-        let json = serde_json::to_string(&current_tags)?;
+        let current = db::get_issue(conn, id)?;
+        let updated = util::apply_tags(current.tags, &add_tags, &remove_tags);
+        let json = serde_json::to_string(&updated)?;
         db::update_issue_field(conn, id, "tags", &json)?;
     }
 
     // Handle skills
     if skills.is_some() || !skill.is_empty() {
-        let mut skill_list: Vec<String> = skills
-            .map(|s| {
-                s.split(',')
-                    .map(|s| s.trim().to_lowercase())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let mut skill_list: Vec<String> =
+            skills.as_deref().map(util::parse_comma_list_lower).unwrap_or_default();
         skill_list
             .extend(skill.into_iter().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()));
         let json = serde_json::to_string(&skill_list)?;
         db::update_issue_field(conn, id, "skills", &json)?;
     } else if !add_skills.is_empty() || !remove_skills.is_empty() {
-        let current_issue = db::get_issue(conn, id)?;
-        let mut current_skills = current_issue.skills.clone();
-        for s in &add_skills {
-            let lowered = s.trim().to_lowercase();
-            if !lowered.is_empty() && !current_skills.contains(&lowered) {
-                current_skills.push(lowered);
-            }
-        }
-        let remove_lowered: Vec<String> = remove_skills
-            .iter()
-            .map(|s| s.trim().to_lowercase())
-            .collect();
-        current_skills.retain(|s| !remove_lowered.contains(s));
-        let json = serde_json::to_string(&current_skills)?;
+        let current = db::get_issue(conn, id)?;
+        let updated = util::apply_skills(current.skills, &add_skills, &remove_skills);
+        let json = serde_json::to_string(&updated)?;
         db::update_issue_field(conn, id, "skills", &json)?;
     }
 
@@ -212,23 +172,7 @@ pub fn run(
     // Re-read the updated issue
     let issue = db::get_issue(conn, id)?;
     let config = UrgencyConfig::load(conn);
-    let (urg, breakdown) = urgency::compute_urgency_with_breakdown(&issue, &config, conn);
-    let blocked_by = db::get_blockers(conn, issue.id)?;
-    let blocks = db::get_blocking(conn, issue.id)?;
-    let is_blocked = db::is_blocked(conn, issue.id)?;
-    let notes = db::get_notes(conn, issue.id)?;
-
-    let detail = IssueDetail {
-        issue: issue.clone(),
-        urgency: urg,
-        blocked_by,
-        blocks,
-        is_blocked,
-        notes,
-        urgency_breakdown: Some(breakdown),
-        children: None,
-        relations: vec![],
-    };
+    let detail = build_issue_detail(conn, issue.clone(), &config)?;
 
     // Check for newly unblocked issues
     let unblocked = if let Some(ref s) = status {

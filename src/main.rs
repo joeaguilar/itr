@@ -7,6 +7,7 @@ mod format;
 mod models;
 mod normalize;
 mod urgency;
+mod util;
 
 use clap::Parser;
 use cli::{BatchAction, BulkAction, Cli, Commands, ConfigAction};

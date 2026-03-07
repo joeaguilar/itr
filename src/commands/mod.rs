@@ -24,3 +24,36 @@ pub mod search;
 pub mod stats;
 pub mod update;
 pub mod upgrade;
+
+use crate::db;
+use crate::error::ItrError;
+use crate::models::{IssueDetail, Issue};
+use crate::urgency::{self, UrgencyConfig};
+use rusqlite::Connection;
+
+/// Build an `IssueDetail` for a single issue using standard DB lookups.
+/// `children` and `relations` default to empty — callers that need them set
+/// the fields on the returned struct afterward, or use the `get` handler directly.
+pub fn build_issue_detail(
+    conn: &Connection,
+    issue: Issue,
+    config: &UrgencyConfig,
+) -> Result<IssueDetail, ItrError> {
+    let (urgency, urgency_breakdown) =
+        urgency::compute_urgency_with_breakdown(&issue, config, conn);
+    let blocked_by = db::get_blockers(conn, issue.id)?;
+    let blocks = db::get_blocking(conn, issue.id)?;
+    let is_blocked = db::is_blocked(conn, issue.id)?;
+    let notes = db::get_notes(conn, issue.id)?;
+    Ok(IssueDetail {
+        issue,
+        urgency,
+        blocked_by,
+        blocks,
+        is_blocked,
+        notes,
+        urgency_breakdown: Some(urgency_breakdown),
+        children: None,
+        relations: vec![],
+    })
+}

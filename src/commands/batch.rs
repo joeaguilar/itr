@@ -1,13 +1,15 @@
 use crate::commands::add::{validate_kind, validate_priority, validate_status};
+use crate::commands::build_issue_detail;
 use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::{
     BatchAddInput, BatchCloseInput, BatchItemResult, BatchNoteInput, BatchResult, BatchSummary,
-    BatchUpdateInput, IssueDetail, UnblockedIssue,
+    BatchUpdateInput, UnblockedIssue,
 };
 use crate::normalize;
-use crate::urgency::{self, UrgencyConfig};
+use crate::urgency::UrgencyConfig;
+use crate::util;
 use rusqlite::Connection;
 use std::io::{self, Read};
 
@@ -132,23 +134,7 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     let mut results: Vec<BatchItemResult> = Vec::new();
     for (idx, id) in created_ids.iter().enumerate() {
         let issue = db::get_issue(conn, *id)?;
-        let (urg, breakdown) = urgency::compute_urgency_with_breakdown(&issue, &config, conn);
-        let blocked_by = db::get_blockers(conn, issue.id)?;
-        let blocks = db::get_blocking(conn, issue.id)?;
-        let is_blocked = db::is_blocked(conn, issue.id)?;
-        let notes = db::get_notes(conn, issue.id)?;
-
-        let detail = IssueDetail {
-            issue,
-            urgency: urg,
-            blocked_by,
-            blocks,
-            is_blocked,
-            notes,
-            urgency_breakdown: Some(breakdown),
-            children: None,
-            relations: vec![],
-        };
+        let detail = build_issue_detail(conn, issue, &config)?;
 
         let review_notes = &item_review_notes[idx];
         let outcome = if review_notes.is_empty() {
@@ -381,34 +367,16 @@ pub fn run_update(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), I
         // Handle add_tags / remove_tags
         if !item.add_tags.is_empty() || !item.remove_tags.is_empty() {
             let current = db::get_issue(&tx, item.id)?;
-            let mut tags = current.tags.clone();
-            for t in &item.add_tags {
-                if !tags.contains(t) {
-                    tags.push(t.clone());
-                }
-            }
-            tags.retain(|t| !item.remove_tags.contains(t));
-            let json = serde_json::to_string(&tags)?;
+            let updated = util::apply_tags(current.tags, &item.add_tags, &item.remove_tags);
+            let json = serde_json::to_string(&updated)?;
             db::update_issue_field(&tx, item.id, "tags", &json)?;
         }
 
         // Handle add_skills / remove_skills
         if !item.add_skills.is_empty() || !item.remove_skills.is_empty() {
             let current = db::get_issue(&tx, item.id)?;
-            let mut skills = current.skills.clone();
-            for s in &item.add_skills {
-                let lowered = s.trim().to_lowercase();
-                if !lowered.is_empty() && !skills.contains(&lowered) {
-                    skills.push(lowered);
-                }
-            }
-            let remove_lowered: Vec<String> = item
-                .remove_skills
-                .iter()
-                .map(|s| s.trim().to_lowercase())
-                .collect();
-            skills.retain(|s| !remove_lowered.contains(s));
-            let json = serde_json::to_string(&skills)?;
+            let updated = util::apply_skills(current.skills, &item.add_skills, &item.remove_skills);
+            let json = serde_json::to_string(&updated)?;
             db::update_issue_field(&tx, item.id, "skills", &json)?;
         }
 
