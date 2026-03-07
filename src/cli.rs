@@ -375,6 +375,9 @@ pub enum Commands {
     /// Claim the highest-urgency unblocked issue (shorthand for next --claim)
     #[command(visible_alias = "start")]
     Claim {
+        /// Optional issue ID to claim directly
+        id: Option<i64>,
+
         /// Filter by skill (repeatable, AND logic)
         #[arg(long)]
         skill: Vec<String>,

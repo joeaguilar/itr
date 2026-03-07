@@ -243,7 +243,7 @@ fn run_command(
             skill,
             agent,
             assigned_to,
-        } => commands::next::run(conn, claim, skill, agent, assigned_to, fmt),
+        } => commands::next::run(conn, claim, None, skill, agent, assigned_to, fmt),
 
         Commands::Ready {
             limit,
@@ -362,10 +362,11 @@ fn run_command(
         ),
 
         Commands::Claim {
+            id,
             skill,
             agent,
             assigned_to,
-        } => commands::next::run(conn, true, skill, agent, assigned_to, fmt),
+        } => commands::next::run(conn, true, id, skill, agent, assigned_to, fmt),
 
         Commands::Assign { id, agent } => commands::assign::run_assign(conn, id, &agent, fmt),
 
