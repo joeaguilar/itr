@@ -17,9 +17,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Full history for git describe and log
+          fetch-tags: true
 
       - name: Determine version bump and create tag
         run: |
+          # Ensure all tags are available
+          git fetch --tags --force
+
           # Get the latest version tag
           LATEST_TAG=$(git tag -l 'v*' --sort=-version:refname | head -1)
           if [ -z "$LATEST_TAG" ]; then
