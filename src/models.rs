@@ -248,6 +248,8 @@ pub struct BatchItemResult {
     pub notes: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unblocked: Vec<UnblockedIssue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub issue: Option<IssueDetail>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

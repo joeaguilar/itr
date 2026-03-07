@@ -342,10 +342,11 @@ BATCH_OUT=$(echo '[
   {"title":"Batch issue 2","priority":"medium","kind":"task"},
   {"title":"Batch issue 3","blocked_by":["@0","@1"],"acceptance":"tests pass"}
 ]' | $ITR batch add -f json)
-BATCH_COUNT=$(jq_val "$BATCH_OUT" "len(d)")
+BATCH_COUNT=$(jq_val "$BATCH_OUT" "len(d['results'])")
 assert_eq "batch creates 3 issues" "3" "$BATCH_COUNT"
+assert_eq "batch add action" "batch_add" "$(jq_val "$BATCH_OUT" "d['action']")"
 
-BATCH_LAST_BLOCKED=$(jq_val "$BATCH_OUT" "d[2]['is_blocked']")
+BATCH_LAST_BLOCKED=$(jq_val "$BATCH_OUT" "d['results'][2]['issue']['is_blocked']")
 assert_eq "batch @ref creates dependency" "True" "$BATCH_LAST_BLOCKED"
 
 # ─────────────────────────────────────────────
@@ -354,9 +355,9 @@ echo "--- batch add soft fallback ---"
 
 # Invalid priority should succeed with soft fallback (_needs_review tag)
 BATCH_SOFT=$(echo '[{"title":"Good"},{"title":"Bad","priority":"invalid_p"}]' | $ITR batch add -f json)
-BATCH_SOFT_COUNT=$(jq_val "$BATCH_SOFT" "len(d)")
+BATCH_SOFT_COUNT=$(jq_val "$BATCH_SOFT" "len(d['results'])")
 assert_eq "batch soft fallback creates both" "2" "$BATCH_SOFT_COUNT"
-BATCH_SOFT_TAG=$(jq_val "$BATCH_SOFT" "'_needs_review' in d[1].get('tags', [])")
+BATCH_SOFT_TAG=$(jq_val "$BATCH_SOFT" "'_needs_review' in d['results'][1]['issue'].get('tags', [])")
 assert_eq "batch soft fallback adds _needs_review" "True" "$BATCH_SOFT_TAG"
 
 # ─────────────────────────────────────────────
@@ -1118,10 +1119,10 @@ assert_contains "batch update --fields has summary" '"summary"' "$OUT"
 HAS_ACTION=$(echo "$OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print('action' in d)")
 assert_eq "batch update --fields filters action" "False" "$HAS_ACTION"
 
-# --fields on batch add
-BF_OUT=$(echo '[{"title":"Fields test"}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch add -f json --fields id,title)
-KEYS=$(echo "$BF_OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(sorted(d[0].keys()))")
-assert_eq "batch add --fields filters keys" "['id', 'title']" "$KEYS"
+# --fields on batch add (envelope format)
+BF_OUT=$(echo '[{"title":"Fields test"}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch add -f json --fields action,results)
+KEYS=$(echo "$BF_OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(sorted(d.keys()))")
+assert_eq "batch add --fields filters keys" "['action', 'results']" "$KEYS"
 
 # --fields on batch close
 BC_OUT=$(echo '[{"id":3}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch close -f json --fields results)

@@ -127,10 +127,10 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
 
     tx.commit()?;
 
-    // Output created issues
+    // Build results with issue details
     let config = UrgencyConfig::load(conn);
-    let mut details: Vec<IssueDetail> = Vec::new();
-    for id in &created_ids {
+    let mut results: Vec<BatchItemResult> = Vec::new();
+    for (idx, id) in created_ids.iter().enumerate() {
         let issue = db::get_issue(conn, *id)?;
         let (urg, breakdown) = urgency::compute_urgency_with_breakdown(&issue, &config, conn);
         let blocked_by = db::get_blockers(conn, issue.id)?;
@@ -138,7 +138,7 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
         let is_blocked = db::is_blocked(conn, issue.id)?;
         let notes = db::get_notes(conn, issue.id)?;
 
-        details.push(IssueDetail {
+        let detail = IssueDetail {
             issue,
             urgency: urg,
             blocked_by,
@@ -148,20 +148,33 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
             urgency_breakdown: Some(breakdown),
             children: None,
             relations: vec![],
+        };
+
+        let review_notes = &item_review_notes[idx];
+        let outcome = if review_notes.is_empty() {
+            "ok"
+        } else {
+            "review"
+        };
+
+        results.push(BatchItemResult {
+            id: *id,
+            outcome: outcome.to_string(),
+            error: None,
+            notes: review_notes.clone(),
+            unblocked: vec![],
+            issue: Some(detail),
         });
     }
 
-    match fmt {
-        Format::Json => {
-            format::println_json(&serde_json::to_string(&details)?);
-        }
-        _ => {
-            for detail in &details {
-                println!("{}", format::format_issue_detail(detail, fmt));
-                println!();
-            }
-        }
-    }
+    let summary = build_summary(&results);
+    let batch_result = BatchResult {
+        action: "batch_add".to_string(),
+        results,
+        summary,
+    };
+
+    println!("{}", format::format_batch_result(&batch_result, fmt));
 
     Ok(())
 }
@@ -187,6 +200,7 @@ pub fn run_close(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
                     error: Some(format!("Issue {} not found", item.id)),
                     notes: vec![],
                     unblocked: vec![],
+                    issue: None,
                 });
                 continue;
             }
@@ -201,6 +215,7 @@ pub fn run_close(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
                 error: None,
                 notes: vec![format!("Already {}", issue.status)],
                 unblocked: vec![],
+                issue: None,
             });
             continue;
         }
@@ -234,6 +249,7 @@ pub fn run_close(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
             error: None,
             notes: vec![],
             unblocked,
+            issue: None,
         });
     }
 
@@ -272,6 +288,7 @@ pub fn run_update(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
                     error: Some(format!("Issue {} not found", item.id)),
                     notes: vec![],
                     unblocked: vec![],
+                    issue: None,
                 });
                 continue;
             }
@@ -422,6 +439,7 @@ pub fn run_update(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
             error: None,
             notes: review_notes,
             unblocked,
+            issue: None,
         });
     }
 
