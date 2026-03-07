@@ -15,8 +15,11 @@ pub fn run(
     kind: &str,
     context: Option<String>,
     files: Option<String>,
+    file: Vec<String>,
     tags: Option<String>,
+    tag: Vec<String>,
     skills: Option<String>,
+    skill: Vec<String>,
     acceptance: Option<String>,
     blocked_by: Option<String>,
     parent: Option<i64>,
@@ -64,30 +67,34 @@ pub fn run(
             value: String::new(),
             valid: "non-empty string".to_string(),
         })?;
-        let files_vec: Vec<String> = files
+        let mut files_vec: Vec<String> = files
             .map(|f| {
                 f.split(',')
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
-                    .collect()
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let tags_vec: Vec<String> = tags
+        files_vec.extend(file.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+        let mut tags_vec: Vec<String> = tags
             .map(|t| {
                 t.split(',')
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
-                    .collect()
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let skills_vec: Vec<String> = skills
+        tags_vec.extend(tag.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+        let mut skills_vec: Vec<String> = skills
             .map(|s| {
                 s.split(',')
                     .map(|s| s.trim().to_lowercase())
                     .filter(|s| !s.is_empty())
-                    .collect()
+                    .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        skills_vec
+            .extend(skill.into_iter().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()));
         let blocked_by_ids: Vec<i64> = blocked_by
             .map(|b| {
                 b.split(',')

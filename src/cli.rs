@@ -54,13 +54,25 @@ pub enum Commands {
         #[arg(long)]
         files: Option<String>,
 
+        /// File path (repeatable)
+        #[arg(long)]
+        file: Vec<String>,
+
         /// Comma-separated tags
-        #[arg(short, long, visible_alias = "tag")]
+        #[arg(short, long)]
         tags: Option<String>,
+
+        /// Tag (repeatable)
+        #[arg(long)]
+        tag: Vec<String>,
 
         /// Comma-separated skills (agent capabilities required)
         #[arg(long)]
         skills: Option<String>,
+
+        /// Skill (repeatable)
+        #[arg(long)]
+        skill: Vec<String>,
 
         /// Acceptance criteria
         #[arg(short, long)]
@@ -169,13 +181,25 @@ pub enum Commands {
         #[arg(long)]
         files: Option<String>,
 
+        /// Replace file (repeatable)
+        #[arg(long)]
+        file: Vec<String>,
+
         /// Replace tags list (comma-separated)
-        #[arg(short, long, visible_alias = "tag")]
+        #[arg(short, long)]
         tags: Option<String>,
+
+        /// Replace tag (repeatable)
+        #[arg(long)]
+        tag: Vec<String>,
 
         /// Replace skills list (comma-separated)
         #[arg(long)]
         skills: Option<String>,
+
+        /// Replace skill (repeatable)
+        #[arg(long)]
+        skill: Vec<String>,
 
         /// Replace acceptance criteria
         #[arg(short, long)]

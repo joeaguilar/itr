@@ -17,8 +17,11 @@ pub fn run(
     title: Option<String>,
     context: Option<String>,
     files: Option<String>,
+    file: Vec<String>,
     tags: Option<String>,
+    tag: Vec<String>,
     skills: Option<String>,
+    skill: Vec<String>,
     acceptance: Option<String>,
     parent: Option<i64>,
     assigned_to: Option<String>,
@@ -105,12 +108,16 @@ pub fn run(
     }
 
     // Handle files
-    if let Some(ref f) = files {
-        let file_list: Vec<String> = f
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+    if files.is_some() || !file.is_empty() {
+        let mut file_list: Vec<String> = files
+            .map(|f| {
+                f.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        file_list.extend(file.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
         let json = serde_json::to_string(&file_list)?;
         db::update_issue_field(conn, id, "files", &json)?;
     } else if !add_files.is_empty() || !remove_files.is_empty() {
@@ -127,12 +134,16 @@ pub fn run(
     }
 
     // Handle tags
-    if let Some(ref t) = tags {
-        let tag_list: Vec<String> = t
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+    if tags.is_some() || !tag.is_empty() {
+        let mut tag_list: Vec<String> = tags
+            .map(|t| {
+                t.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        tag_list.extend(tag.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
         let json = serde_json::to_string(&tag_list)?;
         db::update_issue_field(conn, id, "tags", &json)?;
     } else if !add_tags.is_empty() || !remove_tags.is_empty() {
@@ -149,12 +160,17 @@ pub fn run(
     }
 
     // Handle skills
-    if let Some(ref s) = skills {
-        let skill_list: Vec<String> = s
-            .split(',')
-            .map(|s| s.trim().to_lowercase())
-            .filter(|s| !s.is_empty())
-            .collect();
+    if skills.is_some() || !skill.is_empty() {
+        let mut skill_list: Vec<String> = skills
+            .map(|s| {
+                s.split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        skill_list
+            .extend(skill.into_iter().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()));
         let json = serde_json::to_string(&skill_list)?;
         db::update_issue_field(conn, id, "skills", &json)?;
     } else if !add_skills.is_empty() || !remove_skills.is_empty() {
