@@ -59,11 +59,11 @@ pub enum Commands {
         file: Vec<String>,
 
         /// Comma-separated tags
-        #[arg(short, long)]
+        #[arg(long)]
         tags: Option<String>,
 
         /// Tag (repeatable)
-        #[arg(long)]
+        #[arg(short, long)]
         tag: Vec<String>,
 
         /// Comma-separated skills (agent capabilities required)
@@ -75,7 +75,7 @@ pub enum Commands {
         skill: Vec<String>,
 
         /// Acceptance criteria
-        #[arg(short, long)]
+        #[arg(short, long, allow_hyphen_values = true)]
         acceptance: Option<String>,
 
         /// Comma-separated issue IDs this depends on
@@ -186,11 +186,11 @@ pub enum Commands {
         file: Vec<String>,
 
         /// Replace tags list (comma-separated)
-        #[arg(short, long)]
+        #[arg(long)]
         tags: Option<String>,
 
         /// Replace tag (repeatable)
-        #[arg(long)]
+        #[arg(short, long)]
         tag: Vec<String>,
 
         /// Replace skills list (comma-separated)
@@ -202,7 +202,7 @@ pub enum Commands {
         skill: Vec<String>,
 
         /// Replace acceptance criteria
-        #[arg(short, long)]
+        #[arg(short, long, allow_hyphen_values = true)]
         acceptance: Option<String>,
 
         /// Set parent epic
@@ -269,6 +269,7 @@ pub enum Commands {
     },
 
     /// Add a dependency (issue becomes blocked by --on)
+    #[command(visible_alias = "deps")]
     Depend {
         /// Issue ID that will be blocked
         id: i64,

@@ -1241,6 +1241,56 @@ assert_eq "sub-agent final status done" "done" "$(jq_val "$OUT" "d['status']")"
 rm -rf "$SA_DIR"
 
 # ─────────────────────────────────────────────
+# Known bugs — these tests document expected behavior once fixed
+# ─────────────────────────────────────────────
+echo ""
+echo "--- Known Bug Tests (documenting expected behavior) ---"
+
+# Bug #42: `itr deps` should soft-fallback to `depend` (or show helpful error)
+# Currently exits 2 with clap error "unrecognized subcommand 'deps'"
+BUG_DIR=$(mktemp -d)
+$ITR init --db "$BUG_DIR/.itr.db" > /dev/null
+ID1=$($ITR add "dep test 1" --db "$BUG_DIR/.itr.db" -f json | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+ID2=$($ITR add "dep test 2" --db "$BUG_DIR/.itr.db" -f json | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+OUT=$($ITR --db "$BUG_DIR/.itr.db" depend "$ID1" --on "$ID2" 2>&1) || true
+assert_contains "bug42: 'depend' command works" "blocked by" "$OUT"
+# The actual bug: 'deps' should also work as an alias
+DEPS_EXIT=0
+DEPS_OUT=$($ITR --db "$BUG_DIR/.itr.db" deps "$ID1" --on "$ID2" 2>&1) || DEPS_EXIT=$?
+if [ "$DEPS_EXIT" -eq 0 ]; then
+    pass "bug42: 'deps' alias for depend works"
+else
+    fail "bug42: 'deps' alias not recognized (issue #42)" "exit code $DEPS_EXIT"
+fi
+rm -rf "$BUG_DIR"
+
+# Bug #43/#46: `-t tag1 -t tag2` should allow repeated -t for multiple tags
+# Currently fails: "cannot be used multiple times" because -t is short for --tags (Option<String>)
+BUG_DIR=$(mktemp -d)
+$ITR init --db "$BUG_DIR/.itr.db" > /dev/null
+TAG_EXIT=0
+TAG_OUT=$($ITR --db "$BUG_DIR/.itr.db" add "multi tag test" -t bug -t test 2>&1) || TAG_EXIT=$?
+if [ "$TAG_EXIT" -eq 0 ]; then
+    pass "bug43: -t flag repeated for multiple tags"
+else
+    fail "bug43: -t repeated use fails (issue #43)" "exit code $TAG_EXIT"
+fi
+rm -rf "$BUG_DIR"
+
+# Bug #45: dash-prefixed values for --acceptance should be accepted
+# Currently clap interprets the dash-prefixed value as a flag
+BUG_DIR=$(mktemp -d)
+$ITR init --db "$BUG_DIR/.itr.db" > /dev/null
+ACC_EXIT=0
+ACC_OUT=$($ITR --db "$BUG_DIR/.itr.db" add "acceptance test" --acceptance "-t flag works correctly" 2>&1) || ACC_EXIT=$?
+if [ "$ACC_EXIT" -eq 0 ]; then
+    pass "bug45: --acceptance accepts dash-prefixed values"
+else
+    fail "bug45: --acceptance rejects dash-prefixed values (issue #45)" "exit code $ACC_EXIT"
+fi
+rm -rf "$BUG_DIR"
+
+# ─────────────────────────────────────────────
 echo ""
 echo "==============================="
 echo "Results: $PASS passed, $FAIL failed"
