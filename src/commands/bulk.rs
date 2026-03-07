@@ -65,8 +65,11 @@ pub fn run_close(
     if !dry_run {
         let tx = conn.unchecked_transaction()?;
         for id in &ids {
+            let old_issue = db::get_issue(&tx, *id)?;
+            db::record_event(&tx, *id, "status", &old_issue.status, close_status)?;
             db::update_issue_field(&tx, *id, "status", close_status)?;
             if !reason.is_empty() {
+                db::record_event(&tx, *id, "close_reason", &old_issue.close_reason, &reason)?;
                 db::update_issue_field(&tx, *id, "close_reason", &reason)?;
             }
             let unblocked = db::get_newly_unblocked(&tx, *id)?;
@@ -151,21 +154,25 @@ pub fn run_update(
     if !dry_run {
         let tx = conn.unchecked_transaction()?;
         for id in &ids {
+            let old_issue = db::get_issue(&tx, *id)?;
             if let Some(ref s) = set_status {
                 let s = normalize::normalize_status(s);
+                db::record_event(&tx, *id, "status", &old_issue.status, &s)?;
                 db::update_issue_field(&tx, *id, "status", &s)?;
             }
             if let Some(ref p) = set_priority {
                 let p = normalize::normalize_priority(p);
+                db::record_event(&tx, *id, "priority", &old_issue.priority, &p)?;
                 db::update_issue_field(&tx, *id, "priority", &p)?;
             }
             if let Some(ref new_tag) = add_tag {
-                let issue = db::get_issue(&tx, *id)?;
-                let mut current_tags = issue.tags.clone();
+                let mut current_tags = old_issue.tags.clone();
                 if !current_tags.contains(new_tag) {
+                    let old_json = serde_json::to_string(&current_tags)?;
                     current_tags.push(new_tag.clone());
-                    let json = serde_json::to_string(&current_tags)?;
-                    db::update_issue_field(&tx, *id, "tags", &json)?;
+                    let new_json = serde_json::to_string(&current_tags)?;
+                    db::record_event(&tx, *id, "tags", &old_json, &new_json)?;
+                    db::update_issue_field(&tx, *id, "tags", &new_json)?;
                 }
             }
         }

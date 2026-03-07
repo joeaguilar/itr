@@ -1,8 +1,8 @@
+use crate::commands::build_issue_detail;
 use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
-use crate::models::IssueDetail;
-use crate::urgency::{self, UrgencyConfig};
+use crate::urgency::UrgencyConfig;
 use rusqlite::Connection;
 
 pub fn run_assign(conn: &Connection, id: i64, agent: &str, fmt: Format) -> Result<(), ItrError> {
@@ -35,24 +35,7 @@ pub fn run_unassign(conn: &Connection, id: i64, fmt: Format) -> Result<(), ItrEr
 fn print_detail(conn: &Connection, id: i64, fmt: Format) -> Result<(), ItrError> {
     let issue = db::get_issue(conn, id)?;
     let config = UrgencyConfig::load(conn);
-    let (urg, breakdown) = urgency::compute_urgency_with_breakdown(&issue, &config, conn);
-    let blocked_by = db::get_blockers(conn, issue.id)?;
-    let blocks = db::get_blocking(conn, issue.id)?;
-    let is_blocked = db::is_blocked(conn, issue.id)?;
-    let notes = db::get_notes(conn, issue.id)?;
-
-    let detail = IssueDetail {
-        issue,
-        urgency: urg,
-        blocked_by,
-        blocks,
-        is_blocked,
-        notes,
-        urgency_breakdown: Some(breakdown),
-        children: None,
-        relations: vec![],
-    };
-
+    let detail = build_issue_detail(conn, issue, &config)?;
     println!("{}", format::format_issue_detail(&detail, fmt));
     Ok(())
 }

@@ -54,7 +54,11 @@ pub fn run_get(conn: &Connection, key: &str, fmt: Format) -> Result<(), ItrError
             match defaults.iter().find(|(k, _)| *k == key) {
                 Some((_, v)) => format!("{}", v),
                 None => {
-                    return Err(ItrError::NotFound(-1));
+                    return Err(ItrError::InvalidValue {
+                        field: "config key".to_string(),
+                        value: key.to_string(),
+                        valid: "Use 'itr config list' to see available keys".to_string(),
+                    });
                 }
             }
         }

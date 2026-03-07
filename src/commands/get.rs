@@ -1,3 +1,4 @@
+use super::build_issue_summary;
 use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
@@ -31,26 +32,7 @@ pub fn run(conn: &Connection, id: i64, fmt: Format) -> Result<(), ItrError> {
         )?;
         let child_summaries: Vec<IssueSummary> = child_issues
             .iter()
-            .map(|i| {
-                let u = urgency::compute_urgency(i, &config, conn);
-                let bb = db::get_blockers(conn, i.id).unwrap_or_default();
-                let ib = db::is_blocked(conn, i.id).unwrap_or(false);
-                IssueSummary {
-                    id: i.id,
-                    title: i.title.clone(),
-                    status: i.status.clone(),
-                    priority: i.priority.clone(),
-                    kind: i.kind.clone(),
-                    urgency: u,
-                    is_blocked: ib,
-                    blocked_by: bb,
-                    tags: i.tags.clone(),
-                    files: i.files.clone(),
-                    skills: i.skills.clone(),
-                    acceptance: i.acceptance.clone(),
-                    assigned_to: i.assigned_to.clone(),
-                }
-            })
+            .map(|i| build_issue_summary(conn, i, &config))
             .collect();
         if child_summaries.is_empty() {
             None

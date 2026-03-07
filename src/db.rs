@@ -217,25 +217,7 @@ pub fn get_issue(conn: &Connection, id: i64) -> Result<Issue, ItrError> {
         "SELECT id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at, assigned_to
          FROM issues WHERE id = ?1",
         params![id],
-        |row| {
-            Ok(Issue {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                status: row.get(2)?,
-                priority: row.get(3)?,
-                kind: row.get(4)?,
-                context: row.get(5)?,
-                files: parse_json_array(row.get::<_, String>(6)?),
-                tags: parse_json_array(row.get::<_, String>(7)?),
-                skills: parse_json_array(row.get::<_, String>(8)?),
-                acceptance: row.get(9)?,
-                parent_id: row.get(10)?,
-                close_reason: row.get(11)?,
-                created_at: row.get(12)?,
-                updated_at: row.get(13)?,
-                assigned_to: row.get(14)?,
-            })
-        },
+        row_to_issue,
     )
     .map_err(|e| match e {
         rusqlite::Error::QueryReturnedNoRows => ItrError::NotFound(id),
@@ -254,6 +236,58 @@ pub fn issue_exists(conn: &Connection, id: i64) -> Result<bool, ItrError> {
 
 fn parse_json_array(s: String) -> Vec<String> {
     serde_json::from_str(&s).unwrap_or_default()
+}
+
+fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
+    Ok(Issue {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        status: row.get(2)?,
+        priority: row.get(3)?,
+        kind: row.get(4)?,
+        context: row.get(5)?,
+        files: parse_json_array(row.get::<_, String>(6)?),
+        tags: parse_json_array(row.get::<_, String>(7)?),
+        skills: parse_json_array(row.get::<_, String>(8)?),
+        acceptance: row.get(9)?,
+        parent_id: row.get(10)?,
+        close_reason: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+        assigned_to: row.get(14)?,
+    })
+}
+
+fn row_to_note(row: &rusqlite::Row) -> rusqlite::Result<Note> {
+    Ok(Note {
+        id: row.get(0)?,
+        issue_id: row.get(1)?,
+        content: row.get(2)?,
+        agent: row.get(3)?,
+        created_at: row.get(4)?,
+    })
+}
+
+fn row_to_event(row: &rusqlite::Row) -> rusqlite::Result<Event> {
+    Ok(Event {
+        id: row.get(0)?,
+        issue_id: row.get(1)?,
+        field: row.get(2)?,
+        old_value: row.get(3)?,
+        new_value: row.get(4)?,
+        agent: row.get(5)?,
+        created_at: row.get(6)?,
+    })
+}
+
+fn row_to_relation(row: &rusqlite::Row) -> rusqlite::Result<Relation> {
+    Ok(Relation {
+        id: row.get(0)?,
+        source_id: row.get(1)?,
+        target_id: row.get(2)?,
+        relation_type: row.get(3)?,
+        created_at: row.get(4)?,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -335,25 +369,7 @@ pub fn list_issues(
         param_values.iter().map(|b| b.as_ref()).collect();
     let mut stmt = conn.prepare(&sql)?;
     let issues: Vec<Issue> = stmt
-        .query_map(params_ref.as_slice(), |row| {
-            Ok(Issue {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                status: row.get(2)?,
-                priority: row.get(3)?,
-                kind: row.get(4)?,
-                context: row.get(5)?,
-                files: parse_json_array(row.get::<_, String>(6)?),
-                tags: parse_json_array(row.get::<_, String>(7)?),
-                skills: parse_json_array(row.get::<_, String>(8)?),
-                acceptance: row.get(9)?,
-                parent_id: row.get(10)?,
-                close_reason: row.get(11)?,
-                created_at: row.get(12)?,
-                updated_at: row.get(13)?,
-                assigned_to: row.get(14)?,
-            })
-        })?
+        .query_map(params_ref.as_slice(), row_to_issue)?
         .collect::<Result<Vec<_>, _>>()?;
 
     // Filter by tags (AND logic)
@@ -400,6 +416,17 @@ pub fn update_issue_field(
     field: &str,
     value: &str,
 ) -> Result<(), ItrError> {
+    const VALID_COLUMNS: &[&str] = &[
+        "title", "status", "priority", "kind", "context", "files", "tags",
+        "skills", "acceptance", "close_reason", "assigned_to",
+    ];
+    if !VALID_COLUMNS.contains(&field) {
+        return Err(ItrError::InvalidValue {
+            field: "column".to_string(),
+            value: field.to_string(),
+            valid: VALID_COLUMNS.join(", "),
+        });
+    }
     if !issue_exists(conn, id)? {
         return Err(ItrError::NotFound(id));
     }
@@ -494,7 +521,7 @@ pub fn remove_dependency(
 
 /// Check if there's a path from `from_id` to `to_id` following blocker edges.
 /// i.e., `from_id` is blocked by X, X is blocked by Y, ... eventually reaches `to_id`.
-fn has_path(conn: &Connection, from_id: i64, to_id: i64) -> Result<bool, ItrError> {
+pub fn has_path(conn: &Connection, from_id: i64, to_id: i64) -> Result<bool, ItrError> {
     let mut visited = std::collections::HashSet::new();
     let mut queue = std::collections::VecDeque::new();
     queue.push_back(from_id);
@@ -603,15 +630,7 @@ pub fn add_note(
     conn.query_row(
         "SELECT id, issue_id, content, agent, created_at FROM notes WHERE id = ?1",
         params![id],
-        |row| {
-            Ok(Note {
-                id: row.get(0)?,
-                issue_id: row.get(1)?,
-                content: row.get(2)?,
-                agent: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        },
+        row_to_note,
     )
     .map_err(ItrError::Db)
 }
@@ -621,15 +640,7 @@ pub fn get_notes(conn: &Connection, issue_id: i64) -> Result<Vec<Note>, ItrError
         "SELECT id, issue_id, content, agent, created_at FROM notes WHERE issue_id = ?1 ORDER BY created_at ASC",
     )?;
     let notes: Vec<Note> = stmt
-        .query_map(params![issue_id], |row| {
-            Ok(Note {
-                id: row.get(0)?,
-                issue_id: row.get(1)?,
-                content: row.get(2)?,
-                agent: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })?
+        .query_map(params![issue_id], row_to_note)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(notes)
 }
@@ -780,25 +791,7 @@ pub fn all_issues(conn: &Connection) -> Result<Vec<Issue>, ItrError> {
          FROM issues ORDER BY id",
     )?;
     let issues: Vec<Issue> = stmt
-        .query_map([], |row| {
-            Ok(Issue {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                status: row.get(2)?,
-                priority: row.get(3)?,
-                kind: row.get(4)?,
-                context: row.get(5)?,
-                files: parse_json_array(row.get::<_, String>(6)?),
-                tags: parse_json_array(row.get::<_, String>(7)?),
-                skills: parse_json_array(row.get::<_, String>(8)?),
-                acceptance: row.get(9)?,
-                parent_id: row.get(10)?,
-                close_reason: row.get(11)?,
-                created_at: row.get(12)?,
-                updated_at: row.get(13)?,
-                assigned_to: row.get(14)?,
-            })
-        })?
+        .query_map([], row_to_issue)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(issues)
 }
@@ -816,15 +809,7 @@ pub fn all_notes(conn: &Connection) -> Result<Vec<Note>, ItrError> {
     let mut stmt =
         conn.prepare("SELECT id, issue_id, content, agent, created_at FROM notes ORDER BY id")?;
     let notes: Vec<Note> = stmt
-        .query_map([], |row| {
-            Ok(Note {
-                id: row.get(0)?,
-                issue_id: row.get(1)?,
-                content: row.get(2)?,
-                agent: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })?
+        .query_map([], row_to_note)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(notes)
 }
@@ -853,17 +838,7 @@ pub fn get_events_for_issue(conn: &Connection, issue_id: i64) -> Result<Vec<Even
          FROM events WHERE issue_id = ?1 ORDER BY created_at ASC",
     )?;
     let events: Vec<Event> = stmt
-        .query_map(params![issue_id], |row| {
-            Ok(Event {
-                id: row.get(0)?,
-                issue_id: row.get(1)?,
-                field: row.get(2)?,
-                old_value: row.get(3)?,
-                new_value: row.get(4)?,
-                agent: row.get(5)?,
-                created_at: row.get(6)?,
-            })
-        })?
+        .query_map(params![issue_id], row_to_event)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(events)
 }
@@ -893,17 +868,7 @@ pub fn get_recent_events(
         param_values.iter().map(|b| b.as_ref()).collect();
     let mut stmt = conn.prepare(&sql)?;
     let events: Vec<Event> = stmt
-        .query_map(params_ref.as_slice(), |row| {
-            Ok(Event {
-                id: row.get(0)?,
-                issue_id: row.get(1)?,
-                field: row.get(2)?,
-                old_value: row.get(3)?,
-                new_value: row.get(4)?,
-                agent: row.get(5)?,
-                created_at: row.get(6)?,
-            })
-        })?
+        .query_map(params_ref.as_slice(), row_to_event)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(events)
 }
@@ -990,15 +955,7 @@ pub fn get_relations(conn: &Connection, issue_id: i64) -> Result<Vec<Relation>, 
          ORDER BY created_at ASC",
     )?;
     let relations: Vec<Relation> = stmt
-        .query_map(params![issue_id], |row| {
-            Ok(Relation {
-                id: row.get(0)?,
-                source_id: row.get(1)?,
-                target_id: row.get(2)?,
-                relation_type: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })?
+        .query_map(params![issue_id], row_to_relation)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(relations)
 }
@@ -1009,15 +966,7 @@ pub fn all_relations(conn: &Connection) -> Result<Vec<Relation>, ItrError> {
          FROM relations ORDER BY id",
     )?;
     let relations: Vec<Relation> = stmt
-        .query_map([], |row| {
-            Ok(Relation {
-                id: row.get(0)?,
-                source_id: row.get(1)?,
-                target_id: row.get(2)?,
-                relation_type: row.get(3)?,
-                created_at: row.get(4)?,
-            })
-        })?
+        .query_map([], row_to_relation)?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(relations)
 }

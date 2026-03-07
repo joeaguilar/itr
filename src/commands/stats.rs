@@ -3,6 +3,7 @@ use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::{OldestOpen, Stats};
 use crate::urgency::{self, UrgencyConfig};
+use crate::util;
 use rusqlite::Connection;
 use std::collections::HashMap;
 
@@ -61,7 +62,7 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
 
             // Track oldest open
             if issue.status == "open" {
-                let days = days_since_created(&issue.created_at);
+                let days = util::days_since(&issue.created_at) as i64;
                 match &oldest_open {
                     None => {
                         oldest_open = Some(OldestOpen {
@@ -107,13 +108,3 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     Ok(())
 }
 
-fn days_since_created(iso_date: &str) -> i64 {
-    use chrono::{NaiveDateTime, Utc};
-    match NaiveDateTime::parse_from_str(iso_date, "%Y-%m-%dT%H:%M:%SZ") {
-        Ok(dt) => {
-            let now = Utc::now().naive_utc();
-            now.signed_duration_since(dt).num_days()
-        }
-        Err(_) => 0,
-    }
-}

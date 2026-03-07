@@ -1,5 +1,6 @@
 use crate::db;
 use crate::models::{Issue, UrgencyBreakdown};
+use crate::util;
 use rusqlite::Connection;
 
 pub struct UrgencyConfig {
@@ -44,7 +45,6 @@ impl UrgencyConfig {
     pub fn load(conn: &Connection) -> Self {
         let mut config = Self::default();
 
-        let keys: Vec<(&str, &mut f64)> = vec![];
         // We'll load each key individually since we can't easily iterate mut refs
         Self::load_key(
             conn,
@@ -65,7 +65,6 @@ impl UrgencyConfig {
         Self::load_key(conn, "urgency.in_progress", &mut config.in_progress);
         Self::load_key(conn, "urgency.notes_count", &mut config.notes_count);
 
-        drop(keys);
         config
     }
 
@@ -148,7 +147,7 @@ pub fn compute_urgency_with_breakdown(
     }
 
     // Age factor
-    let age_days = days_since(&issue.created_at);
+    let age_days = util::days_since(&issue.created_at);
     let age_factor = (age_days / 10.0).clamp(0.0, 1.0);
     let age_val = config.age * age_factor;
     score += age_val;
@@ -178,15 +177,3 @@ pub fn compute_urgency_with_breakdown(
     (score, UrgencyBreakdown { components })
 }
 
-fn days_since(iso_date: &str) -> f64 {
-    use chrono::{NaiveDateTime, Utc};
-    let parsed = NaiveDateTime::parse_from_str(iso_date, "%Y-%m-%dT%H:%M:%SZ");
-    match parsed {
-        Ok(dt) => {
-            let now = Utc::now().naive_utc();
-            let duration = now.signed_duration_since(dt);
-            duration.num_seconds() as f64 / 86400.0
-        }
-        Err(_) => 0.0,
-    }
-}

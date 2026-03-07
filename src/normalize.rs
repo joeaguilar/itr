@@ -29,3 +29,38 @@ pub fn normalize_status(s: &str) -> String {
         _ => s.to_lowercase(),
     }
 }
+
+use crate::error::ItrError;
+
+pub fn validate_priority(p: &str) -> Result<(), ItrError> {
+    match p {
+        "critical" | "high" | "medium" | "low" => Ok(()),
+        _ => Err(ItrError::InvalidValue {
+            field: "priority".to_string(),
+            value: p.to_string(),
+            valid: "critical, high, medium, low".to_string(),
+        }),
+    }
+}
+
+pub fn validate_kind(k: &str) -> Result<(), ItrError> {
+    match k {
+        "bug" | "feature" | "task" | "epic" => Ok(()),
+        _ => Err(ItrError::InvalidValue {
+            field: "kind".to_string(),
+            value: k.to_string(),
+            valid: "bug, feature, task, epic".to_string(),
+        }),
+    }
+}
+
+pub fn validate_status(s: &str) -> Result<(), ItrError> {
+    match s {
+        "open" | "in-progress" | "done" | "wontfix" => Ok(()),
+        _ => Err(ItrError::InvalidValue {
+            field: "status".to_string(),
+            value: s.to_string(),
+            valid: "open, in-progress, done, wontfix".to_string(),
+        }),
+    }
+}

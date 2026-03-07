@@ -1,8 +1,9 @@
+use super::build_issue_summary;
 use crate::db;
 use crate::error::{self, ItrError};
 use crate::format::{self, Format};
 use crate::models::IssueSummary;
-use crate::urgency::{self, UrgencyConfig};
+use crate::urgency::UrgencyConfig;
 use rusqlite::Connection;
 
 pub fn run(
@@ -42,25 +43,7 @@ pub fn run(
 
     let mut summaries: Vec<IssueSummary> = issues
         .iter()
-        .map(|i| {
-            let urg = urgency::compute_urgency(i, &config, conn);
-            let blocked_by = db::get_blockers(conn, i.id).unwrap_or_default();
-            IssueSummary {
-                id: i.id,
-                title: i.title.clone(),
-                status: i.status.clone(),
-                priority: i.priority.clone(),
-                kind: i.kind.clone(),
-                urgency: urg,
-                is_blocked: false, // by definition, ready issues are not blocked
-                blocked_by,
-                tags: i.tags.clone(),
-                files: i.files.clone(),
-                skills: i.skills.clone(),
-                acceptance: i.acceptance.clone(),
-                assigned_to: i.assigned_to.clone(),
-            }
-        })
+        .map(|i| build_issue_summary(conn, i, &config))
         .collect();
 
     // Sort by urgency descending

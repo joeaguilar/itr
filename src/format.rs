@@ -22,7 +22,7 @@ fn get_fields_filter() -> Option<Vec<String>> {
 /// Returns true if `name` should be included in output.
 /// When no --fields filter is set, all fields are included.
 fn field_enabled(fields: &Option<Vec<String>>, name: &str) -> bool {
-    fields.as_ref().map_or(true, |f| f.iter().any(|x| x == name))
+    fields.as_ref().is_none_or(|f| f.iter().any(|x| x == name))
 }
 
 /// Apply field filtering to a JSON string if --fields was set, returning the filtered string

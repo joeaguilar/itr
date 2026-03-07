@@ -132,8 +132,11 @@ pub fn run(conn: &Connection, fix: bool, fmt: Format) -> Result<(), ItrError> {
     if problems.is_empty() {
         Ok(())
     } else {
-        // Exit 1 for problems found
-        std::process::exit(1);
+        Err(ItrError::InvalidValue {
+            field: "doctor".to_string(),
+            value: format!("{} problems found", problems.len()),
+            valid: "Run 'itr doctor --fix' to auto-fix fixable issues".to_string(),
+        })
     }
 }
 
@@ -172,7 +175,7 @@ fn find_cycles(conn: &Connection) -> Result<Vec<String>, ItrError> {
 
     for (blocker, blocked) in &deps {
         // Check if blocked can reach blocker
-        if can_reach(conn, *blocked, *blocker)? {
+        if db::has_path(conn, *blocked, *blocker)? {
             let cycle_str = format!("{} -> ... -> {}", blocker, blocked);
             if !cycles.contains(&cycle_str) {
                 cycles.push(cycle_str);
@@ -182,27 +185,7 @@ fn find_cycles(conn: &Connection) -> Result<Vec<String>, ItrError> {
     Ok(cycles)
 }
 
-fn can_reach(conn: &Connection, from: i64, to: i64) -> Result<bool, ItrError> {
-    let mut visited = std::collections::HashSet::new();
-    let mut queue = std::collections::VecDeque::new();
-    queue.push_back(from);
 
-    while let Some(current) = queue.pop_front() {
-        if current == to {
-            return Ok(true);
-        }
-        if !visited.insert(current) {
-            continue;
-        }
-        let blocking = db::get_blocking(conn, current)?;
-        for b in blocking {
-            if !visited.contains(&b) {
-                queue.push_back(b);
-            }
-        }
-    }
-    Ok(false)
-}
 
 fn find_stuck_in_progress(
     conn: &Connection,

@@ -42,6 +42,20 @@ pub fn apply_skills(mut current: Vec<String>, add: &[String], remove: &[String])
     current
 }
 
+/// Parse an ISO 8601 timestamp and return the number of days since that time.
+pub fn days_since(iso_date: &str) -> f64 {
+    use chrono::{NaiveDateTime, Utc};
+    let parsed = NaiveDateTime::parse_from_str(iso_date, "%Y-%m-%dT%H:%M:%SZ");
+    match parsed {
+        Ok(dt) => {
+            let now = Utc::now().naive_utc();
+            let duration = now.signed_duration_since(dt);
+            duration.num_seconds() as f64 / 86400.0
+        }
+        Err(_) => 0.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +177,18 @@ mod tests {
             &["go".into()],
         );
         assert_eq!(result, vec!["rust", "sql"]);
+    }
+
+    // --- days_since ---
+
+    #[test]
+    fn days_since_known_past_date() {
+        let result = days_since("2020-01-01T00:00:00Z");
+        assert!(result > 0.0, "expected positive days for a past date, got {result}");
+    }
+
+    #[test]
+    fn days_since_unparseable_returns_zero() {
+        assert_eq!(days_since("not-a-date"), 0.0);
     }
 }

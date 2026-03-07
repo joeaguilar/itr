@@ -1,4 +1,4 @@
-use crate::commands::add::{validate_kind, validate_priority, validate_status};
+use crate::normalize::{validate_kind, validate_priority, validate_status};
 use crate::commands::build_issue_detail;
 use crate::db;
 use crate::error::ItrError;
@@ -172,7 +172,7 @@ pub fn run(
     // Re-read the updated issue
     let issue = db::get_issue(conn, id)?;
     let config = UrgencyConfig::load(conn);
-    let detail = build_issue_detail(conn, issue.clone(), &config)?;
+    let detail = build_issue_detail(conn, issue, &config)?;
 
     // Check for newly unblocked issues
     let unblocked = if let Some(ref s) = status {

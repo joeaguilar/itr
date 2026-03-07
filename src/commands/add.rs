@@ -3,7 +3,7 @@ use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::BatchAddInput;
-use crate::normalize;
+use crate::normalize::{self, validate_kind, validate_priority};
 use crate::urgency::UrgencyConfig;
 use crate::util;
 use rusqlite::Connection;
@@ -161,37 +161,4 @@ pub fn run(
     let detail = build_issue_detail(conn, issue, &config)?;
     println!("{}", format::format_issue_detail(&detail, fmt));
     Ok(())
-}
-
-pub fn validate_priority(p: &str) -> Result<(), ItrError> {
-    match p {
-        "critical" | "high" | "medium" | "low" => Ok(()),
-        _ => Err(ItrError::InvalidValue {
-            field: "priority".to_string(),
-            value: p.to_string(),
-            valid: "critical, high, medium, low".to_string(),
-        }),
-    }
-}
-
-pub fn validate_kind(k: &str) -> Result<(), ItrError> {
-    match k {
-        "bug" | "feature" | "task" | "epic" => Ok(()),
-        _ => Err(ItrError::InvalidValue {
-            field: "kind".to_string(),
-            value: k.to_string(),
-            valid: "bug, feature, task, epic".to_string(),
-        }),
-    }
-}
-
-pub fn validate_status(s: &str) -> Result<(), ItrError> {
-    match s {
-        "open" | "in-progress" | "done" | "wontfix" => Ok(()),
-        _ => Err(ItrError::InvalidValue {
-            field: "status".to_string(),
-            value: s.to_string(),
-            valid: "open, in-progress, done, wontfix".to_string(),
-        }),
-    }
 }
