@@ -493,9 +493,17 @@ pub enum BatchAction {
     /// Bulk-create issues from JSON array on stdin
     Add,
     /// Bulk-close issues from JSON array on stdin (per-issue reasons)
-    Close,
+    Close {
+        /// Preview without applying changes
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Bulk-update issues from JSON array on stdin (per-issue changes)
-    Update,
+    Update {
+        /// Preview without applying changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]

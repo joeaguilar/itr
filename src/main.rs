@@ -254,8 +254,8 @@ fn run_command(
 
         Commands::Batch { action } => match action {
             BatchAction::Add => commands::batch::run_add(conn, fmt),
-            BatchAction::Close => commands::batch::run_close(conn, fmt),
-            BatchAction::Update => commands::batch::run_update(conn, fmt),
+            BatchAction::Close { dry_run } => commands::batch::run_close(conn, dry_run, fmt),
+            BatchAction::Update { dry_run } => commands::batch::run_update(conn, dry_run, fmt),
         },
 
         Commands::Bulk { action } => match action {

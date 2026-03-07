@@ -265,6 +265,8 @@ pub struct BatchResult {
     pub action: String,
     pub results: Vec<BatchItemResult>,
     pub summary: BatchSummary,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1129,6 +1129,30 @@ BC_OUT=$(echo '[{"id":3}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch close -f j
 HAS_SUMMARY=$(echo "$BC_OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print('summary' in d)")
 assert_eq "batch close --fields filters summary" "False" "$HAS_SUMMARY"
 
+# --dry-run on batch close
+DR_DIR=$(mktemp -d)
+ITR_DB_PATH="$DR_DIR/.itr.db" $ITR init >/dev/null
+echo '[{"title":"Dry A"},{"title":"Dry B"}]' | ITR_DB_PATH="$DR_DIR/.itr.db" $ITR batch add -f json >/dev/null
+DR_OUT=$(echo '[{"id":1}]' | ITR_DB_PATH="$DR_DIR/.itr.db" $ITR batch close --dry-run -f json)
+assert_eq "batch close dry-run flag" "True" "$(jq_val "$DR_OUT" "d.get('dry_run', False)")"
+assert_eq "batch close dry-run outcome" "ok" "$(jq_val "$DR_OUT" "d['results'][0]['outcome']")"
+DR_STATUS=$(ITR_DB_PATH="$DR_DIR/.itr.db" $ITR get 1 -f json)
+assert_eq "batch close dry-run no change" "open" "$(jq_val "$DR_STATUS" "d['status']")"
+
+# --dry-run on batch update
+DR_OUT=$(echo '[{"id":2,"status":"in-progress","priority":"high"}]' | ITR_DB_PATH="$DR_DIR/.itr.db" $ITR batch update --dry-run -f json)
+assert_eq "batch update dry-run flag" "True" "$(jq_val "$DR_OUT" "d.get('dry_run', False)")"
+assert_eq "batch update dry-run outcome" "ok" "$(jq_val "$DR_OUT" "d['results'][0]['outcome']")"
+DR_STATUS=$(ITR_DB_PATH="$DR_DIR/.itr.db" $ITR get 2 -f json)
+assert_eq "batch update dry-run no change" "open" "$(jq_val "$DR_STATUS" "d['status']")"
+assert_eq "batch update dry-run priority unchanged" "medium" "$(jq_val "$DR_STATUS" "d['priority']")"
+
+# Verify dry_run not in normal (non-dry-run) output
+DR_NORMAL=$(echo '[{"id":1}]' | ITR_DB_PATH="$DR_DIR/.itr.db" $ITR batch close -f json)
+assert_eq "batch close normal no dry_run key" "False" "$(echo "$DR_NORMAL" | python3 -c "import sys,json; print('dry_run' in json.load(sys.stdin))")"
+
+rm -rf "$DR_DIR"
+
 rm -rf "$BU_DIR"
 
 # ─────────────────────────────────────────────

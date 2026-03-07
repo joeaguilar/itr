@@ -634,6 +634,7 @@ const VALID_FIELDS: &[&str] = &[
     "total",
     "ok",
     "review",
+    "dry_run",
 ];
 
 pub fn parse_fields(fields_str: &str) -> Vec<String> {

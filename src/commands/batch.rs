@@ -172,6 +172,7 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
         action: "batch_add".to_string(),
         results,
         summary,
+        dry_run: false,
     };
 
     println!("{}", format::format_batch_result(&batch_result, fmt));
@@ -179,7 +180,7 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     Ok(())
 }
 
-pub fn run_close(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
+pub fn run_close(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), ItrError> {
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 
@@ -253,13 +254,16 @@ pub fn run_close(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
         });
     }
 
-    tx.commit()?;
+    if !dry_run {
+        tx.commit()?;
+    }
 
     let summary = build_summary(&results);
     let batch_result = BatchResult {
         action: "batch_close".to_string(),
         results,
         summary,
+        dry_run,
     };
 
     println!("{}", format::format_batch_result(&batch_result, fmt));
@@ -267,7 +271,7 @@ pub fn run_close(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     Ok(())
 }
 
-pub fn run_update(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
+pub fn run_update(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), ItrError> {
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 
@@ -443,13 +447,16 @@ pub fn run_update(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
         });
     }
 
-    tx.commit()?;
+    if !dry_run {
+        tx.commit()?;
+    }
 
     let summary = build_summary(&results);
     let batch_result = BatchResult {
         action: "batch_update".to_string(),
         results,
         summary,
+        dry_run,
     };
 
     println!("{}", format::format_batch_result(&batch_result, fmt));
