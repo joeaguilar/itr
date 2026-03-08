@@ -366,6 +366,7 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
         ("status", "Status", 11, false),
         ("priority", "Pri", 8, false),
         ("kind", "Kind", 7, false),
+        ("assigned_to", "Assignee", 10, false),
         ("title", "Title", 40, false),
         ("blocked_by", "Blocked", 0, false),
     ];
@@ -401,6 +402,7 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
                     "status" => i.status.clone(),
                     "priority" => i.priority.clone(),
                     "kind" => i.kind.clone(),
+                    "assigned_to" => truncate_with_ellipsis(&i.assigned_to, 10),
                     "title" => truncate_with_ellipsis(&i.title, 40),
                     "blocked_by" => i
                         .blocked_by
