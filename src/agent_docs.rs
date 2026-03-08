@@ -24,7 +24,7 @@ itr close <ID> "reason"        # Close when done
 - `itr ready` — List unblocked, non-terminal issues sorted by urgency
 - `itr next` — Get single highest-urgency unblocked issue
 - `itr next --claim` / `itr claim` — Claim it (set in-progress + assign)
-- `itr search "<query>"` — Full-text search across all fields
+- `itr search "<query>"` — Search across all fields (title, context, acceptance, tags, files, skills, notes). Uses FTS5 when available, falls back to case-insensitive substring matching. Multi-word queries: each term must match somewhere (AND logic, any field)
 - `itr list` — List issues with filtering (--status, --priority, --kind, --tag, --skill, --assigned-to)
 - `itr get <ID>` — Full detail for a single issue
 - `itr show` — Alias: no args = list, with ID = get
