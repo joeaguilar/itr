@@ -1,4 +1,3 @@
-use crate::error::ItrError;
 use crate::models::{
     BatchResult, Event, GraphOutput, IssueDetail, IssueSummary, Relation, SearchResult, Stats,
     UnblockedIssue,
@@ -762,17 +761,18 @@ pub fn parse_fields(fields_str: &str) -> Vec<String> {
         .collect()
 }
 
-pub fn validate_fields(fields: &[String]) -> Result<(), ItrError> {
+/// Warn about unknown fields but keep them all. Unknown fields will simply
+/// not appear in the output (serde won't serialize what doesn't exist).
+pub fn validate_fields(fields: &[String]) {
     for f in fields {
         if !VALID_FIELDS.contains(&f.as_str()) {
-            return Err(ItrError::InvalidValue {
-                field: "fields".to_string(),
-                value: f.clone(),
-                valid: VALID_FIELDS.join(", "),
-            });
+            eprintln!(
+                "REVIEW: unknown field '{}' — will be ignored if not present in output. Valid: {}",
+                f,
+                VALID_FIELDS.join(", ")
+            );
         }
     }
-    Ok(())
 }
 
 pub fn filter_json_fields(value: serde_json::Value, fields: &[String]) -> serde_json::Value {

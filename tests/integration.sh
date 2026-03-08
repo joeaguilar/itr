@@ -815,12 +815,13 @@ OUT=$($ITR ready -f json --fields id,title,urgency)
 HAS_ONLY=$(jq_val "$OUT" "all(set(i.keys()) == {'id','title','urgency'} for i in d) if d else True")
 assert_eq "fields selector filters JSON" "True" "$HAS_ONLY"
 
-# Invalid field name
+# Invalid field name — soft fallback: filters out bad fields, warns on stderr, exits 0
 set +e
-$ITR list -f json --fields id,bogus 2>/dev/null
+FIELD_STDERR=$($ITR list -f json --fields id,bogus 2>&1 1>/dev/null)
 FIELD_EXIT=$?
 set -e
-assert_eq "invalid field exits 1" "1" "$FIELD_EXIT"
+assert_eq "invalid field soft-fallback exits 0" "0" "$FIELD_EXIT"
+assert_contains "invalid field warns on stderr" "REVIEW" "$FIELD_STDERR"
 
 # --fields restricts compact output
 OUT=$($ITR list --fields id,title 2>&1)

@@ -47,13 +47,12 @@ fn main() {
         std::process::exit(1);
     });
 
-    // Parse and validate --fields
-    let fields: Option<Vec<String>> = cli.fields.map(|f| format::parse_fields(&f));
-    if let Some(ref f) = fields {
-        if let Err(e) = format::validate_fields(f) {
-            handle_error(e, fmt.is_json());
-        }
-    }
+    // Parse and validate --fields (unknown fields are warned but kept)
+    let fields: Option<Vec<String>> = cli.fields.map(|f| {
+        let parsed = format::parse_fields(&f);
+        format::validate_fields(&parsed);
+        parsed
+    });
 
     // Store fields in a thread-local for all output formats
     if let Some(f) = fields {
