@@ -603,6 +603,16 @@ pub fn get_newly_unblocked(
     Ok(results)
 }
 
+/// Remove all dependency edges where the given issue is the blocker.
+/// Called on close to auto-clean stale edges so `doctor --fix` isn't needed.
+pub fn remove_blocker_edges(conn: &Connection, blocker_id: i64) -> Result<usize, ItrError> {
+    let count = conn.execute(
+        "DELETE FROM dependencies WHERE blocker_id = ?1",
+        params![blocker_id],
+    )?;
+    Ok(count)
+}
+
 // --- Notes ---
 
 pub fn add_note(

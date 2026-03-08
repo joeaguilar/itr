@@ -223,8 +223,9 @@ pub fn run_close(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), It
             db::update_issue_field(&tx, item.id, "close_reason", &item.reason)?;
         }
 
-        // Check for newly unblocked issues
+        // Check for newly unblocked issues, then auto-clean stale edges
         let unblocked_list = db::get_newly_unblocked(&tx, item.id)?;
+        db::remove_blocker_edges(&tx, item.id)?;
         let unblocked: Vec<UnblockedIssue> = unblocked_list
             .into_iter()
             .map(|(id, title)| UnblockedIssue { id, title })

@@ -81,6 +81,8 @@ pub fn run_close(
                     });
                 }
             }
+            // Auto-clean dependency edges where this issue was the blocker
+            db::remove_blocker_edges(&tx, *id)?;
         }
         tx.commit()?;
     }

@@ -26,11 +26,14 @@ pub fn run(
         db::update_issue_field(conn, id, "close_reason", &reason)?;
     }
 
+    // Auto-clean dependency edges where this issue was the blocker
+    let unblocked = db::get_newly_unblocked(conn, id)?;
+    db::remove_blocker_edges(conn, id)?;
+
     // Output updated issue
     let issue = db::get_issue(conn, id)?;
     let config = UrgencyConfig::load(conn);
     let detail = build_issue_detail(conn, issue, &config)?;
-    let unblocked = db::get_newly_unblocked(conn, id)?;
     print_detail_with_unblocked(&detail, &unblocked, fmt);
 
     Ok(())
