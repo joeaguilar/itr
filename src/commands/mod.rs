@@ -52,6 +52,8 @@ pub fn build_issue_summary(conn: &Connection, issue: &Issue, config: &UrgencyCon
         skills: issue.skills.clone(),
         acceptance: issue.acceptance.clone(),
         assigned_to: issue.assigned_to.clone(),
+        created_at: issue.created_at.clone(),
+        updated_at: issue.updated_at.clone(),
     }
 }
 

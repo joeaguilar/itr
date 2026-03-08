@@ -63,6 +63,8 @@ pub struct IssueSummary {
     pub acceptance: String,
     #[serde(default)]
     pub assigned_to: String,
+    pub created_at: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
