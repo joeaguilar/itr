@@ -346,13 +346,13 @@ pub enum Commands {
         assigned_to: Option<String>,
     },
 
-    /// Bulk operations (batch add)
+    /// Per-item operations from JSON stdin (add/close/update/note with individual control)
     Batch {
         #[command(subcommand)]
         action: BatchAction,
     },
 
-    /// Bulk close or update issues matching filters
+    /// Filter-based operations (same change to all matching issues)
     Bulk {
         #[command(subcommand)]
         action: BulkAction,
