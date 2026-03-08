@@ -506,6 +506,10 @@ pub enum Commands {
         limit: Option<usize>,
     },
 
+    /// Show in-progress issues (shorthand for list -s in-progress)
+    #[command(visible_alias = "current")]
+    Wip,
+
     /// Show issues or get detail for a single issue
     Show {
         /// Issue ID (omit to list all non-terminal issues)

@@ -383,6 +383,23 @@ fn run_command(
 
         Commands::Unassign { id } => commands::assign::run_unassign(conn, id, fmt),
 
+        Commands::Wip => commands::list::run(
+            conn,
+            false,
+            vec!["in-progress".to_string()],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            false,
+            true,
+            None,
+            None,
+            "urgency",
+            None,
+            fmt,
+        ),
+
         Commands::Show { id: Some(id), .. } => commands::get::run(conn, id, fmt),
         Commands::Show { id: None, all } => {
             if all {
