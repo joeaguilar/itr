@@ -272,6 +272,21 @@ pub enum Commands {
         agent: String,
     },
 
+    /// Delete a note by ID
+    NoteDelete {
+        /// Note ID
+        id: i64,
+    },
+
+    /// Update a note's content
+    NoteUpdate {
+        /// Note ID
+        id: i64,
+
+        /// New content
+        text: String,
+    },
+
     /// Add a dependency (issue becomes blocked by --on)
     #[command(visible_alias = "deps")]
     Depend {

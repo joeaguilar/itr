@@ -247,6 +247,10 @@ fn run_command(
 
         Commands::Note { id, text, agent } => commands::note::run(conn, id, text, &agent, fmt),
 
+        Commands::NoteDelete { id } => commands::note::run_delete(conn, id, fmt),
+
+        Commands::NoteUpdate { id, text } => commands::note::run_update(conn, id, &text, fmt),
+
         Commands::Depend { id, on } => commands::depend::run(conn, id, on, fmt),
 
         Commands::Undepend { id, on } => commands::depend::run_undepend(conn, id, on, fmt),

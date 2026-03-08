@@ -659,6 +659,33 @@ pub fn get_notes(conn: &Connection, issue_id: i64) -> Result<Vec<Note>, ItrError
     Ok(notes)
 }
 
+pub fn get_note(conn: &Connection, note_id: i64) -> Result<Note, ItrError> {
+    conn.query_row(
+        "SELECT id, issue_id, content, agent, created_at FROM notes WHERE id = ?1",
+        params![note_id],
+        row_to_note,
+    )
+    .map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => ItrError::NotFound(note_id),
+        other => ItrError::Db(other),
+    })
+}
+
+pub fn delete_note(conn: &Connection, note_id: i64) -> Result<Note, ItrError> {
+    let note = get_note(conn, note_id)?;
+    conn.execute("DELETE FROM notes WHERE id = ?1", params![note_id])?;
+    Ok(note)
+}
+
+pub fn update_note(conn: &Connection, note_id: i64, content: &str) -> Result<Note, ItrError> {
+    let _existing = get_note(conn, note_id)?;
+    conn.execute(
+        "UPDATE notes SET content = ?1 WHERE id = ?2",
+        params![content, note_id],
+    )?;
+    get_note(conn, note_id)
+}
+
 pub fn count_notes(conn: &Connection, issue_id: i64) -> Result<i64, ItrError> {
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM notes WHERE issue_id = ?1",
