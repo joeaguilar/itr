@@ -81,14 +81,15 @@ Valid fields: id, title, status, priority, kind, created, updated, context, file
 
 ### Urgency Scoring
 
-Issues are ranked by a computed urgency score (never stored, always fresh). Default coefficients:
-- `w_priority`: critical=4, high=3, medium=2, low=1
-- `w_age`: 0.1 per day since creation
-- `w_dependency`: +2 per issue blocked by this one
-- `w_update_lag`: 0.05 per day since last update
-- `w_blocker_bonus`: +5 if this issue blocks others
+Issues are ranked by a computed urgency score (never stored, always fresh). Components:
+- `urgency.priority.critical`=10, `urgency.priority.high`=6, `urgency.priority.medium`=3, `urgency.priority.low`=1
+- `urgency.kind.bug`=2, `urgency.kind.feature`=0, `urgency.kind.task`=0, `urgency.kind.epic`=-2
+- `urgency.blocking`=8 (blocks other active issues), `urgency.blocked`=-10 (blocked by others)
+- `urgency.age`=2 (scaled by days/10, capped at 1.0)
+- `urgency.in_progress`=4, `urgency.has_acceptance`=1, `urgency.notes_count`=0.5
 
 Override via `itr config set <key> <value>`. View breakdown with `itr get <ID> -f json` (urgency_breakdown field).
+View all config keys: `itr config list`.
 
 ### Skills Filtering
 
