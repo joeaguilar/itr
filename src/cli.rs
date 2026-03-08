@@ -349,6 +349,9 @@ pub enum Commands {
     /// Project health summary
     Stats,
 
+    /// Project narrative for session start (combines stats + ready + recent activity)
+    Summary,
+
     /// Export the full database
     Export {
         /// Export format: jsonl|json

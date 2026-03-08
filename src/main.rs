@@ -324,6 +324,7 @@ fn run_command(
         Commands::Graph { all } => commands::graph::run(conn, all, fmt),
 
         Commands::Stats => commands::stats::run(conn, fmt),
+        Commands::Summary => commands::summary::run(conn, fmt),
 
         Commands::Export { export_format } => commands::export::run(conn, &export_format),
 
