@@ -63,6 +63,19 @@ Four tables: `issues`, `dependencies`, `notes`, `config`. Schema defined as a co
 
 stdout is always parseable data (or empty). stderr is always errors. No interactive prompts ever. All timestamps are UTC ISO 8601.
 
+## Soft Fallbacks Philosophy
+
+This project follows a **soft fallback** approach to error handling. Hard errors should be reserved for truly unrecoverable situations (DB corruption, missing database). For everything else, prefer graceful recovery:
+
+- **Default to safe values** when input is unrecognized (e.g., unknown priority → `"medium"` with a `REVIEW:` note on stderr). The pattern in `add.rs`/`update.rs` for priority/kind normalization is the reference implementation.
+- **Warn, don't fail** — emit `REVIEW:` notes to stderr and continue with a reasonable default rather than exiting with error code 1.
+- **Suggest corrections** — when a value doesn't match, suggest the closest valid option ("did you mean...?").
+- **Accept partial valid input** — e.g., if `--fields` contains one bad field name, filter it out and process the valid ones instead of rejecting the entire request.
+- **Use the right error type** — `InvalidValue` is for user-supplied bad values, not system capability issues or diagnostic reports.
+- **Never silently swallow input** — if a flag consumes a value the user likely intended for another argument, detect and warn.
+
+When adding new validation, ask: "Can this recover with a default?" If yes, do that and append a review note. If no (e.g., cycle detection, missing DB), then a hard error is appropriate.
+
 ## Dependencies
 
 Minimal: `clap` (derive), `rusqlite` (bundled SQLite), `serde`/`serde_json`, `chrono`, `thiserror`. No async, no network crates.
