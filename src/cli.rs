@@ -465,6 +465,10 @@ pub enum Commands {
         /// Only show events since this timestamp (ISO 8601)
         #[arg(long)]
         since: Option<String>,
+
+        /// Filter by agent name
+        #[arg(long)]
+        agent: Option<String>,
     },
 
     /// Create a relation between two issues

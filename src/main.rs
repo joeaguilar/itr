@@ -345,7 +345,12 @@ fn run_command(
             ConfigAction::Reset => commands::config::run_reset(conn, fmt),
         },
 
-        Commands::Log { id, limit, since } => commands::log::run(conn, id, limit, since, fmt),
+        Commands::Log {
+            id,
+            limit,
+            since,
+            agent,
+        } => commands::log::run(conn, id, limit, since, agent, fmt),
 
         Commands::Reindex => commands::reindex::run(conn, fmt),
 

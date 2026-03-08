@@ -8,6 +8,7 @@ pub fn run(
     id: Option<i64>,
     limit: usize,
     since: Option<String>,
+    agent: Option<String>,
     fmt: Format,
 ) -> Result<(), ItrError> {
     let events = if let Some(issue_id) = id {
@@ -16,6 +17,16 @@ pub fn run(
         db::get_events_for_issue(conn, issue_id)?
     } else {
         db::get_recent_events(conn, limit, since.as_deref())?
+    };
+
+    // Filter by agent if specified
+    let events = if let Some(ref agent_name) = agent {
+        events
+            .into_iter()
+            .filter(|e| e.agent == *agent_name)
+            .collect()
+    } else {
+        events
     };
 
     if events.is_empty() {
