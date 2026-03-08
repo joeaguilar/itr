@@ -6,7 +6,7 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 
-    /// Output format: compact|json|pretty
+    /// Output format: compact|json|pretty|oneline
     #[arg(short, long, default_value = "compact", global = true)]
     pub format: String,
 

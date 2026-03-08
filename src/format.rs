@@ -59,6 +59,7 @@ pub enum Format {
     Compact,
     Json,
     Pretty,
+    Oneline,
 }
 
 impl Format {
@@ -67,6 +68,7 @@ impl Format {
             "compact" => Some(Format::Compact),
             "json" => Some(Format::Json),
             "pretty" => Some(Format::Pretty),
+            "oneline" => Some(Format::Oneline),
             _ => None,
         }
     }
@@ -81,7 +83,7 @@ impl Format {
 pub fn format_issue_detail(detail: &IssueDetail, fmt: Format) -> String {
     match fmt {
         Format::Json => apply_fields_filter(&serde_json::to_string(detail).unwrap_or_default()),
-        Format::Compact => format_issue_detail_compact(detail),
+        Format::Compact | Format::Oneline => format_issue_detail_compact(detail),
         Format::Pretty => format_issue_detail_pretty(detail),
     }
 }
@@ -290,7 +292,26 @@ pub fn format_issue_list(issues: &[IssueSummary], fmt: Format) -> String {
         Format::Json => apply_fields_filter(&serde_json::to_string(issues).unwrap_or_default()),
         Format::Compact => format_issue_list_compact(issues),
         Format::Pretty => format_issue_list_pretty(issues),
+        Format::Oneline => format_issue_list_oneline(issues),
     }
+}
+
+fn format_issue_list_oneline(issues: &[IssueSummary]) -> String {
+    issues
+        .iter()
+        .map(|i| {
+            let assignee = if i.assigned_to.is_empty() {
+                String::new()
+            } else {
+                format!("\t{}", i.assigned_to)
+            };
+            format!(
+                "{}\t{}\t{}\t{}\t\"{}\"{}",
+                i.id, i.status, i.priority, i.kind, i.title, assignee
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
@@ -432,7 +453,7 @@ pub fn format_stats(stats: &Stats, fmt: Format) -> String {
     match fmt {
         Format::Json => serde_json::to_string(stats).unwrap_or_default(),
         Format::Compact => format_stats_compact(stats),
-        Format::Pretty => format_stats_compact(stats), // same for now
+        Format::Pretty | Format::Oneline => format_stats_compact(stats), // same for now
     }
 }
 
@@ -492,7 +513,7 @@ pub fn format_graph(graph: &GraphOutput, fmt: Format) -> String {
     match fmt {
         Format::Json => serde_json::to_string(graph).unwrap_or_default(),
         Format::Compact => format_graph_compact(graph),
-        Format::Pretty => format_graph_dot(graph),
+        Format::Pretty | Format::Oneline => format_graph_dot(graph),
     }
 }
 
@@ -560,7 +581,7 @@ pub fn format_search_results(results: &[SearchResult], fmt: Format) -> String {
     match fmt {
         Format::Json => apply_fields_filter(&serde_json::to_string(results).unwrap_or_default()),
         Format::Compact => format_search_compact(results),
-        Format::Pretty => format_search_pretty(results),
+        Format::Pretty | Format::Oneline => format_search_pretty(results),
     }
 }
 
@@ -645,7 +666,7 @@ pub fn format_events(events: &[Event], fmt: Format) -> String {
     match fmt {
         Format::Json => serde_json::to_string(events).unwrap_or_default(),
         Format::Compact => format_events_compact(events),
-        Format::Pretty => format_events_pretty(events),
+        Format::Pretty | Format::Oneline => format_events_pretty(events),
     }
 }
 
@@ -808,7 +829,7 @@ pub fn format_unblocked(issues: &[(i64, String)], fmt: Format) -> String {
 pub fn format_batch_result(result: &BatchResult, fmt: Format) -> String {
     match fmt {
         Format::Json => apply_fields_filter(&serde_json::to_string(result).unwrap_or_default()),
-        Format::Compact | Format::Pretty => format_batch_result_compact(result),
+        Format::Compact | Format::Pretty | Format::Oneline => format_batch_result_compact(result),
     }
 }
 
