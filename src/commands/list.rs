@@ -21,6 +21,7 @@ pub fn run(
     assigned_to: Option<String>,
     sort: &str,
     limit: Option<usize>,
+    tag_any: Vec<String>,
     fmt: Format,
 ) -> Result<(), ItrError> {
     let issues = db::list_issues(
@@ -35,6 +36,7 @@ pub fn run(
         all,
         &skills,
         assigned_to.as_deref(),
+        &tag_any,
     )?;
 
     if issues.is_empty() {

@@ -117,6 +117,10 @@ pub enum Commands {
         #[arg(long, visible_alias = "tags")]
         tag: Vec<String>,
 
+        /// Filter by tag with OR logic (repeatable, matches any)
+        #[arg(long)]
+        tag_any: Vec<String>,
+
         /// Filter by skill (repeatable, AND logic)
         #[arg(long)]
         skill: Vec<String>,

@@ -142,6 +142,7 @@ fn run_command(
             priority,
             kind,
             tag,
+            tag_any,
             skill,
             blocked,
             include_blocked,
@@ -154,6 +155,7 @@ fn run_command(
                 && priority.is_empty()
                 && kind.is_empty()
                 && tag.is_empty()
+                && tag_any.is_empty()
                 && skill.is_empty()
                 && !blocked
                 && parent.is_none()
@@ -173,6 +175,7 @@ fn run_command(
                 assigned_to,
                 &sort,
                 limit,
+                tag_any,
                 fmt,
             )
         }
@@ -397,6 +400,7 @@ fn run_command(
             None,
             "urgency",
             None,
+            vec![],
             fmt,
         ),
 
@@ -419,6 +423,7 @@ fn run_command(
                 None,
                 "urgency",
                 None,
+                vec![],
                 fmt,
             )
         }

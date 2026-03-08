@@ -32,6 +32,7 @@ pub fn run(
         false,
         &skills,
         assigned_to.as_deref(),
+        &[],
     )?;
 
     if issues.is_empty() {

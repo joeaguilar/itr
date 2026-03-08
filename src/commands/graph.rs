@@ -21,6 +21,7 @@ pub fn run(conn: &Connection, all: bool, fmt: Format) -> Result<(), ItrError> {
             false,
             &[],
             None,
+            &[],
         )?
     };
 

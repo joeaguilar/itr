@@ -29,6 +29,7 @@ pub fn run(conn: &Connection, id: i64, fmt: Format) -> Result<(), ItrError> {
             true,
             &[],
             None,
+            &[],
         )?;
         let child_summaries: Vec<IssueSummary> = child_issues
             .iter()

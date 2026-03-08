@@ -310,6 +310,7 @@ fn row_to_relation(row: &rusqlite::Row) -> rusqlite::Result<Relation> {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn list_issues(
     conn: &Connection,
     statuses: &[String],
@@ -322,6 +323,7 @@ pub fn list_issues(
     all: bool,
     skills: &[String],
     assigned_to: Option<&str>,
+    tag_any: &[String],
 ) -> Result<Vec<Issue>, ItrError> {
     let mut sql = String::from(
         "SELECT id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at, assigned_to FROM issues WHERE 1=1",
@@ -369,6 +371,16 @@ pub fn list_issues(
         issues
             .into_iter()
             .filter(|i| tags.iter().all(|t| i.tags.contains(t)))
+            .collect()
+    } else {
+        issues
+    };
+
+    // Filter by tag_any (OR logic)
+    let issues = if !tag_any.is_empty() {
+        issues
+            .into_iter()
+            .filter(|i| tag_any.iter().any(|t| i.tags.contains(t)))
             .collect()
     } else {
         issues

@@ -54,6 +54,7 @@ pub fn run_close(
         false,
         &skills,
         assigned_to.as_deref(),
+        &[],
     )?;
 
     let ids: Vec<i64> = issues.iter().map(|i| i.id).collect();
@@ -149,6 +150,7 @@ pub fn run_update(
         false,
         &skills,
         assigned_to.as_deref(),
+        &[],
     )?;
 
     let ids: Vec<i64> = issues.iter().map(|i| i.id).collect();
