@@ -38,6 +38,10 @@ pub enum Commands {
         /// Issue title
         title: Option<String>,
 
+        /// Issue title (flag form, soft-fallback alias for positional)
+        #[arg(long = "title", hide = true)]
+        title_flag: Option<String>,
+
         /// Priority: critical|high|medium|low
         #[arg(short, long, default_value = "medium")]
         priority: String,
@@ -47,7 +51,7 @@ pub enum Commands {
         kind: String,
 
         /// Freeform context/description
-        #[arg(short, long)]
+        #[arg(short, long, alias = "body")]
         context: Option<String>,
 
         /// Comma-separated file paths
@@ -549,6 +553,7 @@ pub enum Commands {
 #[derive(Subcommand)]
 pub enum BatchAction {
     /// Bulk-create issues from JSON array on stdin
+    #[command(visible_alias = "create")]
     Add,
     /// Bulk-close issues from JSON array on stdin (per-issue reasons)
     Close {

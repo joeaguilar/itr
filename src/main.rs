@@ -102,6 +102,7 @@ fn run_command(
 
         Commands::Add {
             title,
+            title_flag,
             priority,
             kind,
             context,
@@ -116,25 +117,40 @@ fn run_command(
             parent,
             assigned_to,
             stdin_json,
-        } => commands::add::run(
-            conn,
-            title,
-            &priority,
-            &kind,
-            context,
-            files,
-            file,
-            tags,
-            tag,
-            skills,
-            skill,
-            acceptance,
-            blocked_by,
-            parent,
-            assigned_to,
-            stdin_json,
-            fmt,
-        ),
+        } => {
+            // Merge: --title flag takes precedence over positional
+            let effective_title = match (title, title_flag) {
+                (Some(pos), Some(flag)) => {
+                    eprintln!(
+                        "REVIEW: both positional title and --title provided; using --title. \
+                         Positional '{}' was ignored — fix your invocation to use one or the other.",
+                        pos
+                    );
+                    Some(flag)
+                }
+                (None, Some(flag)) => Some(flag),
+                (pos, None) => pos,
+            };
+            commands::add::run(
+                conn,
+                effective_title,
+                &priority,
+                &kind,
+                context,
+                files,
+                file,
+                tags,
+                tag,
+                skills,
+                skill,
+                acceptance,
+                blocked_by,
+                parent,
+                assigned_to,
+                stdin_json,
+                fmt,
+            )
+        }
 
         Commands::List {
             all,

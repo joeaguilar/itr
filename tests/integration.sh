@@ -1292,6 +1292,53 @@ fi
 rm -rf "$BUG_DIR"
 
 # ─────────────────────────────────────────────
+# Soft-fallback aliases: --title flag, --body alias, batch create
+echo ""
+echo "--- Soft-fallback aliases ---"
+
+ALIAS_DIR=$(mktemp -d)
+$ITR init --db "$ALIAS_DIR/.itr.db" > /dev/null
+
+# --title flag creates issue
+TITLE_FLAG_OUT=$($ITR --db "$ALIAS_DIR/.itr.db" add --title "Flag title" -f json 2>/dev/null)
+TITLE_FLAG_VAL=$(echo "$TITLE_FLAG_OUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['title'])")
+if [ "$TITLE_FLAG_VAL" = "Flag title" ]; then
+    pass "alias: --title flag creates issue"
+else
+    fail "alias: --title flag creates issue" "got title '$TITLE_FLAG_VAL'"
+fi
+
+# --title flag takes precedence over positional, stderr warns
+BOTH_STDERR=$($ITR --db "$ALIAS_DIR/.itr.db" add "Positional" --title "Flag" -f json 2>&1 1>/dev/null)
+BOTH_OUT=$($ITR --db "$ALIAS_DIR/.itr.db" add "Positional2" --title "Flag2" -f json 2>/dev/null)
+BOTH_TITLE=$(echo "$BOTH_OUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['title'])")
+if [ "$BOTH_TITLE" = "Flag2" ] && echo "$BOTH_STDERR" | grep -q "REVIEW:"; then
+    pass "alias: --title flag overrides positional with REVIEW warning"
+else
+    fail "alias: --title flag overrides positional" "title='$BOTH_TITLE', stderr='$BOTH_STDERR'"
+fi
+
+# --body maps to context
+BODY_OUT=$($ITR --db "$ALIAS_DIR/.itr.db" add --title "Body test" --body "body content" -f json 2>/dev/null)
+BODY_CTX=$(echo "$BODY_OUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['context'])")
+if [ "$BODY_CTX" = "body content" ]; then
+    pass "alias: --body maps to context"
+else
+    fail "alias: --body maps to context" "got context '$BODY_CTX'"
+fi
+
+# batch create alias works
+BATCH_OUT=$(echo '[{"title":"batch created"}]' | $ITR --db "$ALIAS_DIR/.itr.db" batch create -f json 2>/dev/null)
+BATCH_TITLE=$(echo "$BATCH_OUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['results'][0]['issue']['title'])")
+if [ "$BATCH_TITLE" = "batch created" ]; then
+    pass "alias: batch create works"
+else
+    fail "alias: batch create works" "got '$BATCH_TITLE'"
+fi
+
+rm -rf "$ALIAS_DIR"
+
+# ─────────────────────────────────────────────
 echo ""
 echo "==============================="
 echo "Results: $PASS passed, $FAIL failed"

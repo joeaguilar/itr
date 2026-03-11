@@ -32,7 +32,7 @@ itr close <ID> "reason"        # Close when done
 - `itr graph` — Dependency graph (DOT format in pretty mode)
 
 **CRUD:**
-- `itr add "<title>"` — Create issue (-p priority, -k kind, -c context, --tags, --skills, --files, -a acceptance, --blocked-by, --parent, --assigned-to)
+- `itr add "<title>"` — Create issue (-p priority, -k kind, -c context/--body, --tags, --skills, --files, -a acceptance, --blocked-by, --parent, --assigned-to). Also accepts `--title` as a flag alias for the positional title.
 - `itr update <ID>` — Update fields (--status, --priority, --title, --context, --add-tag, --remove-tag, --add-skill, --remove-skill, --add-file, --remove-file)
 - `itr close <ID> ["reason"]` — Close (--wontfix, --duplicate-of)
 
@@ -47,7 +47,7 @@ itr close <ID> "reason"        # Close when done
 - `itr unrelate <ID> --from <ID>` — Remove relation
 
 **Bulk Operations:**
-- `itr batch add` — Bulk-create from JSON array on stdin
+- `itr batch add` (alias: `batch create`) — Bulk-create from JSON array on stdin
 - `itr batch close` — Bulk-close from JSON array on stdin (per-issue reasons, soft fallback)
 - `itr batch update` — Bulk-update from JSON array on stdin (per-issue changes, soft fallback)
 - `itr bulk close` — Close all matching filters (--reason, --wontfix, --status, --priority, --kind, --tag, --skill, --assigned-to, --dry-run)
