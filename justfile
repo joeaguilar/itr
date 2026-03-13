@@ -38,6 +38,10 @@ test-debug: build
 lint:
     cargo clippy --all-targets -- -D warnings
 
+# Run cargo-deny (license, advisory, ban checks)
+deny:
+    cargo deny check
+
 # Format all code
 fmt:
     cargo fmt --all
@@ -46,11 +50,11 @@ fmt:
 fmt-check:
     cargo fmt --all -- --check
 
-# Full verification: build + lint + test + format check
-verify: release lint test fmt-check
+# Full verification: build + lint + test + format check + deny
+verify: release lint test fmt-check deny
 
-# Lint + format + test (CI-style)
-ci: fmt-check lint test
+# Lint + format + test + deny (CI-style)
+ci: fmt-check lint deny test
 
 # ─── Clean ───────────────────────────────────────────────────────────
 
