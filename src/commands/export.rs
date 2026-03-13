@@ -6,7 +6,7 @@ use rusqlite::Connection;
 pub fn run(conn: &Connection, export_format: &str) -> Result<(), ItrError> {
     let issues = db::all_issues(conn)?;
 
-    let mut export_items: Vec<ExportData> = Vec::new();
+    let mut export_items: Vec<ExportData> = Vec::with_capacity(issues.len());
     for issue in issues {
         let notes = db::get_notes(conn, issue.id)?;
         let blocked_by = db::get_blockers(conn, issue.id)?;

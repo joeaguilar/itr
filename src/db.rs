@@ -700,7 +700,7 @@ pub fn search_issue_ids(
     let mut sql = String::from(
         "SELECT DISTINCT i.id FROM issues i LEFT JOIN notes n ON n.issue_id = i.id WHERE 1=1",
     );
-    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(terms.len() * 8);
 
     // Each term must match at least one searchable field
     for term in terms {

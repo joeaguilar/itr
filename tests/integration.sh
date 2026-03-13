@@ -1336,6 +1336,29 @@ else
     fail "alias: batch create works" "got '$BATCH_TITLE'"
 fi
 
+# --reason flag on close works
+REASON_ADD=$($ITR --db "$ALIAS_DIR/.itr.db" add --title "Reason flag test" -f json 2>/dev/null)
+REASON_ID=$(echo "$REASON_ADD" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+REASON_OUT=$($ITR --db "$ALIAS_DIR/.itr.db" close "$REASON_ID" --reason "closed via flag" -f json 2>/dev/null)
+REASON_VAL=$(echo "$REASON_OUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['close_reason'])")
+if [ "$REASON_VAL" = "closed via flag" ]; then
+    pass "alias: --reason flag on close works"
+else
+    fail "alias: --reason flag on close works" "got close_reason '$REASON_VAL'"
+fi
+
+# --reason flag overrides positional with REVIEW warning
+REASON_ADD2=$($ITR --db "$ALIAS_DIR/.itr.db" add --title "Reason both test" -f json 2>/dev/null)
+REASON_ID2=$(echo "$REASON_ADD2" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+REASON_STDERR=$($ITR --db "$ALIAS_DIR/.itr.db" close "$REASON_ID2" "positional reason" --reason "flag reason" -f json 2>&1 1>/dev/null)
+REASON_OUT2=$($ITR --db "$ALIAS_DIR/.itr.db" close "$REASON_ID2" -f json 2>/dev/null)
+REASON_VAL2=$(echo "$REASON_OUT2" | python3 -c "import sys,json; print(json.load(sys.stdin)['close_reason'])")
+if [ "$REASON_VAL2" = "flag reason" ] && echo "$REASON_STDERR" | grep -q "REVIEW:"; then
+    pass "alias: --reason flag overrides positional with REVIEW warning"
+else
+    fail "alias: --reason flag overrides positional" "reason='$REASON_VAL2', stderr='$REASON_STDERR'"
+fi
+
 rm -rf "$ALIAS_DIR"
 
 # ─────────────────────────────────────────────

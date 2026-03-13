@@ -75,7 +75,7 @@ pub fn run(
 
     let config = UrgencyConfig::load(conn);
 
-    let mut results: Vec<SearchResult> = Vec::new();
+    let mut results: Vec<SearchResult> = Vec::with_capacity(ids.len());
     for id in &ids {
         let issue = db::get_issue(conn, *id)?;
         let notes = db::get_notes(conn, *id)?;
@@ -139,8 +139,8 @@ pub fn compute_matched_fields_with_snippets(
     issue: &crate::models::Issue,
     notes: &[crate::models::Note],
 ) -> (Vec<String>, HashMap<String, String>) {
-    let mut fields = Vec::new();
-    let mut snippets = HashMap::new();
+    let mut fields = Vec::with_capacity(8);
+    let mut snippets = HashMap::with_capacity(8);
 
     let check = |text: &str| -> bool {
         let lower = text.to_lowercase();

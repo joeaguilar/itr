@@ -9,7 +9,7 @@ pub fn run_list(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     let defaults = UrgencyConfig::defaults_map();
 
     // Merge: show defaults with overrides
-    let mut entries: Vec<(String, String, bool)> = Vec::new(); // (key, value, is_custom)
+    let mut entries: Vec<(String, String, bool)> = Vec::with_capacity(defaults.len()); // (key, value, is_custom)
 
     for (key, default_val) in &defaults {
         let stored_val = stored.iter().find(|(k, _)| k == key);

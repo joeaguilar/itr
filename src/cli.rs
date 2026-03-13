@@ -252,7 +252,12 @@ pub enum Commands {
         id: i64,
 
         /// Close reason
-        reason: Option<String>,
+        #[arg(value_name = "REASON")]
+        positional_reason: Option<String>,
+
+        /// Close reason (flag form, soft-fallback alias for positional)
+        #[arg(long = "reason", hide = true)]
+        reason_flag: Option<String>,
 
         /// Close as wontfix instead of done
         #[arg(long)]

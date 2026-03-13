@@ -244,16 +244,30 @@ fn run_command(
 
         Commands::Close {
             id,
-            reason,
+            positional_reason,
+            reason_flag,
             wontfix,
             duplicate_of,
         } => {
+            // Merge: --reason flag takes precedence over positional
+            let effective_reason = match (positional_reason, reason_flag) {
+                (Some(pos), Some(flag)) => {
+                    eprintln!(
+                        "REVIEW: both positional reason and --reason provided; using --reason. \
+                         Positional '{}' was ignored — fix your invocation to use one or the other.",
+                        pos
+                    );
+                    Some(flag)
+                }
+                (None, Some(flag)) => Some(flag),
+                (pos, None) => pos,
+            };
             if let Some(dup_id) = duplicate_of {
                 db::add_relation(conn, id, dup_id, "duplicate")?;
-                let reason = reason.unwrap_or_else(|| format!("Duplicate of #{}", dup_id));
+                let reason = effective_reason.unwrap_or_else(|| format!("Duplicate of #{}", dup_id));
                 commands::close::run(conn, id, Some(reason), false, fmt)
             } else {
-                commands::close::run(conn, id, reason, wontfix, fmt)
+                commands::close::run(conn, id, effective_reason, wontfix, fmt)
             }
         }
 

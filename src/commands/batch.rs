@@ -29,9 +29,9 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     // Use a transaction
     let tx = conn.unchecked_transaction()?;
 
-    let mut created_ids: Vec<i64> = Vec::new();
+    let mut created_ids: Vec<i64> = Vec::with_capacity(items.len());
     // Track which items need review notes (index -> notes)
-    let mut item_review_notes: Vec<Vec<String>> = Vec::new();
+    let mut item_review_notes: Vec<Vec<String>> = Vec::with_capacity(items.len());
 
     // First pass: create all issues with soft fallback
     for item in &mut items {
@@ -131,7 +131,7 @@ pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
 
     // Build results with issue details
     let config = UrgencyConfig::load(conn);
-    let mut results: Vec<BatchItemResult> = Vec::new();
+    let mut results: Vec<BatchItemResult> = Vec::with_capacity(created_ids.len());
     for (idx, id) in created_ids.iter().enumerate() {
         let issue = db::get_issue(conn, *id)?;
         let detail = build_issue_detail(conn, issue, &config)?;
@@ -174,7 +174,7 @@ pub fn run_close(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), It
 
     let tx = conn.unchecked_transaction()?;
 
-    let mut results: Vec<BatchItemResult> = Vec::new();
+    let mut results: Vec<BatchItemResult> = Vec::with_capacity(items.len());
 
     for item in &items {
         // Try to get the issue
@@ -272,7 +272,7 @@ pub fn run_update(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), I
 
     let tx = conn.unchecked_transaction()?;
 
-    let mut results: Vec<BatchItemResult> = Vec::new();
+    let mut results: Vec<BatchItemResult> = Vec::with_capacity(items.len());
 
     for item in &items {
         // Try to get the issue
@@ -445,7 +445,7 @@ pub fn run_note(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
 
     let items: Vec<BatchNoteInput> = serde_json::from_str(&input)?;
 
-    let mut results: Vec<BatchItemResult> = Vec::new();
+    let mut results: Vec<BatchItemResult> = Vec::with_capacity(items.len());
 
     for item in &items {
         // Resolve agent: input agent field, else ITR_AGENT env, else empty

@@ -108,7 +108,7 @@ pub fn compute_urgency_with_breakdown(
     conn: &Connection,
 ) -> (f64, UrgencyBreakdown) {
     let mut score = 0.0;
-    let mut components = Vec::new();
+    let mut components = Vec::with_capacity(7);
 
     // Priority
     let priority_val = match issue.priority.as_str() {
