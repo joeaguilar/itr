@@ -2,15 +2,19 @@ use crate::error::ItrError;
 use crate::format::Format;
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub fn run(no_pull: bool, source_dir: Option<String>, fmt: Format) -> Result<(), ItrError> {
     let src = find_source_dir(source_dir)?;
     let old_version = env!("ITR_VERSION").to_string();
+    let verbose = !fmt.is_json();
 
     let mut pulled_changes = false;
 
     if !no_pull {
+        if verbose {
+            eprintln!("UPGRADE: pulling latest from remote...");
+        }
         let output = Command::new("git")
             .args(["pull"])
             .current_dir(&src)
@@ -29,19 +33,20 @@ pub fn run(no_pull: bool, source_dir: Option<String>, fmt: Format) -> Result<(),
         pulled_changes = !stdout.contains("Already up to date");
     }
 
-    // Build release
-    let output = Command::new("cargo")
+    // Build release — inherit stderr so cargo's progress output streams through
+    if verbose {
+        eprintln!("UPGRADE: building release (this may take 15-20s)...");
+    }
+    let status = Command::new("cargo")
         .args(["build", "--release"])
         .current_dir(&src)
-        .output()
+        .stdout(Stdio::null())
+        .stderr(if verbose { Stdio::inherit() } else { Stdio::null() })
+        .status()
         .map_err(|e| ItrError::UpgradeFailed(format!("cargo build failed: {}", e)))?;
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ItrError::UpgradeFailed(format!(
-            "cargo build failed: {}",
-            stderr.trim()
-        )));
+    if !status.success() {
+        return Err(ItrError::UpgradeFailed("cargo build failed".to_string()));
     }
 
     // Get new version from the freshly built binary
@@ -54,6 +59,9 @@ pub fn run(no_pull: bool, source_dir: Option<String>, fmt: Format) -> Result<(),
         .and_then(|o| String::from_utf8(o.stdout).ok()).map_or_else(|| "unknown".to_string(), |s| s.trim().trim_start_matches("itr ").to_string());
 
     // Copy built binary to current exe location
+    if verbose {
+        eprintln!("UPGRADE: installing...");
+    }
     let current_exe = env::current_exe()
         .map_err(|e| ItrError::UpgradeFailed(format!("cannot find current exe: {}", e)))?;
 
