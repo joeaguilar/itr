@@ -133,14 +133,26 @@ pub fn compute_urgency_with_breakdown(
     components.push((format!("kind.{}", issue.kind), kind_val));
 
     // Blocking others
-    let is_blocking = db::blocks_active_issues(conn, issue.id).unwrap_or(false);
+    let is_blocking = db::blocks_active_issues(conn, issue.id).unwrap_or_else(|e| {
+        eprintln!(
+            "REVIEW: DB query failed checking if #{} blocks others (treating as not blocking): {}",
+            issue.id, e
+        );
+        false
+    });
     if is_blocking {
         score += config.blocking;
         components.push(("blocking".to_string(), config.blocking));
     }
 
     // Blocked by others
-    let is_blocked = db::is_blocked(conn, issue.id).unwrap_or(false);
+    let is_blocked = db::is_blocked(conn, issue.id).unwrap_or_else(|e| {
+        eprintln!(
+            "REVIEW: DB query failed checking if #{} is blocked (treating as not blocked): {}",
+            issue.id, e
+        );
+        false
+    });
     if is_blocked {
         score += config.blocked;
         components.push(("blocked".to_string(), config.blocked));
@@ -166,7 +178,13 @@ pub fn compute_urgency_with_breakdown(
     }
 
     // Notes count
-    let notes = db::count_notes(conn, issue.id).unwrap_or(0);
+    let notes = db::count_notes(conn, issue.id).unwrap_or_else(|e| {
+        eprintln!(
+            "REVIEW: DB query failed counting notes for #{} (treating as 0): {}",
+            issue.id, e
+        );
+        0
+    });
     let notes_factor = (notes as f64 / 6.0).min(1.0);
     let notes_val = config.notes_count * notes_factor;
     score += notes_val;
