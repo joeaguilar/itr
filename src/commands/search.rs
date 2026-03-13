@@ -20,7 +20,10 @@ pub fn run(
     limit: Option<usize>,
     fmt: Format,
 ) -> Result<(), ItrError> {
-    let terms: Vec<String> = query.split_whitespace().map(std::string::ToString::to_string).collect();
+    let terms: Vec<String> = query
+        .split_whitespace()
+        .map(std::string::ToString::to_string)
+        .collect();
 
     if terms.is_empty() {
         error::print_empty(fmt.is_json(), "No search terms provided.");

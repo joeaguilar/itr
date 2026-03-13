@@ -1,4 +1,3 @@
-use crate::normalize::{validate_kind, validate_priority, validate_status};
 use crate::commands::build_issue_detail;
 use crate::db;
 use crate::error::ItrError;
@@ -8,6 +7,7 @@ use crate::models::{
     BatchUpdateInput, UnblockedIssue,
 };
 use crate::normalize;
+use crate::normalize::{validate_kind, validate_priority, validate_status};
 use crate::urgency::UrgencyConfig;
 use crate::util;
 use rusqlite::Connection;

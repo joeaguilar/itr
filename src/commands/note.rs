@@ -73,7 +73,13 @@ pub fn run_update(
     let old_note = db::get_note(conn, note_id)?;
 
     // Record event for audit trail
-    db::record_event(conn, old_note.issue_id, "note_updated", &old_note.content, text)?;
+    db::record_event(
+        conn,
+        old_note.issue_id,
+        "note_updated",
+        &old_note.content,
+        text,
+    )?;
 
     let note = db::update_note(conn, note_id, text)?;
 

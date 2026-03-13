@@ -45,7 +45,11 @@ pub fn run(
         let mut input = String::new();
         io::stdin().read_to_string(&mut input)?;
         let data: BatchAddInput = serde_json::from_str(&input)?;
-        let blocked: Vec<i64> = data.blocked_by.iter().filter_map(serde_json::Value::as_i64).collect();
+        let blocked: Vec<i64> = data
+            .blocked_by
+            .iter()
+            .filter_map(serde_json::Value::as_i64)
+            .collect();
         (
             data.title,
             data.priority,
@@ -69,16 +73,34 @@ pub fn run(
             value: String::new(),
             valid: "non-empty string".to_string(),
         })?;
-        let mut files_vec: Vec<String> =
-            files.as_deref().map(util::parse_comma_list).unwrap_or_default();
-        files_vec.extend(file.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
-        let mut tags_vec: Vec<String> =
-            tags.as_deref().map(util::parse_comma_list).unwrap_or_default();
-        tags_vec.extend(tag.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
-        let mut skills_vec: Vec<String> =
-            skills.as_deref().map(util::parse_comma_list_lower).unwrap_or_default();
-        skills_vec
-            .extend(skill.into_iter().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()));
+        let mut files_vec: Vec<String> = files
+            .as_deref()
+            .map(util::parse_comma_list)
+            .unwrap_or_default();
+        files_vec.extend(
+            file.into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        );
+        let mut tags_vec: Vec<String> = tags
+            .as_deref()
+            .map(util::parse_comma_list)
+            .unwrap_or_default();
+        tags_vec.extend(
+            tag.into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        );
+        let mut skills_vec: Vec<String> = skills
+            .as_deref()
+            .map(util::parse_comma_list_lower)
+            .unwrap_or_default();
+        skills_vec.extend(
+            skill
+                .into_iter()
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty()),
+        );
         let blocked_by_ids: Vec<i64> = blocked_by
             .map(|b| {
                 b.split(',')

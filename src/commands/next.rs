@@ -24,8 +24,7 @@ pub fn run(
         if claim {
             db::record_event(conn, issue.id, "status", &issue.status, "in-progress")?;
             db::update_issue_field(conn, issue.id, "status", "in-progress")?;
-            let agent_name =
-                agent.or_else(|| env::var("ITR_AGENT").ok().filter(|s| !s.is_empty()));
+            let agent_name = agent.or_else(|| env::var("ITR_AGENT").ok().filter(|s| !s.is_empty()));
             if let Some(ref name) = agent_name {
                 db::record_event(conn, issue.id, "assigned_to", &issue.assigned_to, name)?;
                 db::update_issue_field(conn, issue.id, "assigned_to", name)?;
@@ -69,8 +68,7 @@ pub fn run(
             db::update_issue_field(conn, issue.id, "status", "in-progress")?;
 
             // Resolve agent name: explicit flag > ITR_AGENT env var
-            let agent_name =
-                agent.or_else(|| env::var("ITR_AGENT").ok().filter(|s| !s.is_empty()));
+            let agent_name = agent.or_else(|| env::var("ITR_AGENT").ok().filter(|s| !s.is_empty()));
             if let Some(ref name) = agent_name {
                 db::record_event(conn, issue.id, "assigned_to", &issue.assigned_to, name)?;
                 db::update_issue_field(conn, issue.id, "assigned_to", name)?;

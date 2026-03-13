@@ -409,7 +409,10 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
         })
         .collect();
     let header = format!(" {}", header_parts.join(" | "));
-    let separator: String = header.chars().map(|c| if c == '|' { '|' } else { '-' }).collect();
+    let separator: String = header
+        .chars()
+        .map(|c| if c == '|' { '|' } else { '-' })
+        .collect();
 
     let mut lines = vec![header, separator];
     for i in issues {

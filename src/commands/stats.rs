@@ -107,4 +107,3 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     println!("{}", format::format_stats(&stats, fmt));
     Ok(())
 }
-

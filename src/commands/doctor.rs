@@ -185,8 +185,6 @@ fn find_cycles(conn: &Connection) -> Result<Vec<String>, ItrError> {
     Ok(cycles)
 }
 
-
-
 fn find_stuck_in_progress(
     conn: &Connection,
     max_days: i64,

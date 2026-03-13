@@ -12,21 +12,22 @@ mod util;
 use clap::Parser;
 use cli::{BatchAction, BulkAction, Cli, Commands, ConfigAction};
 use error::handle_error;
-use models::ListFilter;
 use format::Format;
+use models::ListFilter;
 
 /// Merge multi-word subcommands that clap can't handle natively.
 /// "getting started" (two args) → "getting-started" (one arg).
 fn preprocess_args() -> Vec<std::ffi::OsString> {
     let mut args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     // Look for consecutive "getting" + "started" and merge them.
-    if let Some(pos) = args
-        .iter()
-        .position(|a| a.to_str().is_some_and(|s| s.eq_ignore_ascii_case("getting")))
-    {
+    if let Some(pos) = args.iter().position(|a| {
+        a.to_str()
+            .is_some_and(|s| s.eq_ignore_ascii_case("getting"))
+    }) {
         if args
             .get(pos + 1)
-            .and_then(|a| a.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("started"))
+            .and_then(|a| a.to_str())
+            .is_some_and(|s| s.eq_ignore_ascii_case("started"))
         {
             args[pos] = "getting-started".into();
             args.remove(pos + 1);
@@ -264,7 +265,8 @@ fn run_command(
             };
             if let Some(dup_id) = duplicate_of {
                 db::add_relation(conn, id, dup_id, "duplicate")?;
-                let reason = effective_reason.unwrap_or_else(|| format!("Duplicate of #{}", dup_id));
+                let reason =
+                    effective_reason.unwrap_or_else(|| format!("Duplicate of #{}", dup_id));
                 commands::close::run(conn, id, Some(reason), false, fmt)
             } else {
                 commands::close::run(conn, id, effective_reason, wontfix, fmt)

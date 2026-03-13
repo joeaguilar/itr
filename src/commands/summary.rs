@@ -117,7 +117,11 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     }
 
     // Sort ready by urgency descending
-    ready_issues.sort_by(|a, b| b.urgency.partial_cmp(&a.urgency).unwrap_or(std::cmp::Ordering::Equal));
+    ready_issues.sort_by(|a, b| {
+        b.urgency
+            .partial_cmp(&a.urgency)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     ready_issues.truncate(5);
 
     // Get recent events (last 5)
@@ -174,25 +178,37 @@ fn print_compact(s: &Summary) {
             } else {
                 format!(" [{}]", i.assigned_to)
             };
-            println!("  #{} {} {} \"{}\"{}", i.id, i.priority, i.kind, i.title, assignee);
+            println!(
+                "  #{} {} {} \"{}\"{}",
+                i.id, i.priority, i.kind, i.title, assignee
+            );
         }
     }
 
     if !s.ready_issues.is_empty() {
         println!("READY:");
         for i in &s.ready_issues {
-            println!("  #{} {} {} \"{}\" (urgency: {:.1})", i.id, i.priority, i.kind, i.title, i.urgency);
+            println!(
+                "  #{} {} {} \"{}\" (urgency: {:.1})",
+                i.id, i.priority, i.kind, i.title, i.urgency
+            );
         }
     }
 
     if let Some(ref o) = s.oldest_open {
-        println!("OLDEST-OPEN: #{} \"{}\" ({} days)", o.id, o.title, o.days_old);
+        println!(
+            "OLDEST-OPEN: #{} \"{}\" ({} days)",
+            o.id, o.title, o.days_old
+        );
     }
 
     if !s.recent_events.is_empty() {
         println!("RECENT:");
         for e in &s.recent_events {
-            println!("  #{} {} -> {} ({})", e.issue_id, e.field, e.new_value, e.created_at);
+            println!(
+                "  #{} {} -> {} ({})",
+                e.issue_id, e.field, e.new_value, e.created_at
+            );
         }
     }
 }

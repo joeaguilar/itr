@@ -69,7 +69,10 @@ mod tests {
 
     #[test]
     fn parse_comma_list_trims_whitespace() {
-        assert_eq!(parse_comma_list("foo , bar , baz"), vec!["foo", "bar", "baz"]);
+        assert_eq!(
+            parse_comma_list("foo , bar , baz"),
+            vec!["foo", "bar", "baz"]
+        );
     }
 
     #[test]
@@ -93,12 +96,18 @@ mod tests {
 
     #[test]
     fn parse_comma_list_lower_normalizes_case() {
-        assert_eq!(parse_comma_list_lower("Rust,SQL,Go"), vec!["rust", "sql", "go"]);
+        assert_eq!(
+            parse_comma_list_lower("Rust,SQL,Go"),
+            vec!["rust", "sql", "go"]
+        );
     }
 
     #[test]
     fn parse_comma_list_lower_trims_and_filters() {
-        assert_eq!(parse_comma_list_lower(" Rust , , SQL "), vec!["rust", "sql"]);
+        assert_eq!(
+            parse_comma_list_lower(" Rust , , SQL "),
+            vec!["rust", "sql"]
+        );
     }
 
     // --- apply_tags ---
@@ -123,11 +132,7 @@ mod tests {
 
     #[test]
     fn apply_tags_add_and_remove() {
-        let result = apply_tags(
-            vec!["a".into(), "b".into()],
-            &["c".into()],
-            &["a".into()],
-        );
+        let result = apply_tags(vec!["a".into(), "b".into()], &["c".into()], &["a".into()]);
         assert_eq!(result, vec!["b", "c"]);
     }
 
@@ -184,7 +189,10 @@ mod tests {
     #[test]
     fn days_since_known_past_date() {
         let result = days_since("2020-01-01T00:00:00Z");
-        assert!(result > 0.0, "expected positive days for a past date, got {result}");
+        assert!(
+            result > 0.0,
+            "expected positive days for a past date, got {result}"
+        );
     }
 
     #[test]

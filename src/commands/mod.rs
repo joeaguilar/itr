@@ -29,13 +29,17 @@ pub mod upgrade;
 use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
-use crate::models::{IssueSummary, IssueDetail, Issue};
+use crate::models::{Issue, IssueDetail, IssueSummary};
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 use std::cmp::Ordering;
 
 /// Build an `IssueSummary` for a single issue: compute urgency, resolve blockers.
-pub fn build_issue_summary(conn: &Connection, issue: &Issue, config: &UrgencyConfig) -> IssueSummary {
+pub fn build_issue_summary(
+    conn: &Connection,
+    issue: &Issue,
+    config: &UrgencyConfig,
+) -> IssueSummary {
     let urg = urgency::compute_urgency(issue, config, conn);
     let blocked_by = db::get_blockers(conn, issue.id).unwrap_or_default();
     let is_blocked = db::is_blocked(conn, issue.id).unwrap_or(false);
@@ -113,11 +117,7 @@ pub fn build_issue_detail(
 
 /// Print an `IssueDetail` along with any newly-unblocked issues.
 /// Used by close.rs and update.rs after modifying an issue.
-pub fn print_detail_with_unblocked(
-    detail: &IssueDetail,
-    unblocked: &[(i64, String)],
-    fmt: Format,
-) {
+pub fn print_detail_with_unblocked(detail: &IssueDetail, unblocked: &[(i64, String)], fmt: Format) {
     match fmt {
         Format::Json => {
             let mut value = serde_json::to_value(detail).unwrap_or_default();

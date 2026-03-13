@@ -41,7 +41,11 @@ pub fn run(no_pull: bool, source_dir: Option<String>, fmt: Format) -> Result<(),
         .args(["build", "--release"])
         .current_dir(&src)
         .stdout(Stdio::null())
-        .stderr(if verbose { Stdio::inherit() } else { Stdio::null() })
+        .stderr(if verbose {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .status()
         .map_err(|e| ItrError::UpgradeFailed(format!("cargo build failed: {}", e)))?;
 
@@ -56,7 +60,11 @@ pub fn run(no_pull: bool, source_dir: Option<String>, fmt: Format) -> Result<(),
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok()).map_or_else(|| "unknown".to_string(), |s| s.trim().trim_start_matches("itr ").to_string());
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map_or_else(
+            || "unknown".to_string(),
+            |s| s.trim().trim_start_matches("itr ").to_string(),
+        );
 
     // Copy built binary to current exe location
     if verbose {

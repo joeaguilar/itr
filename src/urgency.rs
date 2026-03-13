@@ -194,4 +194,3 @@ pub fn compute_urgency_with_breakdown(
 
     (score, UrgencyBreakdown { components })
 }
-

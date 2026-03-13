@@ -14,7 +14,7 @@ jobs:
     # Skip if the push is just a tag or if commit message contains [skip version]
     if: "!contains(github.event.head_commit.message, '[skip version]')"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0  # Full history for git describe and log
           fetch-tags: true

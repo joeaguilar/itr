@@ -347,8 +347,10 @@ pub fn list_issues(
         param_values.push(Box::new(agent.clone()));
     }
 
-    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(std::convert::AsRef::as_ref).collect();
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values
+        .iter()
+        .map(std::convert::AsRef::as_ref)
+        .collect();
     let mut stmt = conn.prepare(&sql)?;
     let issues: Vec<Issue> = stmt
         .query_map(params_ref.as_slice(), row_to_issue)?
@@ -409,8 +411,17 @@ pub fn update_issue_field(
     value: &str,
 ) -> Result<(), ItrError> {
     const VALID_COLUMNS: &[&str] = &[
-        "title", "status", "priority", "kind", "context", "files", "tags",
-        "skills", "acceptance", "close_reason", "assigned_to",
+        "title",
+        "status",
+        "priority",
+        "kind",
+        "context",
+        "files",
+        "tags",
+        "skills",
+        "acceptance",
+        "close_reason",
+        "assigned_to",
     ];
     if !VALID_COLUMNS.contains(&field) {
         return Err(ItrError::InvalidValue {
@@ -700,7 +711,8 @@ pub fn search_issue_ids(
     let mut sql = String::from(
         "SELECT DISTINCT i.id FROM issues i LEFT JOIN notes n ON n.issue_id = i.id WHERE 1=1",
     );
-    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(terms.len() * 8);
+    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> =
+        Vec::with_capacity(terms.len() * 8);
 
     // Each term must match at least one searchable field
     for term in terms {
@@ -741,8 +753,10 @@ pub fn search_issue_ids(
         append_in_clause(&mut sql, &mut param_values, "i.kind", kinds);
     }
 
-    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(std::convert::AsRef::as_ref).collect();
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values
+        .iter()
+        .map(std::convert::AsRef::as_ref)
+        .collect();
     let mut stmt = conn.prepare(&sql)?;
     let ids: Vec<i64> = stmt
         .query_map(params_ref.as_slice(), |row| row.get(0))?
@@ -866,8 +880,10 @@ pub fn get_recent_events(
                 vec![Box::new(limit as i64)],
             )
         };
-    let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(std::convert::AsRef::as_ref).collect();
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values
+        .iter()
+        .map(std::convert::AsRef::as_ref)
+        .collect();
     let mut stmt = conn.prepare(&sql)?;
     let events: Vec<Event> = stmt
         .query_map(params_ref.as_slice(), row_to_event)?

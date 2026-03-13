@@ -1,9 +1,9 @@
-use crate::normalize::{validate_kind, validate_priority, validate_status};
 use crate::commands::{build_issue_detail, print_detail_with_unblocked};
 use crate::db;
 use crate::error::ItrError;
 use crate::format::Format;
 use crate::normalize;
+use crate::normalize::{validate_kind, validate_priority, validate_status};
 use crate::urgency::UrgencyConfig;
 use crate::util;
 use rusqlite::Connection;
@@ -110,9 +110,15 @@ pub fn run(
 
     // Handle files
     if files.is_some() || !file.is_empty() {
-        let mut file_list: Vec<String> =
-            files.as_deref().map(util::parse_comma_list).unwrap_or_default();
-        file_list.extend(file.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+        let mut file_list: Vec<String> = files
+            .as_deref()
+            .map(util::parse_comma_list)
+            .unwrap_or_default();
+        file_list.extend(
+            file.into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        );
         let json = serde_json::to_string(&file_list)?;
         db::update_issue_field(conn, id, "files", &json)?;
     } else if !add_files.is_empty() || !remove_files.is_empty() {
@@ -124,9 +130,15 @@ pub fn run(
 
     // Handle tags
     if tags.is_some() || !tag.is_empty() {
-        let mut tag_list: Vec<String> =
-            tags.as_deref().map(util::parse_comma_list).unwrap_or_default();
-        tag_list.extend(tag.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+        let mut tag_list: Vec<String> = tags
+            .as_deref()
+            .map(util::parse_comma_list)
+            .unwrap_or_default();
+        tag_list.extend(
+            tag.into_iter()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+        );
         let json = serde_json::to_string(&tag_list)?;
         db::update_issue_field(conn, id, "tags", &json)?;
     } else if !add_tags.is_empty() || !remove_tags.is_empty() {
@@ -138,10 +150,16 @@ pub fn run(
 
     // Handle skills
     if skills.is_some() || !skill.is_empty() {
-        let mut skill_list: Vec<String> =
-            skills.as_deref().map(util::parse_comma_list_lower).unwrap_or_default();
-        skill_list
-            .extend(skill.into_iter().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()));
+        let mut skill_list: Vec<String> = skills
+            .as_deref()
+            .map(util::parse_comma_list_lower)
+            .unwrap_or_default();
+        skill_list.extend(
+            skill
+                .into_iter()
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty()),
+        );
         let json = serde_json::to_string(&skill_list)?;
         db::update_issue_field(conn, id, "skills", &json)?;
     } else if !add_skills.is_empty() || !remove_skills.is_empty() {

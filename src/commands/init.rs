@@ -26,8 +26,10 @@ pub fn run(agents_md: bool, fmt: Format, db_override: Option<&str>) -> Result<()
     };
 
     if agents_md {
-        let agents_dir = db_path
-            .parent().map_or_else(|| env::current_dir().unwrap_or_else(|_| PathBuf::from(".")), std::path::Path::to_path_buf);
+        let agents_dir = db_path.parent().map_or_else(
+            || env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            std::path::Path::to_path_buf,
+        );
         append_agents_md(&agents_dir)?;
     }
 
