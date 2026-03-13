@@ -208,7 +208,7 @@ fn print_result(result: &BulkResult, fmt: Format) {
                 result
                     .ids
                     .iter()
-                    .map(|i| i.to_string())
+                    .map(std::string::ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(","),
                 if result.dry_run { " (dry-run)" } else { "" }

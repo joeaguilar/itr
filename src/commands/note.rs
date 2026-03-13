@@ -16,15 +16,12 @@ pub fn run(
     } else {
         agent.to_string()
     };
-    let content = match text {
-        Some(t) => t,
-        None => {
-            return Err(ItrError::InvalidValue {
-                field: "text".to_string(),
-                value: String::new(),
-                valid: "non-empty string".to_string(),
-            });
-        }
+    let Some(content) = text else {
+        return Err(ItrError::InvalidValue {
+            field: "text".to_string(),
+            value: String::new(),
+            valid: "non-empty string".to_string(),
+        });
     };
 
     let note = db::add_note(conn, id, &content, &agent)?;

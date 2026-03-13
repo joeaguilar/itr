@@ -28,15 +28,15 @@ pub fn run_undepend(conn: &Connection, id: i64, on: i64, fmt: Format) -> Result<
     db::remove_dependency(conn, on, id)?;
 
     // Check if this unblocks anything
-    let unblocked = if !db::is_blocked(conn, id)? {
+    let unblocked = if db::is_blocked(conn, id)? {
+        vec![]
+    } else {
         let issue = db::get_issue(conn, id)?;
         if issue.status != "done" && issue.status != "wontfix" {
             vec![(issue.id, issue.title)]
         } else {
             vec![]
         }
-    } else {
-        vec![]
     };
 
     match fmt {

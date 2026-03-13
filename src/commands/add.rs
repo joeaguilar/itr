@@ -45,7 +45,7 @@ pub fn run(
         let mut input = String::new();
         io::stdin().read_to_string(&mut input)?;
         let data: BatchAddInput = serde_json::from_str(&input)?;
-        let blocked: Vec<i64> = data.blocked_by.iter().filter_map(|v| v.as_i64()).collect();
+        let blocked: Vec<i64> = data.blocked_by.iter().filter_map(serde_json::Value::as_i64).collect();
         (
             data.title,
             data.priority,

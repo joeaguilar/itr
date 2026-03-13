@@ -21,13 +21,11 @@ fn preprocess_args() -> Vec<std::ffi::OsString> {
     // Look for consecutive "getting" + "started" and merge them.
     if let Some(pos) = args
         .iter()
-        .position(|a| a.to_str().map(|s| s.eq_ignore_ascii_case("getting")) == Some(true))
+        .position(|a| a.to_str().is_some_and(|s| s.eq_ignore_ascii_case("getting")))
     {
         if args
             .get(pos + 1)
-            .and_then(|a| a.to_str())
-            .map(|s| s.eq_ignore_ascii_case("started"))
-            == Some(true)
+            .and_then(|a| a.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("started"))
         {
             args[pos] = "getting-started".into();
             args.remove(pos + 1);

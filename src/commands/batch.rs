@@ -397,7 +397,7 @@ pub fn run_update(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), I
 
         // Check for newly unblocked issues if status changed to terminal
         let unblocked = match new_status.as_deref() {
-            Some("done") | Some("wontfix") => {
+            Some("done" | "wontfix") => {
                 let list = db::get_newly_unblocked(&tx, item.id)?;
                 list.into_iter()
                     .map(|(id, title)| UnblockedIssue { id, title })

@@ -189,6 +189,9 @@ mod tests {
 
     #[test]
     fn days_since_unparseable_returns_zero() {
-        assert_eq!(days_since("not-a-date"), 0.0);
+        assert!(
+            days_since("not-a-date").abs() < f64::EPSILON,
+            "expected 0.0 for unparseable date"
+        );
     }
 }

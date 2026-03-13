@@ -20,7 +20,7 @@ pub fn run(
     limit: Option<usize>,
     fmt: Format,
 ) -> Result<(), ItrError> {
-    let terms: Vec<String> = query.split_whitespace().map(|s| s.to_string()).collect();
+    let terms: Vec<String> = query.split_whitespace().map(std::string::ToString::to_string).collect();
 
     if terms.is_empty() {
         error::print_empty(fmt.is_json(), "No search terms provided.");
@@ -109,13 +109,13 @@ pub fn run(
     }
 
     // Filter by skills (AND logic)
-    let mut results = if !skills.is_empty() {
+    let mut results = if skills.is_empty() {
+        results
+    } else {
         results
             .into_iter()
             .filter(|r| skills.iter().all(|s| r.skills.contains(s)))
             .collect()
-    } else {
-        results
     };
 
     // Filter by assigned_to

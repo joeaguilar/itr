@@ -4,7 +4,7 @@ use rusqlite::{params, Connection};
 use std::env;
 use std::path::{Path, PathBuf};
 
-const SCHEMA: &str = r#"
+const SCHEMA: &str = r"
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
@@ -64,7 +64,7 @@ BEGIN
     UPDATE issues SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
     WHERE id = OLD.id;
 END;
-"#;
+";
 
 pub fn find_db(override_path: Option<&str>) -> Result<PathBuf, ItrError> {
     // Check env var
@@ -239,7 +239,7 @@ fn parse_json_array(s: String) -> Vec<String> {
 }
 
 /// Append an `AND column IN (?, ?, ...)` clause to the SQL string,
-/// pushing values into param_values. Returns the number of placeholders added.
+/// pushing values into `param_values`. Returns the number of placeholders added.
 fn append_in_clause(
     sql: &mut String,
     param_values: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
@@ -310,7 +310,6 @@ fn row_to_relation(row: &rusqlite::Row) -> rusqlite::Result<Relation> {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 pub fn list_issues(
     conn: &Connection,
     statuses: &[String],
@@ -331,11 +330,11 @@ pub fn list_issues(
     let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
     if !all {
-        if !statuses.is_empty() {
-            append_in_clause(&mut sql, &mut param_values, "status", statuses);
-        } else {
+        if statuses.is_empty() {
             let defaults = vec!["open".to_string(), "in-progress".to_string()];
             append_in_clause(&mut sql, &mut param_values, "status", &defaults);
+        } else {
+            append_in_clause(&mut sql, &mut param_values, "status", statuses);
         }
     }
 
@@ -360,40 +359,40 @@ pub fn list_issues(
     }
 
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(|b| b.as_ref()).collect();
+        param_values.iter().map(std::convert::AsRef::as_ref).collect();
     let mut stmt = conn.prepare(&sql)?;
     let issues: Vec<Issue> = stmt
         .query_map(params_ref.as_slice(), row_to_issue)?
         .collect::<Result<Vec<_>, _>>()?;
 
     // Filter by tags (AND logic)
-    let issues = if !tags.is_empty() {
+    let issues = if tags.is_empty() {
+        issues
+    } else {
         issues
             .into_iter()
             .filter(|i| tags.iter().all(|t| i.tags.contains(t)))
             .collect()
-    } else {
-        issues
     };
 
     // Filter by tag_any (OR logic)
-    let issues = if !tag_any.is_empty() {
+    let issues = if tag_any.is_empty() {
+        issues
+    } else {
         issues
             .into_iter()
             .filter(|i| tag_any.iter().any(|t| i.tags.contains(t)))
             .collect()
-    } else {
-        issues
     };
 
     // Filter by skills (AND logic)
-    let issues = if !skills.is_empty() {
+    let issues = if skills.is_empty() {
+        issues
+    } else {
         issues
             .into_iter()
             .filter(|i| skills.iter().all(|s| i.skills.contains(s)))
             .collect()
-    } else {
-        issues
     };
 
     // Filter by blocked status
@@ -737,11 +736,11 @@ pub fn search_issue_ids(
 
     // Status filter
     if !all {
-        if !statuses.is_empty() {
-            append_in_clause(&mut sql, &mut param_values, "i.status", statuses);
-        } else {
+        if statuses.is_empty() {
             let defaults = vec!["open".to_string(), "in-progress".to_string()];
             append_in_clause(&mut sql, &mut param_values, "i.status", &defaults);
+        } else {
+            append_in_clause(&mut sql, &mut param_values, "i.status", statuses);
         }
     }
 
@@ -754,7 +753,7 @@ pub fn search_issue_ids(
     }
 
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(|b| b.as_ref()).collect();
+        param_values.iter().map(std::convert::AsRef::as_ref).collect();
     let mut stmt = conn.prepare(&sql)?;
     let ids: Vec<i64> = stmt
         .query_map(params_ref.as_slice(), |row| row.get(0))?
@@ -879,7 +878,7 @@ pub fn get_recent_events(
             )
         };
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =
-        param_values.iter().map(|b| b.as_ref()).collect();
+        param_values.iter().map(std::convert::AsRef::as_ref).collect();
     let mut stmt = conn.prepare(&sql)?;
     let events: Vec<Event> = stmt
         .query_map(params_ref.as_slice(), row_to_event)?

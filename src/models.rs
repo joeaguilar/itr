@@ -187,6 +187,7 @@ pub struct BulkResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::struct_field_names)]
 pub struct Relation {
     pub id: i64,
     pub source_id: i64,

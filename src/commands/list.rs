@@ -55,7 +55,7 @@ pub fn run(
     match sort {
         "urgency" => sort_by_urgency_desc(&mut summaries),
         "priority" => {
-            summaries.sort_by(|a, b| priority_ord(&a.priority).cmp(&priority_ord(&b.priority)))
+            summaries.sort_by(|a, b| priority_ord(&a.priority).cmp(&priority_ord(&b.priority)));
         }
         "created" => {} // already ordered by insertion
         "updated" => {} // would need updated_at on summary

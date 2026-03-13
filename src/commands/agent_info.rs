@@ -2,6 +2,7 @@ use crate::agent_docs::AGENT_DOCS;
 use crate::error::ItrError;
 use crate::format::Format;
 
+#[allow(clippy::unnecessary_wraps)]
 pub fn run(fmt: Format) -> Result<(), ItrError> {
     match fmt {
         Format::Json => {

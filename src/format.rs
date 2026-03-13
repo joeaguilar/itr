@@ -20,8 +20,8 @@ fn get_fields_filter() -> Option<Vec<String>> {
 
 /// Returns true if `name` should be included in output.
 /// When no --fields filter is set, all fields are included.
-fn field_enabled(fields: &Option<Vec<String>>, name: &str) -> bool {
-    fields.as_ref().is_none_or(|f| f.iter().any(|x| x == name))
+fn field_enabled(fields: Option<&Vec<String>>, name: &str) -> bool {
+    fields.is_none_or(|f| f.iter().any(|x| x == name))
 }
 
 /// Apply field filtering to a JSON string if --fields was set, returning the filtered string
@@ -72,7 +72,7 @@ impl Format {
         }
     }
 
-    pub fn is_json(&self) -> bool {
+    pub fn is_json(self) -> bool {
         matches!(self, Format::Json)
     }
 }
@@ -89,7 +89,7 @@ pub fn format_issue_detail(detail: &IssueDetail, fmt: Format) -> String {
 
 fn format_issue_detail_compact(d: &IssueDetail) -> String {
     let fields = get_fields_filter();
-    let on = |name: &str| field_enabled(&fields, name);
+    let on = |name: &str| field_enabled(fields.as_ref(), name);
     let mut lines = Vec::new();
 
     let mut first_parts = Vec::new();
@@ -113,7 +113,7 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
             "BLOCKED_BY:{}",
             d.blocked_by
                 .iter()
-                .map(|i| i.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(",")
         ));
@@ -123,7 +123,7 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
             "BLOCKS:{}",
             d.blocks
                 .iter()
-                .map(|i| i.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(",")
         ));
@@ -250,7 +250,7 @@ fn format_issue_detail_pretty(d: &IssueDetail) -> String {
             "  Blocked by: {}",
             d.blocked_by
                 .iter()
-                .map(|i| i.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
@@ -260,7 +260,7 @@ fn format_issue_detail_pretty(d: &IssueDetail) -> String {
             "  Blocks: {}",
             d.blocks
                 .iter()
-                .map(|i| i.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
@@ -315,7 +315,7 @@ fn format_issue_list_oneline(issues: &[IssueSummary]) -> String {
 
 fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
     let fields = get_fields_filter();
-    let on = |name: &str| field_enabled(&fields, name);
+    let on = |name: &str| field_enabled(fields.as_ref(), name);
     issues
         .iter()
         .map(|i| {
@@ -340,7 +340,7 @@ fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
                     "BLOCKED_BY:{}",
                     i.blocked_by
                         .iter()
-                        .map(|x| x.to_string())
+                        .map(std::string::ToString::to_string)
                         .collect::<Vec<_>>()
                         .join(",")
                 ));
@@ -376,7 +376,7 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
         return String::new();
     }
     let fields = get_fields_filter();
-    let on = |name: &str| field_enabled(&fields, name);
+    let on = |name: &str| field_enabled(fields.as_ref(), name);
 
     // (field_name, header, width, right_align)
     // width=0 → last column, no padding
@@ -427,7 +427,7 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
                     "blocked_by" => i
                         .blocked_by
                         .iter()
-                        .map(|x| x.to_string())
+                        .map(std::string::ToString::to_string)
                         .collect::<Vec<_>>()
                         .join(", "),
                     _ => String::new(),
@@ -602,7 +602,7 @@ fn format_search_compact(results: &[SearchResult]) -> String {
                     " BLOCKED_BY:{}",
                     r.blocked_by
                         .iter()
-                        .map(|x| x.to_string())
+                        .map(std::string::ToString::to_string)
                         .collect::<Vec<_>>()
                         .join(",")
                 ));

@@ -17,3 +17,31 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+# Noisy pedantic lints — not worth the churn for this codebase
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+# Format style: too many callsites to rewrite, marginal readability gain
+uninlined_format_args = "allow"
+# Functions are dispatched from clap; restructuring signatures adds complexity
+too_many_lines = "allow"
+needless_pass_by_value = "allow"
+# CLI tool uses string-based matching extensively by design (soft-fallbacks)
+single_match_else = "allow"
+match_same_arms = "allow"
+# Numeric casts between i64/f64/usize are inherent to SQLite row handling and urgency scoring
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
+# format!() appended to String is clearer than write!() for short output building
+format_push_string = "allow"
+# Similar names (e.g., item/items) are fine when semantically distinct
+similar_names = "allow"
+# Restriction lints worth enabling
+dbg_macro = "deny"

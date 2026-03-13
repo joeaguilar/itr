@@ -322,7 +322,7 @@ pub enum Commands {
         #[arg(long)]
         skill: Vec<String>,
 
-        /// Agent name for assignment (falls back to ITR_AGENT env var)
+        /// Agent name for assignment (falls back to `ITR_AGENT` env var)
         #[arg(long)]
         agent: Option<String>,
 
@@ -433,7 +433,7 @@ pub enum Commands {
         #[arg(long)]
         skill: Vec<String>,
 
-        /// Agent name for assignment (falls back to ITR_AGENT env var)
+        /// Agent name for assignment (falls back to `ITR_AGENT` env var)
         #[arg(long)]
         agent: Option<String>,
 
