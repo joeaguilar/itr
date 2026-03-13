@@ -2,7 +2,7 @@ use super::{build_issue_summary, sort_by_urgency_desc};
 use crate::db;
 use crate::error::{self, ItrError};
 use crate::format::{self, Format};
-use crate::models::IssueSummary;
+use crate::models::{IssueSummary, ListFilter};
 use crate::urgency::UrgencyConfig;
 use rusqlite::Connection;
 
@@ -22,17 +22,12 @@ pub fn run(
     // Get unblocked, non-terminal issues
     let issues = db::list_issues(
         conn,
-        &statuses,
-        &[],
-        &[],
-        &[],
-        false,
-        false, // exclude blocked
-        None,
-        false,
-        &skills,
-        assigned_to.as_deref(),
-        &[],
+        &ListFilter {
+            statuses,
+            skills,
+            assigned_to,
+            ..ListFilter::default()
+        },
     )?;
 
     if issues.is_empty() {

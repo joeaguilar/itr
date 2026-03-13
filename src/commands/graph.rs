@@ -1,7 +1,7 @@
 use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
-use crate::models::{GraphEdge, GraphNode, GraphOutput};
+use crate::models::{GraphEdge, GraphNode, GraphOutput, ListFilter};
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 
@@ -11,17 +11,10 @@ pub fn run(conn: &Connection, all: bool, fmt: Format) -> Result<(), ItrError> {
     } else {
         db::list_issues(
             conn,
-            &[],
-            &[],
-            &[],
-            &[],
-            false,
-            true,
-            None,
-            false,
-            &[],
-            None,
-            &[],
+            &ListFilter {
+                include_blocked: true,
+                ..ListFilter::default()
+            },
         )?
     };
 

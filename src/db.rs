@@ -309,53 +309,42 @@ fn row_to_relation(row: &rusqlite::Row) -> rusqlite::Result<Relation> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn list_issues(
     conn: &Connection,
-    statuses: &[String],
-    priorities: &[String],
-    kinds: &[String],
-    tags: &[String],
-    blocked_only: bool,
-    include_blocked: bool,
-    parent_id: Option<i64>,
-    all: bool,
-    skills: &[String],
-    assigned_to: Option<&str>,
-    tag_any: &[String],
+    filter: &crate::models::ListFilter,
 ) -> Result<Vec<Issue>, ItrError> {
     let mut sql = String::from(
         "SELECT id, title, status, priority, kind, context, files, tags, skills, acceptance, parent_id, close_reason, created_at, updated_at, assigned_to FROM issues WHERE 1=1",
     );
     let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
-    if !all {
-        if statuses.is_empty() {
+    if !filter.all {
+        if filter.statuses.is_empty() {
             let defaults = vec!["open".to_string(), "in-progress".to_string()];
             append_in_clause(&mut sql, &mut param_values, "status", &defaults);
         } else {
-            append_in_clause(&mut sql, &mut param_values, "status", statuses);
+            append_in_clause(&mut sql, &mut param_values, "status", &filter.statuses);
         }
     }
 
-    if !priorities.is_empty() {
-        append_in_clause(&mut sql, &mut param_values, "priority", priorities);
+    if !filter.priorities.is_empty() {
+        append_in_clause(&mut sql, &mut param_values, "priority", &filter.priorities);
     }
 
-    if !kinds.is_empty() {
-        append_in_clause(&mut sql, &mut param_values, "kind", kinds);
+    if !filter.kinds.is_empty() {
+        append_in_clause(&mut sql, &mut param_values, "kind", &filter.kinds);
     }
 
-    if let Some(pid) = parent_id {
+    if let Some(pid) = filter.parent_id {
         let p = param_values.len() + 1;
         sql.push_str(&format!(" AND parent_id = ?{}", p));
         param_values.push(Box::new(pid));
     }
 
-    if let Some(agent) = assigned_to {
+    if let Some(ref agent) = filter.assigned_to {
         let p = param_values.len() + 1;
         sql.push_str(&format!(" AND assigned_to = ?{}", p));
-        param_values.push(Box::new(agent.to_string()));
+        param_values.push(Box::new(agent.clone()));
     }
 
     let params_ref: Vec<&dyn rusqlite::types::ToSql> =
@@ -366,42 +355,42 @@ pub fn list_issues(
         .collect::<Result<Vec<_>, _>>()?;
 
     // Filter by tags (AND logic)
-    let issues = if tags.is_empty() {
+    let issues = if filter.tags.is_empty() {
         issues
     } else {
         issues
             .into_iter()
-            .filter(|i| tags.iter().all(|t| i.tags.contains(t)))
+            .filter(|i| filter.tags.iter().all(|t| i.tags.contains(t)))
             .collect()
     };
 
     // Filter by tag_any (OR logic)
-    let issues = if tag_any.is_empty() {
+    let issues = if filter.tag_any.is_empty() {
         issues
     } else {
         issues
             .into_iter()
-            .filter(|i| tag_any.iter().any(|t| i.tags.contains(t)))
+            .filter(|i| filter.tag_any.iter().any(|t| i.tags.contains(t)))
             .collect()
     };
 
     // Filter by skills (AND logic)
-    let issues = if skills.is_empty() {
+    let issues = if filter.skills.is_empty() {
         issues
     } else {
         issues
             .into_iter()
-            .filter(|i| skills.iter().all(|s| i.skills.contains(s)))
+            .filter(|i| filter.skills.iter().all(|s| i.skills.contains(s)))
             .collect()
     };
 
     // Filter by blocked status
-    let issues = if blocked_only {
+    let issues = if filter.blocked_only {
         issues
             .into_iter()
             .filter(|i| is_blocked(conn, i.id).unwrap_or(false))
             .collect()
-    } else if !include_blocked && !all {
+    } else if !filter.include_blocked && !filter.all {
         issues
             .into_iter()
             .filter(|i| !is_blocked(conn, i.id).unwrap_or(false))

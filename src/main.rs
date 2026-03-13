@@ -12,6 +12,7 @@ mod util;
 use clap::Parser;
 use cli::{BatchAction, BulkAction, Cli, Commands, ConfigAction};
 use error::handle_error;
+use models::ListFilter;
 use format::Format;
 
 /// Merge multi-word subcommands that clap can't handle natively.
@@ -175,23 +176,20 @@ fn run_command(
                 && parent.is_none()
                 && assigned_to.is_none();
             let effective_include_blocked = include_blocked || (no_filters && !all);
-            commands::list::run(
-                conn,
-                all,
-                status,
-                priority,
-                kind,
-                tag,
-                skill,
-                blocked,
-                effective_include_blocked,
-                parent,
-                assigned_to,
-                &sort,
-                limit,
+            let filter = ListFilter {
+                statuses: status,
+                priorities: priority,
+                kinds: kind,
+                tags: tag,
                 tag_any,
-                fmt,
-            )
+                skills: skill,
+                blocked_only: blocked,
+                include_blocked: effective_include_blocked,
+                parent_id: parent,
+                assigned_to,
+                all,
+            };
+            commands::list::run(conn, &filter, &sort, limit, fmt)
         }
 
         Commands::Get { id } => commands::get::run(conn, id, fmt),
@@ -411,19 +409,13 @@ fn run_command(
 
         Commands::Wip => commands::list::run(
             conn,
-            false,
-            vec!["in-progress".to_string()],
-            vec![],
-            vec![],
-            vec![],
-            vec![],
-            false,
-            true,
-            None,
-            None,
+            &ListFilter {
+                statuses: vec!["in-progress".to_string()],
+                include_blocked: true,
+                ..ListFilter::default()
+            },
             "urgency",
             None,
-            vec![],
             fmt,
         ),
 
@@ -434,19 +426,13 @@ fn run_command(
             }
             commands::list::run(
                 conn,
-                all,
-                vec![],
-                vec![],
-                vec![],
-                vec![],
-                vec![],
-                false,
-                true,
-                None,
-                None,
+                &ListFilter {
+                    include_blocked: true,
+                    all,
+                    ..ListFilter::default()
+                },
                 "urgency",
                 None,
-                vec![],
                 fmt,
             )
         }

@@ -2,6 +2,7 @@ use crate::commands::build_issue_detail;
 use crate::db;
 use crate::error::{self, ItrError};
 use crate::format::{self, Format};
+use crate::models::ListFilter;
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 use std::env;
@@ -35,17 +36,12 @@ pub fn run(
         // Get all open, unblocked issues
         let issues = db::list_issues(
             conn,
-            &["open".to_string()],
-            &[],
-            &[],
-            &[],
-            false,
-            false,
-            None,
-            false,
-            &skills,
-            assigned_to.as_deref(),
-            &[],
+            &ListFilter {
+                statuses: vec!["open".to_string()],
+                skills,
+                assigned_to,
+                ..ListFilter::default()
+            },
         )?;
 
         if issues.is_empty() {

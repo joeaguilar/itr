@@ -2,42 +2,18 @@ use super::{build_issue_summary, sort_by_urgency_desc};
 use crate::db;
 use crate::error::{self, ItrError};
 use crate::format::{self, Format};
-use crate::models::IssueSummary;
+use crate::models::{IssueSummary, ListFilter};
 use crate::urgency::UrgencyConfig;
 use rusqlite::Connection;
 
-#[allow(clippy::too_many_arguments)]
 pub fn run(
     conn: &Connection,
-    all: bool,
-    statuses: Vec<String>,
-    priorities: Vec<String>,
-    kinds: Vec<String>,
-    tags: Vec<String>,
-    skills: Vec<String>,
-    blocked_only: bool,
-    include_blocked: bool,
-    parent: Option<i64>,
-    assigned_to: Option<String>,
+    filter: &ListFilter,
     sort: &str,
     limit: Option<usize>,
-    tag_any: Vec<String>,
     fmt: Format,
 ) -> Result<(), ItrError> {
-    let issues = db::list_issues(
-        conn,
-        &statuses,
-        &priorities,
-        &kinds,
-        &tags,
-        blocked_only,
-        include_blocked,
-        parent,
-        all,
-        &skills,
-        assigned_to.as_deref(),
-        &tag_any,
-    )?;
+    let issues = db::list_issues(conn, filter)?;
 
     if issues.is_empty() {
         error::print_empty(fmt.is_json(), "No matching issues found.");

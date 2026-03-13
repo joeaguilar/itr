@@ -1,7 +1,7 @@
 use crate::db;
 use crate::error::ItrError;
 use crate::format::Format;
-use crate::models::{BulkResult, UnblockedIssue};
+use crate::models::{BulkResult, ListFilter, UnblockedIssue};
 use crate::normalize;
 use rusqlite::Connection;
 
@@ -44,17 +44,16 @@ pub fn run_close(
 
     let issues = db::list_issues(
         conn,
-        &statuses,
-        &priorities,
-        &kinds,
-        &tags,
-        false,
-        true,
-        None,
-        false,
-        &skills,
-        assigned_to.as_deref(),
-        &[],
+        &ListFilter {
+            statuses,
+            priorities,
+            kinds,
+            tags,
+            skills,
+            include_blocked: true,
+            assigned_to,
+            ..ListFilter::default()
+        },
     )?;
 
     let ids: Vec<i64> = issues.iter().map(|i| i.id).collect();
@@ -140,17 +139,16 @@ pub fn run_update(
 
     let issues = db::list_issues(
         conn,
-        &statuses,
-        &priorities,
-        &kinds,
-        &tags,
-        false,
-        true,
-        None,
-        false,
-        &skills,
-        assigned_to.as_deref(),
-        &[],
+        &ListFilter {
+            statuses,
+            priorities,
+            kinds,
+            tags,
+            skills,
+            include_blocked: true,
+            assigned_to,
+            ..ListFilter::default()
+        },
     )?;
 
     let ids: Vec<i64> = issues.iter().map(|i| i.id).collect();

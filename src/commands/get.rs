@@ -2,7 +2,7 @@ use super::build_issue_summary;
 use crate::db;
 use crate::error::ItrError;
 use crate::format::{self, Format};
-use crate::models::{IssueDetail, IssueSummary};
+use crate::models::{IssueDetail, IssueSummary, ListFilter};
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 
@@ -19,17 +19,12 @@ pub fn run(conn: &Connection, id: i64, fmt: Format) -> Result<(), ItrError> {
     let children = if issue.kind == "epic" {
         let child_issues = db::list_issues(
             conn,
-            &[],
-            &[],
-            &[],
-            &[],
-            false,
-            true,
-            Some(issue.id),
-            true,
-            &[],
-            None,
-            &[],
+            &ListFilter {
+                include_blocked: true,
+                parent_id: Some(issue.id),
+                all: true,
+                ..ListFilter::default()
+            },
         )?;
         let child_summaries: Vec<IssueSummary> = child_issues
             .iter()

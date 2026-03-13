@@ -1,5 +1,21 @@
 use serde::{Deserialize, Serialize};
 
+/// Filter parameters for `db::list_issues()`.
+#[derive(Debug, Default, Clone)]
+pub struct ListFilter {
+    pub statuses: Vec<String>,
+    pub priorities: Vec<String>,
+    pub kinds: Vec<String>,
+    pub tags: Vec<String>,
+    pub tag_any: Vec<String>,
+    pub skills: Vec<String>,
+    pub blocked_only: bool,
+    pub include_blocked: bool,
+    pub parent_id: Option<i64>,
+    pub assigned_to: Option<String>,
+    pub all: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Issue {
     pub id: i64,
