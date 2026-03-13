@@ -15,9 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
+      - uses: dtolnay/rust-toolchain@master
       - run: cargo fmt --all -- --check
 
   lint:
@@ -25,9 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - uses: dtolnay/rust-toolchain@master
       - uses: actions/cache@v5
         with:
           path: |
@@ -50,7 +46,7 @@ jobs:
     needs: [fmt-check, lint]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
       - uses: actions/cache@v5
         with:
           path: |
