@@ -1,5 +1,7 @@
 # itr — Agent-First Issue Tracker CLI
 
+[![CI](https://github.com/joeaguilar/itr/actions/workflows/ci.yml/badge.svg)](https://github.com/joeaguilar/itr/actions/workflows/ci.yml)
+
 A local, zero-config issue tracker built for AI coding agents. SQLite-backed, single binary, no daemon, no network, no auth.
 
 ```
