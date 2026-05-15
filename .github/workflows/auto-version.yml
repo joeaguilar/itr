@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  actions: write   # needed to dispatch the Release workflow after tagging
 
 jobs:
   tag:
@@ -94,3 +95,17 @@ jobs:
           git tag "$NEW_TAG"
           git push origin "$NEW_TAG"
           echo "Tagged $NEW_TAG"
+          echo "NEW_TAG=$NEW_TAG" >> "$GITHUB_ENV"
+
+      - name: Dispatch Release workflow
+        if: env.NEW_TAG != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # GITHUB_TOKEN cannot trigger push-on-tag workflows, but it CAN
+          # trigger workflow_dispatch on workflows in the same repo. We use
+          # that to fan out from auto-version into the release matrix.
+          gh workflow run release.yml \
+            --ref "$NEW_TAG" \
+            -f tag="$NEW_TAG"
+          echo "Dispatched release.yml for $NEW_TAG"

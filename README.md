@@ -23,37 +23,46 @@ AI coding agents need persistent memory across sessions. `itr` gives them a loca
 
 ## Install
 
-### Quick install (recommended)
+No Rust toolchain required — prebuilt binaries are published on every release for macOS (Intel + Apple Silicon), Linux (x86_64 glibc/musl, aarch64), and Windows (x86_64 + arm64).
+
+On x86_64 Linux the installer downloads the **fully-static musl build by default** so it runs on any distro regardless of glibc version. The glibc artifact is still published if you'd rather grab it manually from the [Releases page](https://github.com/joeaguilar/itr/releases/latest).
+
+### macOS / Linux
 
 ```bash
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/joeaguilar/itr/main/install.sh | bash
 ```
 
-The installation script will:
-- Build the release binary
-- Offer installation to `~/.cargo/bin`, `/usr/local/bin`, or a custom location
-- Verify the binary is in your PATH
-- Guide you through any additional setup
+The script auto-detects your platform, downloads the matching tarball from the latest GitHub Release, verifies its SHA256 checksum, and installs to `~/.local/bin` (or `~/.cargo/bin` if it's already on PATH).
 
-To uninstall later:
+Environment overrides:
 
-```bash
-./uninstall.sh
+| Variable | Effect |
+| -------- | ------ |
+| `ITR_VERSION` | Pin a specific tag (e.g. `v0.1.0`). Defaults to latest. |
+| `ITR_INSTALL_DIR` | Install directory. Defaults to `~/.local/bin`. |
+| `ITR_FROM_SOURCE=1` | Skip download, build with cargo (must be run from a cloned repo). |
+
+### Windows
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/joeaguilar/itr/main/install.ps1 | iex
 ```
 
-### From source (any platform)
+Installs `itr.exe` into `%LOCALAPPDATA%\Programs\itr` and adds that directory to your user PATH. Use `-Version`, `-InstallDir`, or `-Repo` parameters to override defaults.
+
+### Manual download
+
+Grab a release archive for your platform from [GitHub Releases](https://github.com/joeaguilar/itr/releases/latest), verify the bundled `.sha256`, extract it, and drop `itr` (or `itr.exe`) anywhere on your `PATH`.
+
+### From source
+
+If you'd rather build locally — or no prebuilt binary exists for your target — you'll need a Rust toolchain (2021 edition or newer; SQLite is compiled from source via the `bundled` feature).
 
 ```bash
-cargo install --path .
-```
-
-### Build manually
-
-```bash
-git clone https://github.com/joeaguilar/itr
-cd itr
-cargo build --release
-# Binary at ./target/release/itr
+cargo install --git https://github.com/joeaguilar/itr   # remote
+# or
+git clone https://github.com/joeaguilar/itr && cd itr && cargo install --path .
 ```
 
 ### Nix
@@ -64,7 +73,13 @@ nix profile install https://github.com/joeaguilar/itr
 nix develop
 ```
 
-**Requirements**: Rust 2021 edition. No system dependencies — SQLite is compiled from source via the `bundled` feature.
+### Uninstall
+
+```bash
+./uninstall.sh   # macOS / Linux; removes itr from common install dirs
+```
+
+On Windows, delete `%LOCALAPPDATA%\Programs\itr\itr.exe` and remove that directory from your user PATH.
 
 ## Quick Start
 
