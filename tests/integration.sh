@@ -1363,6 +1363,108 @@ rm -rf "$ALIAS_DIR"
 
 # ─────────────────────────────────────────────
 echo ""
+echo "--- ui ---"
+# ─────────────────────────────────────────────
+
+UI_DIR=$(mktemp -d)
+$ITR init --db "$UI_DIR/.itr.db" > /dev/null
+$ITR --db "$UI_DIR/.itr.db" add "UI seed" -p high -k bug --tags "ui,seed" -a "visible through ui api" -f json > /dev/null
+
+UI_PORT=39217
+UI_OUT="$UI_DIR/ui.out"
+UI_ERR="$UI_DIR/ui.err"
+$ITR --db "$UI_DIR/.itr.db" ui --port "$UI_PORT" --no-open -f json > "$UI_OUT" 2> "$UI_ERR" &
+UI_PID=$!
+
+for _ in {1..30}; do
+    if [ -s "$UI_OUT" ]; then
+        break
+    fi
+    sleep 0.1
+done
+
+if ! kill -0 "$UI_PID" 2>/dev/null; then
+    fail "ui: local server starts" "process exited: $(cat "$UI_ERR")"
+else
+    TOKEN=$(python3 - "$UI_OUT" <<'PY'
+import json, sys, urllib.parse
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+print(urllib.parse.parse_qs(urllib.parse.urlparse(data["url"]).query)["token"][0])
+PY
+)
+    UI_RESULT=$(python3 - "$UI_PORT" "$TOKEN" 2>&1 <<'PY'
+import http.client
+import json
+import sys
+
+port = int(sys.argv[1])
+token = sys.argv[2]
+
+def request(method, path, body=None):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    payload = json.dumps(body).encode() if body is not None else None
+    headers = {"X-ITR-Token": token}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    conn.request(method, path, body=payload, headers=headers)
+    resp = conn.getresponse()
+    raw = resp.read().decode()
+    conn.close()
+    data = json.loads(raw) if raw else {}
+    if resp.status >= 400:
+        raise SystemExit(f"{method} {path} failed: {resp.status} {raw}")
+    return data
+
+health = request("GET", "/api/health")
+assert health["ok"] is True
+
+listed = request("GET", "/api/issues?q=UI&all=true")
+assert listed["total"] >= 1
+
+created = request("POST", "/api/issues", {
+    "title": "Created through UI test",
+    "priority": "medium",
+    "kind": "task",
+    "tags": ["ui"],
+    "acceptance": "api create returns issue",
+})
+issue_id = created["issue"]["id"]
+
+patched = request("PATCH", f"/api/issues/{issue_id}", {
+    "status": "in-progress",
+    "assigned_to": "integration",
+    "tags": ["ui", "edited"],
+})
+assert patched["issue"]["status"] == "in-progress"
+assert patched["issue"]["assigned_to"] == "integration"
+assert "edited" in patched["issue"]["tags"]
+
+preview = request("POST", "/api/bulk/resolve/preview", {"ids": [issue_id]})
+assert preview["count"] == 1
+
+resolved = request("POST", "/api/bulk/resolve/apply", {
+    "ids": [issue_id],
+    "reason": "ui integration complete",
+})
+assert resolved["count"] == 1
+assert resolved["issues"][0]["status"] == "done"
+print("ok")
+PY
+) || true
+    if [ "$UI_RESULT" = "ok" ]; then
+        pass "ui: local API supports list/create/edit/bulk resolve"
+    else
+        fail "ui: local API supports list/create/edit/bulk resolve" "$UI_RESULT"
+    fi
+fi
+
+kill "$UI_PID" >/dev/null 2>&1 || true
+wait "$UI_PID" 2>/dev/null || true
+rm -rf "$UI_DIR"
+
+# ─────────────────────────────────────────────
+echo ""
 echo "==============================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "==============================="

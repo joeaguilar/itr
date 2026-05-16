@@ -176,6 +176,7 @@ Human-readable table format.
 | `itr update <ID>` | Modify issue fields |
 | `itr close <ID> [REASON]` | Close an issue as done |
 | `itr note <ID> <TEXT>` | Append a note to an issue |
+| `itr ui` | Start a localhost browser UI for issue editing |
 
 ### Dependencies
 
@@ -211,6 +212,20 @@ Human-readable table format.
 | `itr import --file <PATH>` | Import from JSONL/JSON (supports `--merge`) |
 | `itr schema` | Dump the database schema SQL |
 | `itr upgrade` | Rebuild and reinstall itr from source |
+
+## itr ui
+
+```bash
+itr ui
+itr ui --db path/to/.itr.db
+itr ui --port 8787 --no-open
+```
+
+Starts a local web UI bound to `127.0.0.1`. It serves embedded assets from the
+`itr` binary and uses a per-session token in the browser URL for API requests.
+The UI supports search/filter, add, edit, close/wontfix, notes,
+dependencies, relations, and previewed bulk resolve workflows. It does not
+hard-delete issues; pruning in the UI means resolving or cleanup tagging.
 
 ### Global Flags
 

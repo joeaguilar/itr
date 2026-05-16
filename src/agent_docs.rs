@@ -65,6 +65,7 @@ Prefer `batch close`/`batch update` when you need per-issue control. Prefer `bul
 - `itr schema` — Print database schema
 - `itr agent-info` — Print this guide
 - `itr doctor [--fix]` — Database integrity checks
+- `itr ui [--db PATH] [--port PORT] [--no-open]` — Local browser UI for human issue editing
 - `itr config list|get|set|reset` — Per-project configuration
 - `itr export [--export-format json|jsonl]` / `itr import [--file, --merge]` — Data portability
 - `itr reindex` — Rebuild full-text search index

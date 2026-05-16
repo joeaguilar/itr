@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>itr UI</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>itr</h1>
+      <p id="dbPath"></p>
+    </div>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <main class="shell">
+    <section class="left-pane">
+      <div class="toolbar">
+        <input id="search" type="search" placeholder="Search issues">
+        <select id="status">
+          <option value="">active</option>
+          <option value="open">open</option>
+          <option value="in-progress">in-progress</option>
+          <option value="done">done</option>
+          <option value="wontfix">wontfix</option>
+        </select>
+        <select id="priority">
+          <option value="">priority</option>
+          <option value="critical">critical</option>
+          <option value="high">high</option>
+          <option value="medium">medium</option>
+          <option value="low">low</option>
+        </select>
+        <select id="kind">
+          <option value="">kind</option>
+          <option value="bug">bug</option>
+          <option value="feature">feature</option>
+          <option value="task">task</option>
+          <option value="epic">epic</option>
+        </select>
+        <input id="tag" placeholder="tag">
+        <input id="skill" placeholder="skill">
+        <input id="assignee" placeholder="assignee">
+        <label><input id="ready" type="checkbox"> ready</label>
+        <label><input id="blocked" type="checkbox"> blocked</label>
+        <label><input id="all" type="checkbox"> all</label>
+        <button id="refresh">Refresh</button>
+        <button id="newIssue">New</button>
+      </div>
+
+      <div class="bulkbar">
+        <span id="resultCount">0 issues</span>
+        <span id="selectionCount">0 selected</span>
+        <input id="bulkReason" placeholder="bulk reason">
+        <button id="bulkPreview">Preview resolve</button>
+        <button id="bulkApply" disabled>Apply resolve</button>
+        <button id="bulkWontfix" disabled>Apply wontfix</button>
+      </div>
+
+      <div id="bulkPreviewPanel" class="preview hidden"></div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="select-col"></th>
+              <th>ID</th>
+              <th>Urg</th>
+              <th>Status</th>
+              <th>Pri</th>
+              <th>Kind</th>
+              <th>Title</th>
+              <th>Tags</th>
+              <th>Updated</th>
+            </tr>
+          </thead>
+          <tbody id="issueRows"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <aside class="right-pane">
+      <div id="detailEmpty" class="empty">Select an issue</div>
+      <form id="detailForm" class="detail hidden">
+        <div class="detail-head">
+          <strong id="detailId"></strong>
+          <span id="saveState"></span>
+        </div>
+        <label>Title<input name="title"></label>
+        <div class="grid">
+          <label>Status<select name="status"></select></label>
+          <label>Priority<select name="priority"></select></label>
+          <label>Kind<select name="kind"></select></label>
+          <label>Assigned<input name="assigned_to"></label>
+          <label>Parent<input name="parent_id" inputmode="numeric"></label>
+          <label>Close reason<input name="close_reason"></label>
+        </div>
+        <label>Context<textarea name="context" rows="6"></textarea></label>
+        <label>Acceptance<textarea name="acceptance" rows="5"></textarea></label>
+        <label>Files<input name="files"></label>
+        <label>Tags<input name="tags"></label>
+        <label>Skills<input name="skills"></label>
+        <div class="actions">
+          <button type="button" id="closeIssue">Close done</button>
+          <button type="button" id="wontfixIssue">Wontfix</button>
+        </div>
+      </form>
+
+      <section id="notesPanel" class="detail-section hidden">
+        <h2>Notes</h2>
+        <div id="notes"></div>
+        <textarea id="newNote" rows="3" placeholder="New note"></textarea>
+        <button id="addNote">Add note</button>
+      </section>
+
+      <section id="linksPanel" class="detail-section hidden">
+        <h2>Dependencies</h2>
+        <div id="dependencies"></div>
+        <input id="blockerId" inputmode="numeric" placeholder="blocker id">
+        <button id="addDependency">Add blocker</button>
+
+        <h2>Relations</h2>
+        <div id="relations"></div>
+        <div class="inline">
+          <input id="relationTarget" inputmode="numeric" placeholder="target id">
+          <select id="relationType">
+            <option value="related">related</option>
+            <option value="duplicate">duplicate</option>
+            <option value="supersedes">supersedes</option>
+          </select>
+          <button id="addRelation">Add</button>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <dialog id="newDialog">
+    <form id="newForm" method="dialog">
+      <h2>New Issue</h2>
+      <label>Title<input name="title" required></label>
+      <div class="grid">
+        <label>Priority<select name="priority"></select></label>
+        <label>Kind<select name="kind"></select></label>
+        <label>Assigned<input name="assigned_to"></label>
+      </div>
+      <label>Context<textarea name="context" rows="5"></textarea></label>
+      <label>Acceptance<textarea name="acceptance" rows="4"></textarea></label>
+      <label>Files<input name="files"></label>
+      <label>Tags<input name="tags"></label>
+      <label>Skills<input name="skills"></label>
+      <label>Blocked by<input name="blocked_by" inputmode="numeric"></label>
+      <div class="actions">
+        <button value="cancel">Cancel</button>
+        <button id="createIssue" value="default">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

@@ -78,7 +78,7 @@ fn main() {
                 Err(e) => handle_error(e, fmt.is_json()),
             };
 
-            run_command(cli.command, &conn, fmt)
+            run_command(cli.command, &conn, &db_path, fmt)
         }
     };
 
@@ -90,6 +90,7 @@ fn main() {
 fn run_command(
     command: Commands,
     conn: &rusqlite::Connection,
+    db_path: &std::path::Path,
     fmt: Format,
 ) -> Result<(), error::ItrError> {
     match command {
@@ -365,6 +366,12 @@ fn run_command(
         Commands::Import { file, merge } => commands::import::run(conn, file, merge, fmt),
 
         Commands::Doctor { fix } => commands::doctor::run(conn, fix, fmt),
+
+        Commands::Ui {
+            port,
+            no_open,
+            once,
+        } => commands::ui::run(conn, db_path, port, no_open, once, fmt),
 
         Commands::Config { action } => match action {
             ConfigAction::List => commands::config::run_list(conn, fmt),

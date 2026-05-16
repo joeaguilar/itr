@@ -405,6 +405,21 @@ pub enum Commands {
         fix: bool,
     },
 
+    /// Start a local browser UI for editing the itr database
+    Ui {
+        /// Localhost port to bind. Use 0 to auto-select an available port.
+        #[arg(long, default_value_t = 0)]
+        port: u16,
+
+        /// Print the URL without opening the default browser
+        #[arg(long)]
+        no_open: bool,
+
+        /// Handle a single request then exit. Hidden test helper.
+        #[arg(long, hide = true)]
+        once: bool,
+    },
+
     /// Manage per-project configuration
     Config {
         #[command(subcommand)]
