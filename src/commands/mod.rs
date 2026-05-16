@@ -21,6 +21,7 @@ pub mod reindex;
 pub mod relate;
 pub mod schema;
 pub mod search;
+pub mod skill;
 pub mod stats;
 pub mod summary;
 pub mod ui;

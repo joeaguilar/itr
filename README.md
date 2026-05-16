@@ -7,6 +7,7 @@ A local, zero-config issue tracker built for AI coding agents. SQLite-backed, si
 ```
 cargo install --path .
 itr init
+itr skill install     # optional: brief Claude Code agents on itr
 itr add "Fix auth bug" -p high -k bug --tags "auth,security" --files "src/auth.rs"
 itr ready -f json
 ```
@@ -211,6 +212,7 @@ Human-readable table format.
 | `itr export` | Export all data as JSONL (or `--export-format json`) |
 | `itr import --file <PATH>` | Import from JSONL/JSON (supports `--merge`) |
 | `itr schema` | Dump the database schema SQL |
+| `itr skill install` | Install the Claude Code skill so agents auto-discover `itr` |
 | `itr upgrade` | Rebuild and reinstall itr from source |
 
 ## itr ui
@@ -369,6 +371,19 @@ This project uses `itr` for issue tracking. Before starting work, run `itr ready
 to find the next actionable task. After completing work, run `itr close <ID> "reason"`.
 File discovered issues with `itr add`. Always run `itr note <ID> "summary"` before ending a session.
 ```
+
+### Claude Code skill
+
+`itr` ships a Claude Code skill that auto-fires when an agent detects an issue-filing intent and points it at `itr agent-info` as the source of truth. The skill content is baked into the binary, so this works the same whether you installed via the curl/PowerShell scripts, prebuilt tarballs, or `cargo install`.
+
+```bash
+itr skill install                        # ~/.claude/skills/itr/SKILL.md (user scope)
+itr skill install --scope project        # ./.claude/skills/itr/SKILL.md (project scope)
+itr skill                                # print SKILL.md to stdout (composable)
+itr skill path                           # show install target without writing
+```
+
+`install` refuses to overwrite an existing file without `--force` (soft fallback: emits a `REVIEW:` note to stderr and exits 0). Re-run with `--force` after `itr upgrade` to pick up any new conventions baked into a newer binary.
 
 ### Typical Agent Session
 

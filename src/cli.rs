@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "itr", about = "Agent-first issue tracker CLI", version = env!("ITR_VERSION"))]
@@ -430,6 +430,12 @@ pub enum Commands {
     #[command(visible_alias = "getting-started")]
     AgentInfo,
 
+    /// Emit or install the Claude Code skill that teaches agents to use itr
+    Skill {
+        #[command(subcommand)]
+        action: Option<SkillAction>,
+    },
+
     /// Dump the current database schema
     Schema,
 
@@ -674,6 +680,33 @@ pub enum BulkAction {
         #[arg(long)]
         dry_run: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum SkillAction {
+    /// Write SKILL.md into the skills directory
+    Install {
+        /// Install scope: user (~/.claude/skills/itr/) or project (./.claude/skills/itr/)
+        #[arg(long, value_enum, default_value_t = SkillScope::User)]
+        scope: SkillScope,
+
+        /// Overwrite an existing SKILL.md
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print the install target path without writing
+    Path {
+        #[arg(long, value_enum, default_value_t = SkillScope::User)]
+        scope: SkillScope,
+    },
+}
+
+#[derive(Copy, Clone, ValueEnum)]
+pub enum SkillScope {
+    /// ~/.claude/skills/itr/SKILL.md
+    User,
+    /// ./.claude/skills/itr/SKILL.md
+    Project,
 }
 
 #[derive(Subcommand)]

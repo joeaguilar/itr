@@ -64,12 +64,39 @@ Prefer `batch close`/`batch update` when you need per-issue control. Prefer `bul
 - `itr init [--agents-md]` — Create database (optionally write AGENTS.md)
 - `itr schema` — Print database schema
 - `itr agent-info` — Print this guide
+- `itr skill [install|path] [--scope user|project]` — Emit or install the Claude Code skill that briefs agents on `itr` (see Agent Onboarding below)
 - `itr doctor [--fix]` — Database integrity checks
 - `itr ui [--db PATH] [--port PORT] [--no-open]` — Local browser UI for human issue editing
 - `itr config list|get|set|reset` — Per-project configuration
 - `itr export [--export-format json|jsonl]` / `itr import [--file, --merge]` — Data portability
 - `itr reindex` — Rebuild full-text search index
 - `itr upgrade` — Rebuild itr from source
+
+### Local UI
+
+`itr ui` starts a browser-based editor on `127.0.0.1` for the discovered `.itr.db`, or for a specific database with `--db PATH`.
+
+```
+itr ui
+itr ui --db path/to/.itr.db
+itr ui --port 8787 --no-open
+```
+
+The UI supports search/filter, add/edit, close/wontfix, notes, dependencies, relations, and previewed bulk resolve. It does not hard-delete issues; prune-style work means resolving issues or cleanup tagging. In sandboxed environments, UI tests may need localhost bind/connect permission.
+
+### Agent Onboarding
+
+`itr skill install` writes a Claude Code skill (`SKILL.md`) into `~/.claude/skills/itr/` (user scope, default) or `./.claude/skills/itr/` (project scope). The skill auto-fires when Claude Code detects an issue-filing intent and points the agent at this guide as the source of truth.
+
+```
+itr skill                                # print SKILL.md to stdout
+itr skill install                        # ~/.claude/skills/itr/SKILL.md
+itr skill install --scope project        # ./.claude/skills/itr/SKILL.md
+itr skill install --force                # overwrite existing
+itr skill path [--scope user|project]    # show target without writing
+```
+
+Refuses to overwrite an existing `SKILL.md` without `--force` (soft fallback: emits a `REVIEW:` note to stderr, exits 0). If you maintain hand-edits to the installed copy, keep `--force` off; otherwise reinstall after `itr upgrade` to pick up new conventions baked into the binary.
 
 ### Token Reduction
 

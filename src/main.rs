@@ -63,6 +63,7 @@ fn main() {
         Commands::Init { agents_md } => commands::init::run(agents_md, fmt, cli.db.as_deref()),
         Commands::AgentInfo => commands::agent_info::run(fmt),
         Commands::Schema => commands::schema::run(fmt),
+        Commands::Skill { action } => commands::skill::run(action, fmt),
         Commands::Upgrade {
             no_pull,
             source_dir,
@@ -97,6 +98,7 @@ fn run_command(
         Commands::Init { .. }
         | Commands::AgentInfo
         | Commands::Schema
+        | Commands::Skill { .. }
         | Commands::Upgrade { .. } => {
             unreachable!()
         }

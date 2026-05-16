@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-`itr` is a local, zero-config issue tracker CLI built for AI coding agents. Single Rust binary, SQLite-backed (`.itr.db`), no daemon, no network, no auth. Primary consumers are AI agents, not humans.
+`itr` is a local, zero-config issue tracker CLI built for AI coding agents. Single Rust binary, SQLite-backed (`.itr.db`), no daemon, no auth, and no required external runtime. Primary consumers are AI agents, with an optional localhost browser UI for human issue editing via `itr ui`.
 
 ## Build & Test
 
@@ -13,6 +13,7 @@ cargo build --release          # Binary at ./target/release/itr
 cargo install --path .         # Install to ~/.cargo/bin
 ./tests/integration.sh         # Run full integration test suite (requires release build)
 ./tests/integration.sh ./target/debug/itr  # Run against debug build
+itr ui --no-open               # Start local browser UI for the discovered .itr.db
 ```
 
 A `justfile` provides shortcuts (requires [just](https://github.com/casey/just)):
@@ -26,13 +27,13 @@ just verify        # release + lint + test + fmt-check (full pre-push validation
 just ci            # fmt-check + lint + test
 ```
 
-There are no unit tests yet — only the shell-based integration test suite in `tests/integration.sh`. The test suite uses `python3 -c` with `json.load` for JSON parsing (not `jq`).
+There are no unit tests yet — only the shell-based integration test suite in `tests/integration.sh`. The test suite uses `python3 -c` with `json.load` for JSON parsing (not `jq`). The UI integration test starts a localhost server, so sandboxed environments may need localhost bind/connect permission.
 
 ## Architecture
 
 ### Core Flow
 
-`main.rs` parses CLI args via clap derive macros (`cli.rs`), resolves the database path, and dispatches to command handlers. Three commands (`init`, `schema`, `upgrade`) don't need an existing database; all others require one.
+`main.rs` parses CLI args via clap derive macros (`cli.rs`), resolves the database path, and dispatches to command handlers. Three commands (`init`, `schema`, `upgrade`) don't need an existing database; all others require one. `ui` resolves the DB like other DB-backed commands, then starts a localhost-only request loop.
 
 Always invoke as `itr` (on PATH). Never use full binary paths like `~/.cargo/bin/itr` or `./target/release/itr`.
 
@@ -45,14 +46,23 @@ Always invoke as `itr` (on PATH). Never use full binary paths like `~/.cargo/bin
 - **`format.rs`** — Output formatting for three modes: `compact` (token-efficient default), `json`, `pretty` (human tables/DOT graphs). Each data type has its own `format_*` function.
 - **`normalize.rs`** — Fuzzy matching for priority/kind/status values. Normalizes synonyms (e.g., `urgent`→`critical`, `wip`→`in-progress`). Called before validation in add, update, and batch commands.
 - **`error.rs`** — `ItrError` enum with `thiserror` derive. Maps each variant to an exit code (all are 1) and a machine-readable error code. `handle_error` prints to stderr (JSON in json mode) and exits. `print_empty` prints empty results to stdout and returns normally (exit 0).
+- **`agent_docs.rs`** — Single `AGENT_DOCS` const string surfaced by `itr agent-info` (alias `getting-started`). Keep workflow examples in sync with actual CLI behavior when commands change.
+- **`commands/ui.rs`** — Local browser UI server. Uses `std::net::TcpListener`, serves embedded vanilla HTML/CSS/JS, exposes a localhost JSON API, and reuses DB helpers for issue edits. No async runtime, no Node build, no hard-delete issue workflow.
+- **`commands/skill.rs`** — Emits or installs the Claude Code skill that teaches agents to drive `itr`. The `SKILL.md` body is `include_str!`'d from `skills/itr/SKILL.md`, so edits to that file require a rebuild. Refuses to overwrite an existing target without `--force` (soft fallback: emits a `REVIEW:` note and exits 0).
+- **`ui_assets/`** — Embedded UI assets included with `include_str!`. Rebuild the binary after editing these files because they are compiled into `itr`.
+- **`skills/itr/SKILL.md`** — Source-of-truth Claude Code skill body. Edits here ship via `itr skill` / `itr skill install`.
 
 ### Command Handlers (`src/commands/`)
 
-Each file exports a `run()` function that takes `&Connection`, command-specific args, and `Format`. Commands return `Result<(), ItrError>` and print to stdout directly. The `depend.rs` module also exports `run_undepend`. The `config.rs` module exports `run_list`, `run_get`, `run_set`, `run_reset`. Several CLI commands are aliases that dispatch to existing handlers: `show <ID>` → `get::run`, `show` (no ID) → `list::run`, `claim`/`start` → `next::run` with `claim=true`, `create` → `add`.
+Each file exports a `run()` function that takes `&Connection`, command-specific args, and `Format`. Commands return `Result<(), ItrError>` and print to stdout directly. The `depend.rs` module also exports `run_undepend`. The `config.rs` module exports `run_list`, `run_get`, `run_set`, `run_reset`. Several CLI commands are aliases that dispatch to existing handlers: `show <ID>` → `get::run`, `show` (no ID) → `list::run`, `claim`/`start` → `next::run` with `claim=true`, `create` → `add`. The `ui` handler is long-lived: it prints the URL, optionally opens a browser, and serves requests until the process is stopped.
 
 ### Database
 
-Four tables: `issues`, `dependencies`, `notes`, `config`. Schema defined as a const in `db.rs`. WAL mode, foreign keys enabled. `files`, `tags`, and `skills` are JSON arrays stored in TEXT columns. DB is found by walking up from cwd, or via `ITR_DB_PATH` env var or `--db` flag. The `skills` field represents agent capabilities required for an issue, and can be used to filter in `list`, `search`, `next`, `ready`, and `claim` commands.
+Core tables are `issues`, `dependencies`, `notes`, and `config`; migrations also add `events`, `relations`, `skills`, and `assigned_to`. Schema and migrations live in `db.rs`. WAL mode and foreign keys are enabled. `files`, `tags`, and `skills` are JSON arrays stored in TEXT columns. DB is found by walking up from cwd, or via `ITR_DB_PATH` env var or `--db` flag. The `skills` field represents agent capabilities required for an issue, and can be used to filter in `list`, `search`, `next`, `ready`, `claim`, and `ui`.
+
+### Local UI
+
+`itr ui` starts a local web UI bound to `127.0.0.1`. It serves embedded assets and uses a per-session token in the browser URL plus `X-ITR-Token` for API requests. Supported v1 workflows: search/filter, issue add/edit, close/wontfix, notes, dependencies, relations, and previewed bulk resolve. It intentionally does not hard-delete issues; pruning means resolving or cleanup tagging.
 
 ### Exit Codes
 
@@ -78,4 +88,4 @@ When adding new validation, ask: "Can this recover with a default?" If yes, do t
 
 ## Dependencies
 
-Minimal: `clap` (derive), `rusqlite` (bundled SQLite), `serde`/`serde_json`, `chrono`, `thiserror`. No async, no network crates.
+Minimal: `clap` (derive), `rusqlite` (bundled SQLite), `serde`/`serde_json`, `chrono`, `thiserror`. No async runtime, no Node toolchain, and no desktop/webview framework. The UI server uses the Rust standard library.

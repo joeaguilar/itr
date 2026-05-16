@@ -965,6 +965,8 @@ assert_contains "agent-info mentions claim" "itr claim" "$OUT"
 assert_contains "agent-info mentions skills" "--skill" "$OUT"
 assert_contains "agent-info mentions urgency" "urgency" "$OUT"
 assert_contains "agent-info mentions multi-agent" "Multi-Agent" "$OUT"
+assert_contains "agent-info mentions skill install" "itr skill install" "$OUT"
+assert_contains "agent-info mentions Agent Onboarding" "Agent Onboarding" "$OUT"
 
 OUT=$($ITR agent-info -f json)
 GUIDE=$(jq_val "$OUT" "d['guide']")
@@ -975,6 +977,44 @@ assert_contains "getting-started alias works" "ITR_AGENT" "$OUT"
 
 OUT=$($ITR getting started)
 assert_contains "getting started (two words) works" "ITR_AGENT" "$OUT"
+
+# ─────────────────────────────────────────────
+echo "--- skill ---"
+# ─────────────────────────────────────────────
+
+OUT=$($ITR skill)
+assert_contains "skill emits frontmatter" "name: itr" "$OUT"
+assert_contains "skill emits description" "agent-first issue tracker" "$OUT"
+assert_contains "skill mentions itr add" "itr add" "$OUT"
+
+OUT=$($ITR skill -f json)
+SKILL_BODY=$(jq_val "$OUT" "d['skill']")
+assert_contains "skill json has skill field" "name: itr" "$SKILL_BODY"
+
+SKILL_DIR=$(mktemp -d)
+cd "$SKILL_DIR"
+
+OUT=$($ITR skill path --scope project)
+assert_contains "skill path project shows target" ".claude/skills/itr/SKILL.md" "$OUT"
+
+$ITR skill install --scope project >/dev/null
+[ -f .claude/skills/itr/SKILL.md ] && pass "skill install --scope project writes file" \
+    || fail "skill install --scope project writes file" "file missing"
+assert_contains "installed file has frontmatter" "name: itr" "$(cat .claude/skills/itr/SKILL.md)"
+
+echo "tampered" > .claude/skills/itr/SKILL.md
+OUT=$($ITR skill install --scope project 2>&1 || true)
+assert_contains "skill install refuses overwrite without --force" "already exists" "$OUT"
+assert_eq "skill install preserved tampered file" "tampered" "$(cat .claude/skills/itr/SKILL.md)"
+
+$ITR skill install --scope project --force >/dev/null
+assert_contains "skill install --force overwrites" "name: itr" "$(cat .claude/skills/itr/SKILL.md)"
+
+OUT=$($ITR skill install --scope project --force -f json)
+INSTALLED=$(jq_val "$OUT" "d['installed']")
+assert_contains "skill install json reports path" ".claude/skills/itr/SKILL.md" "$INSTALLED"
+
+cd "$WORKDIR"
 
 # ─────────────────────────────────────────────
 echo "--- init --agents-md (comprehensive) ---"
@@ -990,6 +1030,7 @@ assert_contains "AGENTS.md has --fields" "--fields" "$AGENTS_CONTENT"
 assert_contains "AGENTS.md has claim" "itr claim" "$AGENTS_CONTENT"
 assert_contains "AGENTS.md has skills" "--skill" "$AGENTS_CONTENT"
 assert_contains "AGENTS.md has urgency" "urgency" "$AGENTS_CONTENT"
+assert_contains "AGENTS.md has skill install" "itr skill install" "$AGENTS_CONTENT"
 
 # idempotency: running again should not duplicate
 $ITR init --agents-md >/dev/null
