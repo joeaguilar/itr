@@ -61,6 +61,19 @@
 
       <div id="bulkPreviewPanel" class="preview hidden"></div>
 
+      <section id="sqlPanel" class="sql-panel hidden">
+        <div class="sql-head">
+          <strong>SQL</strong>
+          <span id="sqlState"></span>
+        </div>
+        <textarea id="sqlText" rows="5" spellcheck="false" placeholder="select id, title, status from issues limit 20"></textarea>
+        <div class="actions">
+          <button id="runSql">Run SQL</button>
+          <button id="clearSql">Clear</button>
+        </div>
+        <div id="sqlResult" class="sql-result hidden"></div>
+      </section>
+
       <div class="table-wrap">
         <table>
           <thead>

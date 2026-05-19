@@ -418,6 +418,10 @@ pub enum Commands {
         /// Handle a single request then exit. Hidden test helper.
         #[arg(long, hide = true)]
         once: bool,
+
+        /// Enable the raw SQL editor and /api/sql route.
+        #[arg(long)]
+        allow_dangerous: bool,
     },
 
     /// Manage per-project configuration

@@ -77,6 +77,7 @@ async function loadBootstrap() {
   state.bootstrap = data;
   $("#dbPath").textContent = data.db_path;
   renderStats(data.stats);
+  $("#sqlPanel").classList.toggle("hidden", !data.dangerous_sql);
   setOptions(document.querySelector("#newForm [name=priority]"), data.priorities, "medium");
   setOptions(document.querySelector("#newForm [name=kind]"), data.kinds, "task");
 }
@@ -312,6 +313,8 @@ function wireActions() {
   $("#bulkPreview").addEventListener("click", bulkPreview);
   $("#bulkApply").addEventListener("click", () => bulkApply(false));
   $("#bulkWontfix").addEventListener("click", () => bulkApply(true));
+  $("#runSql").addEventListener("click", runSql);
+  $("#clearSql").addEventListener("click", clearSql);
 }
 
 async function closeCurrent(wontfix) {
@@ -431,6 +434,70 @@ async function bulkApply(wontfix) {
   } catch (error) {
     toast(error.message);
   }
+}
+
+async function runSql() {
+  const sql = $("#sqlText").value.trim();
+  if (!sql) return;
+  $("#sqlState").textContent = "running";
+  try {
+    const data = await api("/api/sql", {
+      method: "POST",
+      body: JSON.stringify({ sql }),
+    });
+    $("#sqlState").textContent = "done";
+    renderSqlResult(data);
+    if (Number(data.changes || 0) > 0) {
+      await loadBootstrap();
+      await loadIssues(false);
+      if (state.current) {
+        await selectIssue(state.current.id);
+      }
+    }
+  } catch (error) {
+    $("#sqlState").textContent = "error";
+    toast(error.message);
+  }
+}
+
+function clearSql() {
+  $("#sqlText").value = "";
+  $("#sqlState").textContent = "";
+  $("#sqlResult").classList.add("hidden");
+  $("#sqlResult").innerHTML = "";
+}
+
+function renderSqlResult(data) {
+  const node = $("#sqlResult");
+  const columns = data.columns || [];
+  const rows = data.rows || [];
+  const shown = rows.length;
+  const total = Number(data.row_count || 0);
+  const changes = Number(data.changes || 0);
+  const truncated = data.truncated ? `, showing ${shown}` : "";
+  const summary = `${total} row${total === 1 ? "" : "s"}${truncated}, ${changes} change${changes === 1 ? "" : "s"}`;
+
+  node.classList.remove("hidden");
+  if (columns.length === 0) {
+    node.innerHTML = `<div class="muted">${summary}</div>`;
+    return;
+  }
+
+  node.innerHTML = `
+    <div class="muted">${summary}</div>
+    <table class="sql-table">
+      <thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr></thead>
+      <tbody>
+        ${rows.map((row) => `<tr>${columns.map((_, index) => `<td>${formatSqlValue(row[index])}</td>`).join("")}</tr>`).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function formatSqlValue(value) {
+  if (value === null || value === undefined) return "<span class=\"muted\">NULL</span>";
+  if (typeof value === "object") return escapeHtml(JSON.stringify(value));
+  return escapeHtml(value);
 }
 
 function debounce(fn, delay) {

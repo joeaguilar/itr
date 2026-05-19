@@ -1442,7 +1442,7 @@ import sys
 port = int(sys.argv[1])
 token = sys.argv[2]
 
-def request(method, path, body=None):
+def request_raw(method, path, body=None):
     conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
     payload = json.dumps(body).encode() if body is not None else None
     headers = {"X-ITR-Token": token}
@@ -1453,12 +1453,23 @@ def request(method, path, body=None):
     raw = resp.read().decode()
     conn.close()
     data = json.loads(raw) if raw else {}
-    if resp.status >= 400:
-        raise SystemExit(f"{method} {path} failed: {resp.status} {raw}")
+    return resp.status, data
+
+def request(method, path, body=None):
+    status, data = request_raw(method, path, body)
+    if status >= 400:
+        raise SystemExit(f"{method} {path} failed: {status} {json.dumps(data)}")
     return data
 
 health = request("GET", "/api/health")
 assert health["ok"] is True
+
+bootstrap = request("GET", "/api/bootstrap")
+assert bootstrap["dangerous_sql"] is False
+
+status, denied = request_raw("POST", "/api/sql", {"sql": "select 1"})
+assert status == 403
+assert denied["code"] == "DANGEROUS_SQL_DISABLED"
 
 listed = request("GET", "/api/issues?q=UI&all=true")
 assert listed["total"] >= 1
@@ -1494,14 +1505,91 @@ print("ok")
 PY
 ) || true
     if [ "$UI_RESULT" = "ok" ]; then
-        pass "ui: local API supports list/create/edit/bulk resolve"
+        pass "ui: local API supports list/create/edit/bulk resolve and blocks raw SQL by default"
     else
-        fail "ui: local API supports list/create/edit/bulk resolve" "$UI_RESULT"
+        fail "ui: local API supports list/create/edit/bulk resolve and blocks raw SQL by default" "$UI_RESULT"
     fi
 fi
 
 kill "$UI_PID" >/dev/null 2>&1 || true
 wait "$UI_PID" 2>/dev/null || true
+
+UI_SQL_PORT=39218
+UI_SQL_OUT="$UI_DIR/ui-sql.out"
+UI_SQL_ERR="$UI_DIR/ui-sql.err"
+$ITR --db "$UI_DIR/.itr.db" ui --port "$UI_SQL_PORT" --no-open --allow-dangerous -f json > "$UI_SQL_OUT" 2> "$UI_SQL_ERR" &
+UI_SQL_PID=$!
+
+for _ in {1..30}; do
+    if [ -s "$UI_SQL_OUT" ]; then
+        break
+    fi
+    sleep 0.1
+done
+
+if ! kill -0 "$UI_SQL_PID" 2>/dev/null; then
+    fail "ui: dangerous SQL server starts" "process exited: $(cat "$UI_SQL_ERR")"
+else
+    SQL_TOKEN=$(python3 - "$UI_SQL_OUT" <<'PY'
+import json, sys, urllib.parse
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+print(urllib.parse.parse_qs(urllib.parse.urlparse(data["url"]).query)["token"][0])
+PY
+)
+    SQL_RESULT=$(python3 - "$UI_SQL_PORT" "$SQL_TOKEN" 2>&1 <<'PY'
+import http.client
+import json
+import sys
+
+port = int(sys.argv[1])
+token = sys.argv[2]
+
+def request(method, path, body=None):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    payload = json.dumps(body).encode() if body is not None else None
+    headers = {"X-ITR-Token": token}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    conn.request(method, path, body=payload, headers=headers)
+    resp = conn.getresponse()
+    raw = resp.read().decode()
+    conn.close()
+    data = json.loads(raw) if raw else {}
+    if resp.status >= 400:
+        raise SystemExit(f"{method} {path} failed: {resp.status} {raw}")
+    return data
+
+bootstrap = request("GET", "/api/bootstrap")
+assert bootstrap["dangerous_sql"] is True
+
+selected = request("POST", "/api/sql", {
+    "sql": "select title, status from issues where title = 'UI seed'"
+})
+assert selected["columns"] == ["title", "status"]
+assert selected["row_count"] == 1
+assert selected["rows"][0][0] == "UI seed"
+
+updated = request("POST", "/api/sql", {
+    "sql": "update issues set status = 'in-progress' where title = 'UI seed'"
+})
+assert updated["changes"] >= 1
+
+listed = request("GET", "/api/issues?q=UI&all=true")
+assert any(issue["title"] == "UI seed" and issue["status"] == "in-progress" for issue in listed["issues"])
+
+print("ok")
+PY
+) || true
+    if [ "$SQL_RESULT" = "ok" ]; then
+        pass "ui: raw SQL requires --allow-dangerous and can query/update"
+    else
+        fail "ui: raw SQL requires --allow-dangerous and can query/update" "$SQL_RESULT"
+    fi
+fi
+
+kill "$UI_SQL_PID" >/dev/null 2>&1 || true
+wait "$UI_SQL_PID" 2>/dev/null || true
 rm -rf "$UI_DIR"
 
 # ─────────────────────────────────────────────

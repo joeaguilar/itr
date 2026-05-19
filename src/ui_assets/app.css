@@ -118,6 +118,9 @@ h2 {
   min-width: 0;
   border-right: 1px solid #d9ded5;
   background: #fafbf9;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 64px);
 }
 
 .right-pane {
@@ -185,9 +188,63 @@ h2 {
   font-size: 13px;
 }
 
+.sql-panel {
+  display: grid;
+  gap: 8px;
+  margin: 10px 12px;
+  padding: 10px;
+  border: 1px solid #b9c2b2;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.sql-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+
+#sqlState {
+  color: #697267;
+  font-size: 12px;
+}
+
+#sqlText {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.sql-result {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid #e1e5dd;
+  border-radius: 6px;
+}
+
+.sql-result > .muted {
+  padding: 8px;
+}
+
+.sql-table {
+  min-width: 560px;
+  table-layout: auto;
+  font-size: 12px;
+}
+
+.sql-table th {
+  position: static;
+}
+
+.sql-table td {
+  overflow-wrap: anywhere;
+}
+
 .table-wrap {
   overflow: auto;
-  height: calc(100vh - 169px);
+  flex: 1;
+  min-height: 0;
 }
 
 table {

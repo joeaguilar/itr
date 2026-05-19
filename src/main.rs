@@ -373,7 +373,8 @@ fn run_command(
             port,
             no_open,
             once,
-        } => commands::ui::run(conn, db_path, port, no_open, once, fmt),
+            allow_dangerous,
+        } => commands::ui::run(conn, db_path, port, no_open, once, allow_dangerous, fmt),
 
         Commands::Config { action } => match action {
             ConfigAction::List => commands::config::run_list(conn, fmt),

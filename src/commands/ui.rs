@@ -5,6 +5,7 @@ use crate::format::Format;
 use crate::models::{IssueDetail, IssueSummary};
 use crate::normalize::{self, validate_kind, validate_priority, validate_status};
 use crate::urgency::UrgencyConfig;
+use rusqlite::types::ValueRef;
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -18,6 +19,7 @@ const INDEX_HTML: &str = include_str!("../ui_assets/index.html");
 const APP_CSS: &str = include_str!("../ui_assets/app.css");
 const APP_JS: &str = include_str!("../ui_assets/app.js");
 const MAX_BODY_BYTES: usize = 1_048_576;
+const MAX_SQL_ROWS: usize = 500;
 
 #[derive(Debug)]
 struct HttpRequest {
@@ -96,6 +98,11 @@ struct BulkResolveInput {
     wontfix: bool,
 }
 
+#[derive(Debug, Deserialize)]
+struct SqlInput {
+    sql: String,
+}
+
 fn default_relation_type() -> String {
     "related".to_string()
 }
@@ -106,6 +113,7 @@ pub fn run(
     port: u16,
     no_open: bool,
     once: bool,
+    allow_dangerous: bool,
     fmt: Format,
 ) -> Result<(), ItrError> {
     let token = session_token(conn)?;
@@ -128,6 +136,13 @@ pub fn run(
     }
     std::io::stdout().flush()?;
 
+    if allow_dangerous {
+        eprintln!(
+            "REVIEW: raw SQL UI is enabled for {}. Treat this session as full database access.",
+            db_path.display()
+        );
+    }
+
     if !no_open && !once {
         if let Err(err) = open_browser(&url) {
             eprintln!("REVIEW: could not open browser: {}", err);
@@ -137,7 +152,8 @@ pub fn run(
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                if let Err(err) = handle_stream(&mut stream, conn, db_path, &token) {
+                if let Err(err) = handle_stream(&mut stream, conn, db_path, &token, allow_dangerous)
+                {
                     let response = error_response(500, &err.to_string(), "INTERNAL_ERROR");
                     let _ = write_response(&mut stream, response);
                 }
@@ -166,9 +182,10 @@ fn handle_stream(
     conn: &Connection,
     db_path: &Path,
     token: &str,
+    allow_dangerous: bool,
 ) -> Result<(), ItrError> {
     let response = match read_request(stream) {
-        Ok(request) => match route_request(&request, conn, db_path, token) {
+        Ok(request) => match route_request(&request, conn, db_path, token, allow_dangerous) {
             Ok(response) => response,
             Err(err) => error_response_for_itr(err),
         },
@@ -289,6 +306,7 @@ fn route_request(
     conn: &Connection,
     db_path: &Path,
     token: &str,
+    allow_dangerous: bool,
 ) -> Result<HttpResponse, ItrError> {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/") => {
@@ -317,6 +335,7 @@ fn route_request(
                 "statuses": ["open", "in-progress", "done", "wontfix"],
                 "priorities": ["critical", "high", "medium", "low"],
                 "kinds": ["bug", "feature", "task", "epic"],
+                "dangerous_sql": allow_dangerous,
                 "stats": stats_value(conn)?,
             }))
         }
@@ -327,6 +346,18 @@ fn route_request(
                 "total": issues.len(),
                 "issues": issues,
             }))
+        }
+        ("POST", "/api/sql") => {
+            require_token(request, token)?;
+            if !allow_dangerous {
+                return Ok(error_response(
+                    403,
+                    "Raw SQL requires starting itr ui with --allow-dangerous",
+                    "DANGEROUS_SQL_DISABLED",
+                ));
+            }
+            let input: SqlInput = parse_body(request)?;
+            json_response(run_sql(conn, &input.sql)?)
         }
         ("POST", "/api/issues") => {
             require_token(request, token)?;
@@ -490,6 +521,90 @@ fn parse_id(value: &str, field: &str) -> Result<i64, ItrError> {
         value: value.to_string(),
         valid: "integer issue id".to_string(),
     })
+}
+
+fn run_sql(conn: &Connection, sql: &str) -> Result<Value, ItrError> {
+    let sql = sql.trim();
+    if sql.is_empty() {
+        return Err(ItrError::InvalidValue {
+            field: "sql".to_string(),
+            value: String::new(),
+            valid: "non-empty SQL statement".to_string(),
+        });
+    }
+
+    let before_changes = total_changes(conn)?;
+    let mut statement = conn.prepare(sql)?;
+    let column_count = statement.column_count();
+
+    if column_count == 0 {
+        drop(statement);
+        conn.execute_batch(sql)?;
+        let changes = total_changes(conn)?.saturating_sub(before_changes);
+        return Ok(json!({
+            "columns": [],
+            "rows": [],
+            "row_count": 0,
+            "truncated": false,
+            "changes": changes,
+        }));
+    }
+
+    let columns: Vec<String> = statement
+        .column_names()
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    let mut rows = statement.query([])?;
+    let mut result_rows = Vec::new();
+    let mut row_count = 0_i64;
+    let mut truncated = false;
+
+    while let Some(row) = rows.next()? {
+        if result_rows.len() < MAX_SQL_ROWS {
+            let mut values = Vec::with_capacity(column_count);
+            for index in 0..column_count {
+                values.push(sql_value_to_json(row.get_ref(index)?));
+            }
+            result_rows.push(Value::Array(values));
+        } else {
+            truncated = true;
+        }
+        row_count += 1;
+    }
+
+    let changes = total_changes(conn)?.saturating_sub(before_changes);
+    Ok(json!({
+        "columns": columns,
+        "rows": result_rows,
+        "row_count": row_count,
+        "truncated": truncated,
+        "changes": changes,
+    }))
+}
+
+fn total_changes(conn: &Connection) -> Result<i64, ItrError> {
+    Ok(conn.query_row("SELECT total_changes()", [], |row| row.get(0))?)
+}
+
+fn sql_value_to_json(value: ValueRef<'_>) -> Value {
+    match value {
+        ValueRef::Null => Value::Null,
+        ValueRef::Integer(value) => json!(value),
+        ValueRef::Real(value) => json!(value),
+        ValueRef::Text(value) => Value::String(String::from_utf8_lossy(value).to_string()),
+        ValueRef::Blob(value) => Value::String(format!("x'{}'", hex_encode(value))),
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(char::from(HEX[usize::from(byte >> 4)]));
+        out.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    out
 }
 
 fn issue_detail(conn: &Connection, id: i64) -> Result<IssueDetail, ItrError> {

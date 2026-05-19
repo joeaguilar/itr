@@ -66,7 +66,7 @@ Prefer `batch close`/`batch update` when you need per-issue control. Prefer `bul
 - `itr agent-info` — Print this guide
 - `itr skill [install|path] [--scope user|project]` — Emit or install the Claude Code skill that briefs agents on `itr` (see Agent Onboarding below)
 - `itr doctor [--fix]` — Database integrity checks
-- `itr ui [--db PATH] [--port PORT] [--no-open]` — Local browser UI for human issue editing
+- `itr ui [--db PATH] [--port PORT] [--no-open] [--allow-dangerous]` — Local browser UI for human issue editing
 - `itr config list|get|set|reset` — Per-project configuration
 - `itr export [--export-format json|jsonl]` / `itr import [--file, --merge]` — Data portability
 - `itr reindex` — Rebuild full-text search index
@@ -80,7 +80,11 @@ Prefer `batch close`/`batch update` when you need per-issue control. Prefer `bul
 itr ui
 itr ui --db path/to/.itr.db
 itr ui --port 8787 --no-open
+itr ui --allow-dangerous --no-open
 ```
+
+`--allow-dangerous` enables the raw SQL editor and `/api/sql`. Use it only for
+short local maintenance sessions because it can read or mutate any SQLite table.
 
 The UI supports search/filter, add/edit, close/wontfix, notes, dependencies, relations, and previewed bulk resolve. It does not hard-delete issues; prune-style work means resolving issues or cleanup tagging. In sandboxed environments, UI tests may need localhost bind/connect permission.
 
