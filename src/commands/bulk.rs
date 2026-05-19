@@ -4,6 +4,7 @@ use crate::format::Format;
 use crate::models::{BulkResult, ListFilter, UnblockedIssue};
 use crate::normalize;
 use rusqlite::Connection;
+use std::collections::HashSet;
 
 #[allow(clippy::too_many_arguments)]
 pub fn run_close(
@@ -152,6 +153,13 @@ pub fn run_update(
     )?;
 
     let ids: Vec<i64> = issues.iter().map(|i| i.id).collect();
+    let terminal_status = set_status
+        .as_deref()
+        .map(normalize::normalize_status)
+        .filter(|s| s == "done" || s == "wontfix");
+    let mut all_unblocked = Vec::new();
+    let mut seen_unblocked = HashSet::new();
+    let cleanup_blockers = terminal_status.is_some();
 
     if !dry_run {
         let tx = conn.unchecked_transaction()?;
@@ -177,6 +185,18 @@ pub fn run_update(
                     db::update_issue_field(&tx, *id, "tags", &new_json)?;
                 }
             }
+            if cleanup_blockers {
+                let unblocked = db::get_newly_unblocked(&tx, *id)?;
+                for (uid, utitle) in unblocked {
+                    if seen_unblocked.insert(uid) {
+                        all_unblocked.push(UnblockedIssue {
+                            id: uid,
+                            title: utitle,
+                        });
+                    }
+                }
+                db::remove_blocker_edges(&tx, *id)?;
+            }
         }
         tx.commit()?;
     }
@@ -185,7 +205,7 @@ pub fn run_update(
         action: "bulk_update".to_string(),
         count: ids.len(),
         ids,
-        unblocked: vec![],
+        unblocked: all_unblocked,
         dry_run,
     };
 

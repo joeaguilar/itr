@@ -399,6 +399,7 @@ pub fn run_update(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), I
         let unblocked = match new_status.as_deref() {
             Some("done" | "wontfix") => {
                 let list = db::get_newly_unblocked(&tx, item.id)?;
+                db::remove_blocker_edges(&tx, item.id)?;
                 list.into_iter()
                     .map(|(id, title)| UnblockedIssue { id, title })
                     .collect()

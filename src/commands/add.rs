@@ -9,6 +9,26 @@ use crate::util;
 use rusqlite::Connection;
 use std::io::{self, Read};
 
+fn parse_blocked_by_tokens(blocked_by: Option<String>) -> (Vec<i64>, Vec<String>) {
+    let Some(blocked_by) = blocked_by else {
+        return (Vec::new(), Vec::new());
+    };
+
+    let mut ids = Vec::new();
+    let mut invalid = Vec::new();
+    for token in blocked_by
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        match token.parse::<i64>() {
+            Ok(id) => ids.push(id),
+            Err(_) => invalid.push(token.to_string()),
+        }
+    }
+    (ids, invalid)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     conn: &Connection,
@@ -41,6 +61,7 @@ pub fn run(
         parent_id,
         assigned_to,
         blocked_by_ids,
+        invalid_blocked_by,
     ) = if stdin_json {
         let mut input = String::new();
         io::stdin().read_to_string(&mut input)?;
@@ -66,6 +87,7 @@ pub fn run(
             data.parent_id,
             data.assigned_to,
             blocked,
+            Vec::new(),
         )
     } else {
         let title = title.ok_or_else(|| ItrError::InvalidValue {
@@ -101,13 +123,7 @@ pub fn run(
                 .map(|s| s.trim().to_lowercase())
                 .filter(|s| !s.is_empty()),
         );
-        let blocked_by_ids: Vec<i64> = blocked_by
-            .map(|b| {
-                b.split(',')
-                    .filter_map(|s| s.trim().parse::<i64>().ok())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let (blocked_by_ids, invalid_blocked_by) = parse_blocked_by_tokens(blocked_by);
         (
             title,
             priority.to_string(),
@@ -120,6 +136,7 @@ pub fn run(
             parent,
             assigned_to.unwrap_or_default(),
             blocked_by_ids,
+            invalid_blocked_by,
         )
     };
 
@@ -128,6 +145,12 @@ pub fn run(
 
     let mut review_notes: Vec<String> = Vec::new();
     let mut tags_vec = tags_vec;
+    for token in &invalid_blocked_by {
+        review_notes.push(format!(
+            "REVIEW: blocked_by '{}' is not a valid issue ID and was ignored. Valid: comma-separated integer IDs",
+            token
+        ));
+    }
 
     let priority = match validate_priority(&priority) {
         Ok(()) => priority,
@@ -154,8 +177,10 @@ pub fn run(
         tags_vec.push("_needs_review".to_string());
     }
 
+    let tx = conn.unchecked_transaction()?;
+
     let issue = db::insert_issue(
-        conn,
+        &tx,
         &title,
         &priority,
         &kind,
@@ -170,13 +195,15 @@ pub fn run(
 
     // Add review notes
     for note_text in &review_notes {
-        db::add_note(conn, issue.id, note_text, "itr")?;
+        db::add_note(&tx, issue.id, note_text, "itr")?;
     }
 
     // Add dependencies
     for blocker_id in &blocked_by_ids {
-        db::add_dependency(conn, *blocker_id, issue.id)?;
+        db::add_dependency(&tx, *blocker_id, issue.id)?;
     }
+
+    tx.commit()?;
 
     // Build detail for output
     let config = UrgencyConfig::load(conn);

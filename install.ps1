@@ -21,6 +21,14 @@
 
 .EXAMPLE
     .\install.ps1 -Version v0.1.0 -InstallDir C:\tools\itr
+
+.NOTES
+    Manual checksum verification:
+    - In Windows PowerShell 5.1 and PowerShell 7, run against a test release
+      that contains the itr zip asset but no .sha256 asset. The installer should
+      warn "Checksum file not available" and continue.
+    - Run against a test release with an incorrect .sha256 asset. The installer
+      should fail with "Checksum mismatch" before extraction or installation.
 #>
 
 [CmdletBinding()]
@@ -119,16 +127,29 @@ try {
     Write-Info "Downloading $assetBase.zip"
     Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
 
+    $hasChecksum = $true
     try {
         Invoke-WebRequest -Uri $sumUrl -OutFile $sumPath -UseBasicParsing -ErrorAction Stop
+    } catch {
+        $statusCode = $null
+        if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
+            $statusCode = [int]$_.Exception.Response.StatusCode
+        }
+        if ($statusCode -eq 404) {
+            $hasChecksum = $false
+            Write-Warn "Checksum file not available (HTTP 404) — skipping verification."
+        } else {
+            throw
+        }
+    }
+
+    if ($hasChecksum) {
         $expected = (Get-Content $sumPath -Raw).Trim().Split()[0].ToLower()
         $actual   = (Get-FileHash -Algorithm SHA256 $zipPath).Hash.ToLower()
         if ($expected -ne $actual) {
             throw "Checksum mismatch: expected $expected, got $actual"
         }
         Write-Ok 'Checksum verified.'
-    } catch [System.Net.WebException] {
-        Write-Warn "Checksum file not available — skipping verification."
     }
 
     Write-Info 'Extracting…'

@@ -87,6 +87,16 @@ jobs:
         shell: bash
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      - name: Smoke test native release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/itr"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            BIN="${BIN}.exe"
+          fi
+          ./tests/integration.sh --smoke "$BIN"
+
       - name: Package archive (Unix)
         if: matrix.archive == 'tar.gz'
         shell: bash

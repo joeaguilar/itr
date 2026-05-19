@@ -41,71 +41,74 @@ pub fn run(
     let priority = priority.map(|p| normalize::normalize_priority(&p));
     let kind = kind.map(|k| normalize::normalize_kind(&k));
 
+    let tx = conn.unchecked_transaction()?;
     let mut review_notes: Vec<String> = Vec::new();
+    let mut terminal_status_applied = false;
 
     if let Some(ref s) = status {
         match validate_status(s) {
             Ok(()) => {
-                db::record_event(conn, id, "status", &old_issue.status, s)?;
-                db::update_issue_field(conn, id, "status", s)?;
+                db::record_event(&tx, id, "status", &old_issue.status, s)?;
+                db::update_issue_field(&tx, id, "status", s)?;
+                terminal_status_applied = s == "done" || s == "wontfix";
             }
             Err(_) => {
                 review_notes.push(format!(
                     "REVIEW: status '{}' not recognized, defaulted to 'open'. Valid: open, in-progress, done, wontfix",
                     s
                 ));
-                db::record_event(conn, id, "status", &old_issue.status, "open")?;
-                db::update_issue_field(conn, id, "status", "open")?;
+                db::record_event(&tx, id, "status", &old_issue.status, "open")?;
+                db::update_issue_field(&tx, id, "status", "open")?;
             }
         }
     }
     if let Some(ref p) = priority {
         match validate_priority(p) {
             Ok(()) => {
-                db::record_event(conn, id, "priority", &old_issue.priority, p)?;
-                db::update_issue_field(conn, id, "priority", p)?;
+                db::record_event(&tx, id, "priority", &old_issue.priority, p)?;
+                db::update_issue_field(&tx, id, "priority", p)?;
             }
             Err(_) => {
                 review_notes.push(format!(
                     "REVIEW: priority '{}' not recognized, defaulted to 'medium'. Valid: critical, high, medium, low",
                     p
                 ));
-                db::record_event(conn, id, "priority", &old_issue.priority, "medium")?;
-                db::update_issue_field(conn, id, "priority", "medium")?;
+                db::record_event(&tx, id, "priority", &old_issue.priority, "medium")?;
+                db::update_issue_field(&tx, id, "priority", "medium")?;
             }
         }
     }
     if let Some(ref k) = kind {
         match validate_kind(k) {
             Ok(()) => {
-                db::record_event(conn, id, "kind", &old_issue.kind, k)?;
-                db::update_issue_field(conn, id, "kind", k)?;
+                db::record_event(&tx, id, "kind", &old_issue.kind, k)?;
+                db::update_issue_field(&tx, id, "kind", k)?;
             }
             Err(_) => {
                 review_notes.push(format!(
                     "REVIEW: kind '{}' not recognized, defaulted to 'task'. Valid: bug, feature, task, epic",
                     k
                 ));
-                db::record_event(conn, id, "kind", &old_issue.kind, "task")?;
-                db::update_issue_field(conn, id, "kind", "task")?;
+                db::record_event(&tx, id, "kind", &old_issue.kind, "task")?;
+                db::update_issue_field(&tx, id, "kind", "task")?;
             }
         }
     }
     if let Some(ref t) = title {
-        db::record_event(conn, id, "title", &old_issue.title, t)?;
-        db::update_issue_field(conn, id, "title", t)?;
+        db::record_event(&tx, id, "title", &old_issue.title, t)?;
+        db::update_issue_field(&tx, id, "title", t)?;
     }
     if let Some(ref c) = context {
-        db::record_event(conn, id, "context", &old_issue.context, c)?;
-        db::update_issue_field(conn, id, "context", c)?;
+        db::record_event(&tx, id, "context", &old_issue.context, c)?;
+        db::update_issue_field(&tx, id, "context", c)?;
     }
     if let Some(ref a) = acceptance {
-        db::record_event(conn, id, "acceptance", &old_issue.acceptance, a)?;
-        db::update_issue_field(conn, id, "acceptance", a)?;
+        db::record_event(&tx, id, "acceptance", &old_issue.acceptance, a)?;
+        db::update_issue_field(&tx, id, "acceptance", a)?;
     }
     if let Some(ref a) = assigned_to {
-        db::record_event(conn, id, "assigned_to", &old_issue.assigned_to, a)?;
-        db::update_issue_field(conn, id, "assigned_to", a)?;
+        db::record_event(&tx, id, "assigned_to", &old_issue.assigned_to, a)?;
+        db::update_issue_field(&tx, id, "assigned_to", a)?;
     }
 
     // Handle files
@@ -120,12 +123,12 @@ pub fn run(
                 .filter(|s| !s.is_empty()),
         );
         let json = serde_json::to_string(&file_list)?;
-        db::update_issue_field(conn, id, "files", &json)?;
+        db::update_issue_field(&tx, id, "files", &json)?;
     } else if !add_files.is_empty() || !remove_files.is_empty() {
-        let current = db::get_issue(conn, id)?;
+        let current = db::get_issue(&tx, id)?;
         let updated = util::apply_tags(current.files, &add_files, &remove_files);
         let json = serde_json::to_string(&updated)?;
-        db::update_issue_field(conn, id, "files", &json)?;
+        db::update_issue_field(&tx, id, "files", &json)?;
     }
 
     // Handle tags
@@ -140,12 +143,12 @@ pub fn run(
                 .filter(|s| !s.is_empty()),
         );
         let json = serde_json::to_string(&tag_list)?;
-        db::update_issue_field(conn, id, "tags", &json)?;
+        db::update_issue_field(&tx, id, "tags", &json)?;
     } else if !add_tags.is_empty() || !remove_tags.is_empty() {
-        let current = db::get_issue(conn, id)?;
+        let current = db::get_issue(&tx, id)?;
         let updated = util::apply_tags(current.tags, &add_tags, &remove_tags);
         let json = serde_json::to_string(&updated)?;
-        db::update_issue_field(conn, id, "tags", &json)?;
+        db::update_issue_field(&tx, id, "tags", &json)?;
     }
 
     // Handle skills
@@ -161,48 +164,47 @@ pub fn run(
                 .filter(|s| !s.is_empty()),
         );
         let json = serde_json::to_string(&skill_list)?;
-        db::update_issue_field(conn, id, "skills", &json)?;
+        db::update_issue_field(&tx, id, "skills", &json)?;
     } else if !add_skills.is_empty() || !remove_skills.is_empty() {
-        let current = db::get_issue(conn, id)?;
+        let current = db::get_issue(&tx, id)?;
         let updated = util::apply_skills(current.skills, &add_skills, &remove_skills);
         let json = serde_json::to_string(&updated)?;
-        db::update_issue_field(conn, id, "skills", &json)?;
+        db::update_issue_field(&tx, id, "skills", &json)?;
     }
 
     if let Some(pid) = parent {
-        db::update_issue_parent(conn, id, Some(pid))?;
+        db::update_issue_parent(&tx, id, Some(pid))?;
     }
 
     // Add _needs_review tag and notes if any field was auto-corrected
     if !review_notes.is_empty() {
-        let current_issue = db::get_issue(conn, id)?;
+        let current_issue = db::get_issue(&tx, id)?;
         let mut current_tags = current_issue.tags.clone();
         if !current_tags.contains(&"_needs_review".to_string()) {
             current_tags.push("_needs_review".to_string());
             let json = serde_json::to_string(&current_tags)?;
-            db::update_issue_field(conn, id, "tags", &json)?;
+            db::update_issue_field(&tx, id, "tags", &json)?;
         }
         for note_text in &review_notes {
-            db::add_note(conn, id, note_text, "itr")?;
+            db::add_note(&tx, id, note_text, "itr")?;
         }
     }
 
     // Re-read the updated issue
-    let issue = db::get_issue(conn, id)?;
-    let config = UrgencyConfig::load(conn);
-    let detail = build_issue_detail(conn, issue, &config)?;
+    let issue = db::get_issue(&tx, id)?;
+    let config = UrgencyConfig::load(&tx);
+    let detail = build_issue_detail(&tx, issue, &config)?;
 
     // Check for newly unblocked issues
-    let unblocked = if let Some(ref s) = status {
-        if s == "done" || s == "wontfix" {
-            db::get_newly_unblocked(conn, id)?
-        } else {
-            vec![]
-        }
+    let unblocked = if terminal_status_applied {
+        let unblocked = db::get_newly_unblocked(&tx, id)?;
+        db::remove_blocker_edges(&tx, id)?;
+        unblocked
     } else {
         vec![]
     };
 
+    tx.commit()?;
     print_detail_with_unblocked(&detail, &unblocked, fmt);
 
     Ok(())

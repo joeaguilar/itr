@@ -19,8 +19,9 @@ pub fn run(
         None => vec!["open".to_string(), "in-progress".to_string()],
     };
 
-    // Get unblocked, non-terminal issues
-    let issues = db::list_issues(
+    // Ready issues are always unblocked and non-terminal, even when an
+    // explicit status filter asks for a terminal status.
+    let issues: Vec<_> = db::list_issues(
         conn,
         &ListFilter {
             statuses,
@@ -28,7 +29,10 @@ pub fn run(
             assigned_to,
             ..ListFilter::default()
         },
-    )?;
+    )?
+    .into_iter()
+    .filter(|i| i.status == "open" || i.status == "in-progress")
+    .collect();
 
     if issues.is_empty() {
         error::print_empty(fmt.is_json(), "No ready issues found.");

@@ -5,7 +5,7 @@ use crate::format::{self, Format};
 use crate::models::SearchResult;
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[allow(clippy::too_many_arguments)]
 pub fn run(
@@ -30,7 +30,8 @@ pub fn run(
         return Ok(());
     }
 
-    // Try FTS5 first, fall back to LIKE-based search
+    // Try FTS5 first for ranked field matches, then append LIKE-only matches
+    // such as notes, which are intentionally not indexed in the FTS table.
     let ids = if db::has_fts(conn) {
         let fts_ids = db::fts_search(conn, query)?;
         if fts_ids.is_empty() {
@@ -64,6 +65,14 @@ pub fn run(
                         .map(|i| kinds.contains(&i.kind))
                         .unwrap_or(false)
                 });
+            }
+            let mut seen: HashSet<i64> = filtered.iter().copied().collect();
+            let note_ids =
+                db::search_note_issue_ids(conn, &terms, &statuses, &priorities, &kinds, all)?;
+            for id in note_ids {
+                if seen.insert(id) {
+                    filtered.push(id);
+                }
             }
             filtered
         }

@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS issues (
     acceptance      TEXT NOT NULL DEFAULT '',
     parent_id       INTEGER REFERENCES issues(id) ON DELETE SET NULL,
     close_reason    TEXT NOT NULL DEFAULT '',
+    assigned_to     TEXT NOT NULL DEFAULT '',
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
@@ -49,6 +50,25 @@ CREATE TABLE IF NOT EXISTS config (
     value           TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    issue_id        INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    field           TEXT NOT NULL,
+    old_value       TEXT NOT NULL DEFAULT '',
+    new_value       TEXT NOT NULL DEFAULT '',
+    agent           TEXT NOT NULL DEFAULT '',
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS relations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_id       INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    target_id       INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+    relation_type   TEXT NOT NULL CHECK(relation_type IN ('duplicate', 'related', 'supersedes')),
+    created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    UNIQUE(source_id, target_id, relation_type)
+);
+
 CREATE INDEX IF NOT EXISTS idx_issues_status ON issues(status);
 CREATE INDEX IF NOT EXISTS idx_issues_priority ON issues(priority);
 CREATE INDEX IF NOT EXISTS idx_issues_kind ON issues(kind);
@@ -56,6 +76,10 @@ CREATE INDEX IF NOT EXISTS idx_issues_parent ON issues(parent_id);
 CREATE INDEX IF NOT EXISTS idx_dependencies_blocked ON dependencies(blocked_id);
 CREATE INDEX IF NOT EXISTS idx_dependencies_blocker ON dependencies(blocker_id);
 CREATE INDEX IF NOT EXISTS idx_notes_issue ON notes(issue_id);
+CREATE INDEX IF NOT EXISTS idx_events_issue ON events(issue_id);
+CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source_id);
+CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_id);
 
 CREATE TRIGGER IF NOT EXISTS trg_issues_updated_at
     AFTER UPDATE ON issues
@@ -93,12 +117,17 @@ pub fn find_db(override_path: Option<&str>) -> Result<PathBuf, ItrError> {
 pub fn open_db(path: &Path) -> Result<Connection, ItrError> {
     let conn = Connection::open(path)?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
-    migrate_add_skills(&conn)?;
-    migrate_add_assigned_to(&conn)?;
-    migrate_add_events(&conn)?;
-    migrate_add_relations(&conn)?;
+    migrate_current_schema(&conn)?;
     try_create_fts(&conn);
     Ok(conn)
+}
+
+fn migrate_current_schema(conn: &Connection) -> Result<(), ItrError> {
+    migrate_add_skills(conn)?;
+    migrate_add_assigned_to(conn)?;
+    migrate_add_events(conn)?;
+    migrate_add_relations(conn)?;
+    Ok(())
 }
 
 fn migrate_add_skills(conn: &Connection) -> Result<(), ItrError> {
@@ -139,11 +168,13 @@ fn migrate_add_events(conn: &Connection) -> Result<(), ItrError> {
                 new_value   TEXT NOT NULL DEFAULT '',
                 agent       TEXT NOT NULL DEFAULT '',
                 created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-            );
-            CREATE INDEX idx_events_issue ON events(issue_id);
-            CREATE INDEX idx_events_created ON events(created_at);",
+            );",
         )?;
     }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_events_issue ON events(issue_id);
+         CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);",
+    )?;
     Ok(())
 }
 
@@ -162,17 +193,21 @@ fn migrate_add_relations(conn: &Connection) -> Result<(), ItrError> {
                 relation_type   TEXT NOT NULL CHECK(relation_type IN ('duplicate', 'related', 'supersedes')),
                 created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
                 UNIQUE(source_id, target_id, relation_type)
-            );
-            CREATE INDEX idx_relations_source ON relations(source_id);
-            CREATE INDEX idx_relations_target ON relations(target_id);",
+            );",
         )?;
     }
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source_id);
+         CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_id);",
+    )?;
     Ok(())
 }
 
 pub fn init_db(path: &Path) -> Result<Connection, ItrError> {
     let conn = Connection::open(path)?;
     conn.execute_batch(SCHEMA)?;
+    migrate_current_schema(&conn)?;
+    try_create_fts(&conn);
     Ok(conn)
 }
 
@@ -736,6 +771,57 @@ pub fn search_issue_ids(
     }
 
     // Status filter
+    if !all {
+        if statuses.is_empty() {
+            let defaults = vec!["open".to_string(), "in-progress".to_string()];
+            append_in_clause(&mut sql, &mut param_values, "i.status", &defaults);
+        } else {
+            append_in_clause(&mut sql, &mut param_values, "i.status", statuses);
+        }
+    }
+
+    if !priorities.is_empty() {
+        append_in_clause(&mut sql, &mut param_values, "i.priority", priorities);
+    }
+
+    if !kinds.is_empty() {
+        append_in_clause(&mut sql, &mut param_values, "i.kind", kinds);
+    }
+
+    let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values
+        .iter()
+        .map(std::convert::AsRef::as_ref)
+        .collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let ids: Vec<i64> = stmt
+        .query_map(params_ref.as_slice(), |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ids)
+}
+
+pub fn search_note_issue_ids(
+    conn: &Connection,
+    terms: &[String],
+    statuses: &[String],
+    priorities: &[String],
+    kinds: &[String],
+    all: bool,
+) -> Result<Vec<i64>, ItrError> {
+    if terms.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let mut sql = String::from(
+        "SELECT DISTINCT i.id FROM notes n JOIN issues i ON i.id = n.issue_id WHERE 1=1",
+    );
+    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::with_capacity(terms.len());
+
+    for term in terms {
+        let p = param_values.len() + 1;
+        sql.push_str(&format!(" AND n.content LIKE ?{}", p));
+        param_values.push(Box::new(format!("%{}%", term)));
+    }
+
     if !all {
         if statuses.is_empty() {
             let defaults = vec!["open".to_string(), "in-progress".to_string()];

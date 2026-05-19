@@ -22,6 +22,9 @@ cargo fmt --all -- --check
 ./tests/integration.sh ./target/debug/itr
 ```
 
+The integration script normalizes explicit binary paths before switching into
+its temp directory, so the debug-binary command above works from the repo root.
+
 Local UI:
 
 ```bash

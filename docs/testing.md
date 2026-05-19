@@ -29,6 +29,10 @@ just test-debug
 `just test-debug` builds `./target/debug/itr` and passes that path to the
 integration suite. Use it while iterating.
 
+When you pass an explicit binary path, `tests/integration.sh` normalizes it
+before switching into its isolated temp directory, so repo-relative invocations
+such as `./tests/integration.sh ./target/debug/itr` are stable.
+
 Use `cargo fmt --all` or `just fmt` to rewrite formatting. Use
 `cargo fmt --all -- --check` or `just fmt-check` to verify formatting without
 modifying files.

@@ -39,11 +39,11 @@ jobs:
           MINOR=$(echo "$VERSION" | cut -d. -f2)
           PATCH=$(echo "$VERSION" | cut -d. -f3)
 
-          # Get commits since last tag
+          # Get commits since last tag, including body/footer text for breaking-change footers.
           if git rev-parse "$LATEST_TAG" >/dev/null 2>&1; then
-            COMMITS=$(git log "$LATEST_TAG"..HEAD --pretty=format:"%s")
+            COMMITS=$(git log "$LATEST_TAG"..HEAD --pretty=format:"%s%n%b%x1e")
           else
-            COMMITS=$(git log --pretty=format:"%s")
+            COMMITS=$(git log --pretty=format:"%s%n%b%x1e")
           fi
 
           if [ -z "$COMMITS" ]; then
@@ -52,29 +52,31 @@ jobs:
           fi
 
           echo "Commits since $LATEST_TAG:"
-          echo "$COMMITS"
+          printf '%s' "$COMMITS" | tr '\036' '\n'
 
           # Determine bump type (highest wins)
           BUMP="none"
-          while IFS= read -r msg; do
-            # Breaking change: type!: or BREAKING CHANGE in body
-            if echo "$msg" | grep -qE '^[a-z]+(\(.+\))?!:'; then
+          while IFS= read -r -d $'\036' commit || [ -n "$commit" ]; do
+            subject=$(printf '%s\n' "$commit" | sed -n '1p')
+            # Breaking change: type!: subject or BREAKING CHANGE footer/body line
+            if printf '%s\n' "$subject" | grep -qE '^[a-z]+(\(.+\))?!:' || \
+               printf '%s\n' "$commit" | grep -qE '^BREAKING CHANGE:'; then
               BUMP="major"
               break
             fi
             # Feature
-            if echo "$msg" | grep -qE '^feat(\(.+\))?:'; then
+            if printf '%s\n' "$subject" | grep -qE '^feat(\(.+\))?:'; then
               if [ "$BUMP" != "major" ]; then
                 BUMP="minor"
               fi
             fi
             # Fix
-            if echo "$msg" | grep -qE '^fix(\(.+\))?:'; then
+            if printf '%s\n' "$subject" | grep -qE '^fix(\(.+\))?:'; then
               if [ "$BUMP" = "none" ]; then
                 BUMP="patch"
               fi
             fi
-          done <<< "$COMMITS"
+          done < <(printf '%s' "$COMMITS")
 
           if [ "$BUMP" = "none" ]; then
             echo "No feat/fix commits found, skipping tag"

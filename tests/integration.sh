@@ -2,16 +2,54 @@
 set -euo pipefail
 
 # Integration test suite for itr
-# Usage: ./tests/integration.sh [path-to-itr-binary]
+# Usage: ./tests/integration.sh [--smoke] [path-to-itr-binary]
 #
 # If no path is provided, uses ./target/release/itr
 
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-ITR="${1:-$SCRIPT_DIR/target/release/itr}"
+SMOKE=0
+if [ "${1:-}" = "--smoke" ]; then
+    SMOKE=1
+    shift
+fi
+
+if [ "$#" -gt 0 ]; then
+    ITR="$1"
+    case "$ITR" in
+        /*) ;;
+        *) ITR="$(pwd)/$ITR" ;;
+    esac
+else
+    ITR="$SCRIPT_DIR/target/release/itr"
+fi
 
 if [ ! -x "$ITR" ]; then
     echo "Binary not found at $ITR — run 'cargo build --release' first"
     exit 1
+fi
+
+run_smoke() {
+    local out ready_out
+    SMOKE_DIR=$(mktemp -d)
+    trap 'rm -rf "$SMOKE_DIR"' EXIT
+
+    "$ITR" --version >/dev/null
+
+    cd "$SMOKE_DIR"
+    out=$("$ITR" init)
+    echo "$out" | grep -qF ".itr.db"
+    [ -f .itr.db ]
+
+    "$ITR" add "Release smoke issue" >/dev/null
+    ready_out=$("$ITR" ready -f json)
+    echo "$ready_out" | grep -qF "Release smoke issue"
+
+    echo "release smoke passed: version, init, add, ready"
+}
+
+if [ "$SMOKE" -eq 1 ]; then
+    run_smoke
+    exit 0
 fi
 
 PASS=0
@@ -81,6 +119,72 @@ echo "--- init ---"
 OUT=$($ITR init)
 assert_contains "init creates db" ".itr.db" "$OUT"
 [ -f .itr.db ] && pass "init .itr.db file exists" || fail "init .itr.db file exists" "file missing"
+if INIT_SCHEMA_CHECK=$(python3 - <<'PY' 2>&1
+import sqlite3
+
+conn = sqlite3.connect(".itr.db")
+
+issues_cols = {row[1] for row in conn.execute("PRAGMA table_info(issues)")}
+required_issue_cols = {"assigned_to", "skills"}
+missing_issue_cols = sorted(required_issue_cols - issues_cols)
+if missing_issue_cols:
+    raise SystemExit(f"missing issue columns: {missing_issue_cols}")
+
+tables = {
+    row[0]
+    for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )
+}
+required_tables = {
+    "issues",
+    "dependencies",
+    "notes",
+    "config",
+    "events",
+    "relations",
+    "issues_fts",
+}
+missing_tables = sorted(required_tables - tables)
+if missing_tables:
+    raise SystemExit(f"missing tables: {missing_tables}")
+
+indexes = {
+    row[0]
+    for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='index'"
+    )
+}
+required_indexes = {
+    "idx_events_issue",
+    "idx_events_created",
+    "idx_relations_source",
+    "idx_relations_target",
+}
+missing_indexes = sorted(required_indexes - indexes)
+if missing_indexes:
+    raise SystemExit(f"missing indexes: {missing_indexes}")
+
+events_sql = conn.execute(
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='events'"
+).fetchone()[0]
+relations_sql = conn.execute(
+    "SELECT sql FROM sqlite_master WHERE type='table' AND name='relations'"
+).fetchone()[0]
+if "REFERENCES issues(id) ON DELETE CASCADE" not in events_sql:
+    raise SystemExit("events table missing issue foreign key")
+if "UNIQUE(source_id, target_id, relation_type)" not in relations_sql:
+    raise SystemExit("relations table missing unique constraint")
+if "CHECK(relation_type IN" not in relations_sql:
+    raise SystemExit("relations table missing relation_type check")
+
+print("ok")
+PY
+); then
+    assert_eq "fresh init has current schema before reopen" "ok" "$INIT_SCHEMA_CHECK"
+else
+    fail "fresh init has current schema before reopen" "$INIT_SCHEMA_CHECK"
+fi
 
 OUT=$($ITR init)
 assert_contains "init is idempotent" ".itr.db" "$OUT"
@@ -118,6 +222,29 @@ assert_eq "add second issue id" "2" "$(jq_val "$OUT" "d['id']")"
 
 OUT=$($ITR add "Write auth tests" -p low -k task -f json)
 assert_eq "add third issue id" "3" "$(jq_val "$OUT" "d['id']")"
+
+ADD_BLOCK_DIR=$(mktemp -d)
+$ITR init --db "$ADD_BLOCK_DIR/.itr.db" >/dev/null
+ADD_BLOCKER_A=$($ITR --db "$ADD_BLOCK_DIR/.itr.db" add "Add blocker A" -f json | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+ADD_BLOCKER_B=$($ITR --db "$ADD_BLOCK_DIR/.itr.db" add "Add blocker B" -f json | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+
+OUT=$($ITR --db "$ADD_BLOCK_DIR/.itr.db" add "Blocked by two" --blocked-by "$ADD_BLOCKER_A,$ADD_BLOCKER_B" -f json)
+assert_eq "add --blocked-by creates multi dependencies" "[$ADD_BLOCKER_A, $ADD_BLOCKER_B]" "$(jq_val "$OUT" "sorted(d['blocked_by'])")"
+assert_eq "add --blocked-by marks issue blocked" "True" "$(jq_val "$OUT" "d['is_blocked']")"
+
+OUT=$($ITR --db "$ADD_BLOCK_DIR/.itr.db" add "Blocked by one plus invalid" --blocked-by "$ADD_BLOCKER_A,not-an-id" -f json)
+assert_eq "add --blocked-by invalid token adds _needs_review" "True" "$(jq_val "$OUT" "'_needs_review' in d.get('tags', [])")"
+assert_eq "add --blocked-by invalid token adds review note" "True" "$(jq_val "$OUT" "any('blocked_by' in n['content'] and 'not-an-id' in n['content'] for n in d['notes'])")"
+assert_eq "add --blocked-by invalid token keeps valid dependencies" "[$ADD_BLOCKER_A]" "$(jq_val "$OUT" "sorted(d['blocked_by'])")"
+
+ADD_COUNT_BEFORE=$(python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('SELECT COUNT(*) FROM issues').fetchone()[0])" "$ADD_BLOCK_DIR/.itr.db")
+ADD_MISSING_EXIT=0
+ADD_MISSING_OUT=$($ITR --db "$ADD_BLOCK_DIR/.itr.db" add "Missing blocker should rollback" --blocked-by 999 -f json 2>&1) || ADD_MISSING_EXIT=$?
+assert_eq "add --blocked-by missing id exits 1" "1" "$ADD_MISSING_EXIT"
+assert_contains "add --blocked-by missing id reports not found" "Issue 999 not found" "$ADD_MISSING_OUT"
+ADD_COUNT_AFTER=$(python3 -c "import sqlite3,sys; print(sqlite3.connect(sys.argv[1]).execute('SELECT COUNT(*) FROM issues').fetchone()[0])" "$ADD_BLOCK_DIR/.itr.db")
+assert_eq "add --blocked-by missing id rolls back issue" "$ADD_COUNT_BEFORE" "$ADD_COUNT_AFTER"
+rm -rf "$ADD_BLOCK_DIR"
 
 # ─────────────────────────────────────────────
 echo "--- add --stdin-json ---"
@@ -295,6 +422,30 @@ OUT=$($ITR ready -n 2 -f json)
 COUNT=$(jq_val "$OUT" "len(d)")
 assert_eq "ready --limit 2" "2" "$COUNT"
 
+READY_STATUS_DIR=$(mktemp -d)
+ITR_DB_PATH="$READY_STATUS_DIR/.itr.db" $ITR init >/dev/null
+OUT=$(ITR_DB_PATH="$READY_STATUS_DIR/.itr.db" $ITR add "Ready open" -f json)
+READY_OPEN_ID=$(jq_val "$OUT" "d['id']")
+OUT=$(ITR_DB_PATH="$READY_STATUS_DIR/.itr.db" $ITR add "Ready in progress" -f json)
+READY_IN_PROGRESS_ID=$(jq_val "$OUT" "d['id']")
+ITR_DB_PATH="$READY_STATUS_DIR/.itr.db" $ITR update "$READY_IN_PROGRESS_ID" --status in-progress >/dev/null
+OUT=$(ITR_DB_PATH="$READY_STATUS_DIR/.itr.db" $ITR add "Ready done should not leak" -f json)
+READY_DONE_ID=$(jq_val "$OUT" "d['id']")
+ITR_DB_PATH="$READY_STATUS_DIR/.itr.db" $ITR close "$READY_DONE_ID" "Finished" >/dev/null
+OUT=$(ITR_DB_PATH="$READY_STATUS_DIR/.itr.db" $ITR add "Ready wontfix should not leak" -f json)
+READY_WONTFIX_ID=$(jq_val "$OUT" "d['id']")
+ITR_DB_PATH="$READY_STATUS_DIR/.itr.db" $ITR close "$READY_WONTFIX_ID" --wontfix "Not needed" >/dev/null
+
+OUT=$(ITR_DB_PATH="$READY_STATUS_DIR/.itr.db" $ITR ready --status open -f json)
+assert_eq "ready --status open keeps open work" "[$READY_OPEN_ID]" "$(jq_val "$OUT" "[i['id'] for i in d]")"
+OUT=$(ITR_DB_PATH="$READY_STATUS_DIR/.itr.db" $ITR ready --status in-progress -f json)
+assert_eq "ready --status in-progress keeps in-progress work" "[$READY_IN_PROGRESS_ID]" "$(jq_val "$OUT" "[i['id'] for i in d]")"
+OUT=$(ITR_DB_PATH="$READY_STATUS_DIR/.itr.db" $ITR ready --status done -f json)
+assert_eq "ready --status done excludes terminal work" "[]" "$(jq_val "$OUT" "d")"
+OUT=$(ITR_DB_PATH="$READY_STATUS_DIR/.itr.db" $ITR ready --status wontfix -f json)
+assert_eq "ready --status wontfix excludes terminal work" "[]" "$(jq_val "$OUT" "d")"
+rm -rf "$READY_STATUS_DIR"
+
 # ─────────────────────────────────────────────
 echo "--- close ---"
 # ─────────────────────────────────────────────
@@ -309,6 +460,39 @@ assert_eq "close stores reason" "Fixed in commit abc123" "$(jq_val "$OUT" "d['cl
 # Check unblock
 OUT=$($ITR get 3 -f json)
 assert_eq "close unblocks dependent" "False" "$(jq_val "$OUT" "d['is_blocked']")"
+
+# Single update to terminal status should also unblock and remove stale edges
+UPDATE_DEP_DIR=$(mktemp -d)
+ITR_DB_PATH="$UPDATE_DEP_DIR/.itr.db" $ITR init >/dev/null
+OUT=$(ITR_DB_PATH="$UPDATE_DEP_DIR/.itr.db" $ITR add "Update blocker" -f json)
+UPDATE_BLOCKER=$(jq_val "$OUT" "d['id']")
+OUT=$(ITR_DB_PATH="$UPDATE_DEP_DIR/.itr.db" $ITR add "Update blocked" --blocked-by "$UPDATE_BLOCKER" -f json)
+UPDATE_BLOCKED=$(jq_val "$OUT" "d['id']")
+
+OUT=$(ITR_DB_PATH="$UPDATE_DEP_DIR/.itr.db" $ITR update "$UPDATE_BLOCKER" --status done -f json)
+assert_eq "update done reports unblocked" "1" "$(jq_val "$OUT" "len(d.get('unblocked', []))")"
+OUT=$(ITR_DB_PATH="$UPDATE_DEP_DIR/.itr.db" $ITR get "$UPDATE_BLOCKED" -f json)
+assert_eq "update done removes blocker edge" "[]" "$(jq_val "$OUT" "d['blocked_by']")"
+assert_eq "update done leaves dependent unblocked" "False" "$(jq_val "$OUT" "d['is_blocked']")"
+set +e
+OUT=$(ITR_DB_PATH="$UPDATE_DEP_DIR/.itr.db" $ITR doctor -f json 2>&1)
+UPDATE_DOCTOR_EXIT=$?
+set -e
+assert_eq "doctor clean after update done blocker cleanup" "0" "$UPDATE_DOCTOR_EXIT"
+
+OUT=$(ITR_DB_PATH="$UPDATE_DEP_DIR/.itr.db" $ITR add "Update wontfix blocker" -f json)
+UPDATE_WONTFIX_BLOCKER=$(jq_val "$OUT" "d['id']")
+OUT=$(ITR_DB_PATH="$UPDATE_DEP_DIR/.itr.db" $ITR add "Update wontfix blocked" --blocked-by "$UPDATE_WONTFIX_BLOCKER" -f json)
+UPDATE_WONTFIX_BLOCKED=$(jq_val "$OUT" "d['id']")
+ITR_DB_PATH="$UPDATE_DEP_DIR/.itr.db" $ITR update "$UPDATE_WONTFIX_BLOCKER" --status wontfix -f json >/dev/null
+OUT=$(ITR_DB_PATH="$UPDATE_DEP_DIR/.itr.db" $ITR get "$UPDATE_WONTFIX_BLOCKED" -f json)
+assert_eq "update wontfix removes blocker edge" "[]" "$(jq_val "$OUT" "d['blocked_by']")"
+set +e
+OUT=$(ITR_DB_PATH="$UPDATE_DEP_DIR/.itr.db" $ITR doctor -f json 2>&1)
+UPDATE_WONTFIX_DOCTOR_EXIT=$?
+set -e
+assert_eq "doctor clean after update wontfix blocker cleanup" "0" "$UPDATE_WONTFIX_DOCTOR_EXIT"
+rm -rf "$UPDATE_DEP_DIR"
 
 # ─────────────────────────────────────────────
 echo "--- close --wontfix ---"
@@ -445,6 +629,11 @@ echo "--- schema ---"
 OUT=$($ITR schema)
 assert_contains "schema has CREATE TABLE" "CREATE TABLE" "$OUT"
 assert_contains "schema has issues table" "issues" "$OUT"
+assert_contains "schema has assigned_to column" "assigned_to" "$OUT"
+assert_contains "schema has events table" "CREATE TABLE IF NOT EXISTS events" "$OUT"
+assert_contains "schema has relations table" "CREATE TABLE IF NOT EXISTS relations" "$OUT"
+assert_contains "schema has event indexes" "idx_events_issue" "$OUT"
+assert_contains "schema has relation indexes" "idx_relations_source" "$OUT"
 
 OUT=$($ITR schema -f json)
 python3 -c "import json; json.loads('$OUT'.replace(\"'\", \"\"))" 2>/dev/null || true
@@ -796,6 +985,21 @@ OUT=$(ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR list -f json)
 COUNT=$(jq_val "$OUT" "len(d)")
 assert_eq "bulk close reduced list" "1" "$COUNT"
 
+# Bulk update to terminal status should report unblocked and remove stale edges
+OUT=$(ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR add "Bulk update blocker" --tag bulk-update-blocker -f json)
+BULK_UPDATE_BLOCKER=$(jq_val "$OUT" "d['id']")
+OUT=$(ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR add "Bulk update blocked" --blocked-by "$BULK_UPDATE_BLOCKER" -f json)
+BULK_UPDATE_BLOCKED=$(jq_val "$OUT" "d['id']")
+OUT=$(ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR bulk update --tag bulk-update-blocker --set-status done -f json)
+assert_eq "bulk update done reports unblocked" "1" "$(jq_val "$OUT" "len(d.get('unblocked', []))")"
+OUT=$(ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR get "$BULK_UPDATE_BLOCKED" -f json)
+assert_eq "bulk update done removes blocker edge" "[]" "$(jq_val "$OUT" "d['blocked_by']")"
+set +e
+OUT=$(ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR doctor -f json 2>&1)
+BULK_UPDATE_DOCTOR_EXIT=$?
+set -e
+assert_eq "doctor clean after bulk update blocker cleanup" "0" "$BULK_UPDATE_DOCTOR_EXIT"
+
 # Bulk update
 OUT=$(ITR_DB_PATH="$BULK_DIR/.itr.db" $ITR bulk update --tag sprint-2 --set-priority high -f json)
 UPD_COUNT=$(jq_val "$OUT" "d['count']")
@@ -936,11 +1140,14 @@ FTS_DIR=$(mktemp -d)
 ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR init >/dev/null
 ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR add "Authentication system" -c "JWT token validation" -f json >/dev/null
 ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR add "Payment gateway" -c "Stripe integration" -f json >/dev/null
+ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR add "Background task" -c "Runs scheduled cleanup" -f json >/dev/null
+ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR note 3 "needle lives only in this note" >/dev/null
+ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR add "Needle title match" -c "No note needed" -f json >/dev/null
 
 # Reindex
 OUT=$(ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR reindex -f json)
 INDEXED=$(jq_val "$OUT" "d['indexed']")
-assert_eq "reindex counts issues" "2" "$INDEXED"
+assert_eq "reindex counts issues" "4" "$INDEXED"
 
 # FTS search works
 OUT=$(ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR search "JWT" -f json)
@@ -951,6 +1158,15 @@ assert_eq "FTS search finds JWT" "1" "$COUNT"
 OUT=$(ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR search "Stripe" -f json)
 COUNT=$(jq_val "$OUT" "len(d)")
 assert_eq "FTS search finds Stripe" "1" "$COUNT"
+
+# FTS-ranked search still includes note-only matches from the LIKE path
+OUT=$(ITR_DB_PATH="$FTS_DIR/.itr.db" $ITR search "needle" -f json)
+COUNT=$(jq_val "$OUT" "len(d)")
+assert_eq "FTS search includes note-only matches" "2" "$COUNT"
+NOTE_ID_PRESENT=$(jq_val "$OUT" "3 in [item['id'] for item in d]")
+assert_eq "FTS search includes expected note-only issue id" "True" "$NOTE_ID_PRESENT"
+NOTE_MATCH=$(jq_val "$OUT" "next(('notes' in item['matched_fields'] and item.get('context_snippets', {}).get('notes') is not None for item in d if item['id'] == 3), False)")
+assert_eq "FTS note-only match includes notes snippet" "True" "$NOTE_MATCH"
 
 rm -rf "$FTS_DIR"
 
@@ -1156,6 +1372,13 @@ assert_eq "batch update add_tags applied" "True" "$HAS_URGENT_TAG"
 OUT=$(echo '[{"id":1,"status":"done"}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update -f json)
 UNBLOCKED=$(jq_val "$OUT" "len(d['results'][0].get('unblocked', []))")
 assert_eq "batch update done triggers unblocked" "1" "$UNBLOCKED"
+OUT_I3=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR get 3 -f json)
+assert_eq "batch update done removes blocker edge" "[]" "$(jq_val "$OUT_I3" "d['blocked_by']")"
+set +e
+OUT=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR doctor -f json 2>&1)
+BU_DOCTOR_EXIT=$?
+set -e
+assert_eq "doctor clean after batch update blocker cleanup" "0" "$BU_DOCTOR_EXIT"
 
 # Batch update with add_skills
 OUT=$(echo '[{"id":2,"add_skills":["devops","rust"]}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update -f json)
