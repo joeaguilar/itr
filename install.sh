@@ -7,12 +7,15 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/joeaguilar/itr/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/joeaguilar/itr/main/install.sh | bash -s -- --update
 #   ./install.sh
+#   ./install.sh --update
 #
 # Environment overrides:
 #   ITR_VERSION       Pin a specific release tag (e.g. v0.1.0). Defaults to latest.
 #   ITR_INSTALL_DIR   Install directory. Defaults to $HOME/.local/bin (or
-#                     $HOME/.cargo/bin when it already exists in PATH).
+#                     an existing itr on PATH, then $HOME/.cargo/bin when it
+#                     already exists in PATH).
 #   ITR_FROM_SOURCE   If 1, skip prebuilt download and build with cargo.
 #   ITR_REPO          GitHub repo slug. Defaults to joeaguilar/itr.
 
@@ -21,6 +24,7 @@ set -euo pipefail
 REPO="${ITR_REPO:-joeaguilar/itr}"
 VERSION="${ITR_VERSION:-}"
 FROM_SOURCE="${ITR_FROM_SOURCE:-0}"
+ACTION="install"
 
 # Colors (suppressed when not a tty)
 if [ -t 1 ]; then
@@ -37,6 +41,47 @@ info()    { printf "${BLUE}ℹ${NC} %s\n" "$1"; }
 success() { printf "${GREEN}✓${NC} %s\n" "$1"; }
 warning() { printf "${YELLOW}⚠${NC} %s\n" "$1" >&2; }
 error()   { printf "${RED}✗${NC} %s\n" "$1" >&2; }
+
+usage() {
+    cat <<EOF
+Usage:
+  ./install.sh [--update]
+  curl -fsSL https://raw.githubusercontent.com/${REPO}/main/install.sh | bash -s -- [--update]
+
+Options:
+  --update    Update an existing itr install if found on PATH; otherwise install it.
+  -h, --help  Show this help text.
+
+Environment:
+  ITR_VERSION       Pin a specific release tag (defaults to latest).
+  ITR_INSTALL_DIR   Override the install directory.
+  ITR_FROM_SOURCE   Set to 1 to build from source in this repo.
+  ITR_REPO          Override the GitHub repo slug.
+EOF
+}
+
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --update|update)
+                ACTION="update"
+                ;;
+            --install|install)
+                ACTION="install"
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                error "Unknown argument: $1"
+                usage >&2
+                exit 1
+                ;;
+        esac
+        shift
+    done
+}
 
 # ---- Platform detection -----------------------------------------------------
 
@@ -134,6 +179,14 @@ choose_install_dir() {
         echo "${ITR_INSTALL_DIR/#\~/$HOME}"
         return
     fi
+    # Updating should replace the binary the shell already resolves, when one
+    # exists. This avoids installing a fresh copy behind a stale PATH entry.
+    local existing
+    existing=$(command -v itr 2>/dev/null || true)
+    if [ -n "$existing" ] && [ -f "$existing" ]; then
+        dirname "$existing"
+        return
+    fi
     # If ~/.cargo/bin exists and is in PATH, prefer it (Rust users).
     case ":$PATH:" in
         *":$HOME/.cargo/bin:"*)
@@ -151,6 +204,33 @@ is_in_path() {
         *":$1:"*) return 0 ;;
         *)        return 1 ;;
     esac
+}
+
+existing_itr_binary() {
+    local install_dir="$1"
+    if [ -x "$install_dir/itr" ]; then
+        echo "$install_dir/itr"
+        return
+    fi
+    local existing
+    existing=$(command -v itr 2>/dev/null || true)
+    if [ -n "$existing" ] && [ -x "$existing" ]; then
+        echo "$existing"
+    fi
+}
+
+print_existing_version() {
+    local install_dir="$1" existing version
+    existing=$(existing_itr_binary "$install_dir")
+    if [ -z "$existing" ]; then
+        return
+    fi
+    version=$("$existing" --version 2>/dev/null || true)
+    if [ -n "$version" ]; then
+        info "Current install: $version ($existing)"
+    else
+        info "Current install: $existing"
+    fi
 }
 
 # ---- Install paths ----------------------------------------------------------
@@ -193,20 +273,30 @@ install_from_release() {
         return 1
     fi
 
-    local install_dir need_sudo=0
+    local install_dir existing_before need_sudo=0
     install_dir=$(choose_install_dir)
+    existing_before=$(existing_itr_binary "$install_dir")
+    print_existing_version "$install_dir"
     mkdir -p "$install_dir" 2>/dev/null || true
     if [ ! -w "$install_dir" ]; then
         need_sudo=1
     fi
 
-    info "Installing to $install_dir"
+    if [ -n "$existing_before" ]; then
+        info "Updating $install_dir/itr"
+    else
+        info "Installing to $install_dir"
+    fi
     if [ "$need_sudo" = 1 ]; then
         sudo install -m 0755 "$tmpdir/${asset_base}/itr" "$install_dir/itr"
     else
         install -m 0755 "$tmpdir/${asset_base}/itr" "$install_dir/itr"
     fi
-    success "Installed $install_dir/itr"
+    if [ -n "$existing_before" ]; then
+        success "Updated $install_dir/itr"
+    else
+        success "Installed $install_dir/itr"
+    fi
 
     if ! is_in_path "$install_dir"; then
         warning "$install_dir is not in your PATH."
@@ -232,11 +322,24 @@ install_from_source() {
     fi
     info "Building from source with cargo…"
     cargo build --release
-    local install_dir
+    local install_dir existing_before need_sudo=0
     install_dir=$(choose_install_dir)
-    mkdir -p "$install_dir"
-    install -m 0755 target/release/itr "$install_dir/itr"
-    success "Installed $install_dir/itr"
+    existing_before=$(existing_itr_binary "$install_dir")
+    print_existing_version "$install_dir"
+    mkdir -p "$install_dir" 2>/dev/null || true
+    if [ ! -w "$install_dir" ]; then
+        need_sudo=1
+    fi
+    if [ "$need_sudo" = 1 ]; then
+        sudo install -m 0755 target/release/itr "$install_dir/itr"
+    else
+        install -m 0755 target/release/itr "$install_dir/itr"
+    fi
+    if [ -n "$existing_before" ]; then
+        success "Updated $install_dir/itr"
+    else
+        success "Installed $install_dir/itr"
+    fi
     if ! is_in_path "$install_dir"; then
         warning "$install_dir is not in your PATH."
         echo "  export PATH=\"$install_dir:\$PATH\""
@@ -246,8 +349,14 @@ install_from_source() {
 # ---- Main -------------------------------------------------------------------
 
 main() {
+    parse_args "$@"
+
     echo
-    info "Installing itr — the zero-config issue tracker CLI"
+    if [ "$ACTION" = "update" ]; then
+        info "Updating itr — the zero-config issue tracker CLI"
+    else
+        info "Installing itr — the zero-config issue tracker CLI"
+    fi
     echo
 
     if [ "$FROM_SOURCE" = "1" ]; then
