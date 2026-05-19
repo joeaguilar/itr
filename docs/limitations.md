@@ -91,9 +91,11 @@ These are likely future directions, not committed scope.
 
 ### Documentation Completeness
 
-The repo is adding contributor and user docs for architecture, schema, command
-contracts, UI API, testing, security, backup/import/export, troubleshooting,
-changelog, and roadmap.
+Contributor and user docs for architecture, schema, command contracts, UI API,
+testing, security, backup/import/export, troubleshooting, changelog, and
+roadmap have shipped and live under `docs/`. Ongoing work is maintenance: keep
+these in sync with command behavior, the embedded skill, and the agent guide
+when shipping changes.
 
 ### Data Portability
 

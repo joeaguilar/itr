@@ -217,6 +217,10 @@ pub enum Commands {
         #[arg(long)]
         parent: Option<i64>,
 
+        /// Clear parent epic (sets `parent_id` to NULL)
+        #[arg(long, conflicts_with = "parent")]
+        no_parent: bool,
+
         /// Assign to agent
         #[arg(long)]
         assigned_to: Option<String>,

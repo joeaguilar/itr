@@ -3,6 +3,24 @@ use crate::models::{Issue, UrgencyBreakdown};
 use crate::util;
 use rusqlite::Connection;
 
+/// Coefficient table for the urgency formula.
+///
+/// Each field contributes to the score additively (see
+/// [`compute_urgency_with_breakdown`]). Default values are the project's
+/// out-of-the-box weights; per-project overrides live in the `config` table
+/// under keys like `urgency.priority.critical` and are loaded by
+/// [`UrgencyConfig::load`].
+///
+/// # Examples
+///
+/// ```ignore
+/// use itr::urgency::UrgencyConfig;
+/// let cfg = UrgencyConfig::default();
+/// assert!(cfg.priority_critical > cfg.priority_low);
+/// // Blocking other work is a strong positive signal; being blocked is negative.
+/// assert!(cfg.blocking > 0.0);
+/// assert!(cfg.blocked < 0.0);
+/// ```
 pub struct UrgencyConfig {
     pub priority_critical: f64,
     pub priority_high: f64,
@@ -42,6 +60,22 @@ impl Default for UrgencyConfig {
 }
 
 impl UrgencyConfig {
+    /// Build a config seeded with defaults, then overlay any per-key overrides
+    /// found in the database's `config` table.
+    ///
+    /// Unknown / unparseable keys are silently ignored — defaults stay in
+    /// place. This is the standard soft-fallback behavior for the urgency
+    /// system: misconfiguration degrades to defaults rather than failing the
+    /// command.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use itr::urgency::UrgencyConfig;
+    /// # let conn: rusqlite::Connection = unimplemented!();
+    /// let cfg = UrgencyConfig::load(&conn);
+    /// assert!(cfg.priority_critical >= 0.0);
+    /// ```
     pub fn load(conn: &Connection) -> Self {
         let mut config = Self::default();
 
@@ -76,6 +110,20 @@ impl UrgencyConfig {
         }
     }
 
+    /// Return the default coefficient table as a list of
+    /// `(config_key, value)` pairs.
+    ///
+    /// Used by `itr config list` / `itr config reset` to surface the keys
+    /// the user can tune without consulting the source.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use itr::urgency::UrgencyConfig;
+    /// let pairs = UrgencyConfig::defaults_map();
+    /// assert!(pairs.iter().any(|(k, _)| *k == "urgency.priority.critical"));
+    /// assert!(pairs.iter().any(|(k, _)| *k == "urgency.blocking"));
+    /// ```
     pub fn defaults_map() -> Vec<(&'static str, f64)> {
         let d = Self::default();
         vec![
@@ -97,11 +145,57 @@ impl UrgencyConfig {
     }
 }
 
+/// Thin wrapper around [`compute_urgency_with_breakdown`] that returns just
+/// the scalar score.
+///
+/// Use this when you only need the number (e.g. when sorting a list);
+/// reach for the breakdown variant when you also want to surface the
+/// per-component contributions to the user.
+///
+/// # Examples
+///
+/// ```ignore
+/// use itr::urgency::{UrgencyConfig, compute_urgency};
+/// # let issue: itr::models::Issue = unimplemented!();
+/// # let conn: rusqlite::Connection = unimplemented!();
+/// let cfg = UrgencyConfig::default();
+/// let score = compute_urgency(&issue, &cfg, &conn);
+/// assert!(score.is_finite());
+/// ```
 pub fn compute_urgency(issue: &Issue, config: &UrgencyConfig, conn: &Connection) -> f64 {
     let (score, _) = compute_urgency_with_breakdown(issue, config, conn);
     score
 }
 
+/// Score an issue and return both the total and the per-component breakdown.
+///
+/// Urgency is always computed fresh from the current state of the issue and
+/// its relations — it is never persisted. The components combined are:
+///
+/// - `priority.<bucket>` — coefficient lookup keyed by priority
+/// - `kind.<bucket>` — coefficient lookup keyed by kind (epics may be negative)
+/// - `blocking` — added when this issue blocks any other active issue
+/// - `blocked` — subtracted when this issue is blocked
+/// - `age` — `config.age * clamp(days_since_created / 10, 0, 1)`
+/// - `in_progress` — added when status is `in-progress`
+/// - `has_acceptance` — added when the acceptance field is non-empty
+/// - `notes` — `config.notes_count * min(notes / 6, 1)`
+///
+/// DB lookup failures degrade to neutral defaults with a `REVIEW:` note on
+/// stderr — the scorer never panics or errors out a list command.
+///
+/// # Examples
+///
+/// ```ignore
+/// use itr::urgency::{UrgencyConfig, compute_urgency_with_breakdown};
+/// # let issue: itr::models::Issue = unimplemented!();
+/// # let conn: rusqlite::Connection = unimplemented!();
+/// let cfg = UrgencyConfig::default();
+/// let (score, breakdown) = compute_urgency_with_breakdown(&issue, &cfg, &conn);
+/// // Sum of (non-zero) components reconstructs the score, modulo float rounding.
+/// let total: f64 = breakdown.components.iter().map(|(_, v)| v).sum();
+/// assert!((total - score).abs() < 1e-9);
+/// ```
 pub fn compute_urgency_with_breakdown(
     issue: &Issue,
     config: &UrgencyConfig,

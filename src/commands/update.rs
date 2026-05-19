@@ -25,6 +25,7 @@ pub fn run(
     skill: Vec<String>,
     acceptance: Option<String>,
     parent: Option<i64>,
+    no_parent: bool,
     assigned_to: Option<String>,
     add_tags: Vec<String>,
     remove_tags: Vec<String>,
@@ -172,8 +173,46 @@ pub fn run(
         db::update_issue_field(&tx, id, "skills", &json)?;
     }
 
+    // Mutually exclusive flags. clap enforces this via `conflicts_with`, but
+    // we keep a defensive soft-fallback in case clap is bypassed by future
+    // callers (e.g. programmatic construction of the `Update` variant).
+    if parent.is_some() && no_parent {
+        return Err(ItrError::InvalidValue {
+            field: "parent".to_string(),
+            value: "<both --parent and --no-parent set>".to_string(),
+            valid: "use one of --parent <ID> or --no-parent".to_string(),
+        });
+    }
     if let Some(pid) = parent {
-        db::update_issue_parent(&tx, id, Some(pid))?;
+        // Reject missing parent before any partial write.
+        if !db::issue_exists(&tx, pid)? {
+            return Err(ItrError::NotFound(pid));
+        }
+        // Cycle check: parent must not be self or any descendant of `id`.
+        if db::is_self_or_descendant(&tx, id, pid)? {
+            return Err(ItrError::CycleDetected(format!(
+                "parent_id: {} cannot be parent of {} (creates cycle)",
+                pid, id
+            )));
+        }
+        let old_value = old_issue
+            .parent_id
+            .map(|p| p.to_string())
+            .unwrap_or_default();
+        let new_value = pid.to_string();
+        if old_value != new_value {
+            db::record_event(&tx, id, "parent_id", &old_value, &new_value)?;
+            db::update_issue_parent(&tx, id, Some(pid))?;
+        }
+    } else if no_parent {
+        let old_value = old_issue
+            .parent_id
+            .map(|p| p.to_string())
+            .unwrap_or_default();
+        if !old_value.is_empty() {
+            db::record_event(&tx, id, "parent_id", &old_value, "")?;
+            db::update_issue_parent(&tx, id, None)?;
+        }
     }
 
     // Add _needs_review tag and notes if any field was auto-corrected

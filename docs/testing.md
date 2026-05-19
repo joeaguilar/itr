@@ -53,12 +53,17 @@ Equivalent `just` recipes:
 just release
 just test
 just deny
+just verify
 just ci
 ```
 
 `./tests/integration.sh` defaults to `./target/release/itr`, so build release
 first. CI runs format check, clippy, cargo-deny, release build, and the release
 integration suite.
+
+`just verify` is the full pre-push gate: it chains the release build, clippy,
+the release integration suite, the format check, and `cargo deny check`. Prefer
+it before opening a PR or handing a change off to another agent.
 
 ## Integration harness conventions
 
@@ -133,8 +138,14 @@ Keep it localhost-only and browserless:
 6. Send `X-ITR-Token` on every API request and `Content-Type:
    application/json` for JSON bodies.
 7. Assert API behavior, not DOM behavior. Current coverage exercises
-   `/api/health`, issue list/create/edit, and bulk resolve preview/apply.
+   `/api/health`, `/api/bootstrap` (config and capability surface),
+   issue list/create/edit, bulk resolve preview/apply, and `/api/sql`
+   (only when the server was started with `--allow-dangerous`).
 8. Always `kill`, `wait`, and remove the temp directory.
+
+The `/api/sql` coverage starts a second `itr ui --allow-dangerous` server in
+the same suite section so the dangerous-mode contract stays exercised without
+leaking into the default UI run.
 
 Sandboxed runs may need permission to bind or connect to `127.0.0.1`.
 

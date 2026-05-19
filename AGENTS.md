@@ -19,8 +19,13 @@ cargo build
 cargo check
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
+cargo deny check
 ./tests/integration.sh ./target/debug/itr
 ```
+
+`cargo deny check` runs license, advisory, and ban policy checks against
+`deny.toml`; CI runs it on every push, so add or audit any new dependency
+locally before opening a PR.
 
 The integration script normalizes explicit binary paths before switching into
 its temp directory, so the debug-binary command above works from the repo root.
@@ -41,14 +46,37 @@ be treated as full database access.
 Install and update:
 
 ```bash
+# macOS / Linux
 curl -fsSL https://raw.githubusercontent.com/joeaguilar/itr/main/install.sh | bash
 curl -fsSL https://raw.githubusercontent.com/joeaguilar/itr/main/install.sh | bash -s -- --update
+
+# Windows (PowerShell)
+iwr -useb https://raw.githubusercontent.com/joeaguilar/itr/main/install.ps1 | iex
+iex "& { $(iwr -useb https://raw.githubusercontent.com/joeaguilar/itr/main/install.ps1) } -Update"
+
+# From source (any platform)
 cargo install --path . --force
 ```
 
 Check `install.sh` and `install.ps1` before answering install or update questions.
-The release installer should update the active `itr` found on `PATH`; source
-installs use `cargo install --path . --force`.
+Both installers behave symmetrically: the release installer detects an existing
+`itr` on `PATH` and replaces it in place (Unix uses `--update` / `update`;
+Windows uses `-Update` or the positional `update`). Source installs use
+`cargo install --path . --force`.
+
+Claude Code skill:
+
+```bash
+itr skill                 # emit the SKILL.md body to stdout
+itr skill path            # show where `itr skill install` would write
+itr skill install         # write SKILL.md to the user-scope skills dir
+itr skill install --project  # write to the current project's .claude/skills/
+itr skill install --force # overwrite an existing SKILL.md
+```
+
+`itr skill install` is a soft fallback: refusing to overwrite an existing file
+emits a `REVIEW:` note on stderr and still exits 0. The skill body itself is
+`include_str!`'d from `skills/itr/SKILL.md`, so edits there require a rebuild.
 
 ## Code Map
 

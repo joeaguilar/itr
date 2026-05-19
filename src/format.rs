@@ -8,6 +8,22 @@ thread_local! {
     static FIELDS_FILTER: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
 }
 
+/// Install a thread-local allowlist of output field names.
+///
+/// All subsequent `format_*` calls on this thread will hide any field whose
+/// name isn't in `fields` (for compact/pretty output) or strip them from the
+/// serialized object (for JSON output). Call with an empty `Vec` to filter
+/// everything out; call [`clear_fields_filter`]-style by overwriting with the
+/// default (none) — there is no explicit clear helper because each top-level
+/// command sets the filter exactly once during argument parsing.
+///
+/// # Examples
+///
+/// ```ignore
+/// use itr::format::set_fields_filter;
+/// // Only emit `id` and `title` from now on, on this thread.
+/// set_fields_filter(vec!["id".into(), "title".into()]);
+/// ```
 pub fn set_fields_filter(fields: Vec<String>) {
     FIELDS_FILTER.with(|f| {
         *f.borrow_mut() = Some(fields);
@@ -38,7 +54,20 @@ fn apply_fields_filter(json_str: &str) -> String {
     })
 }
 
-/// Print JSON output, applying field filtering if --fields was set
+/// Print a JSON string to stdout, applying the thread-local `--fields` filter
+/// if one is set.
+///
+/// If the input is not valid JSON, it's printed unchanged (the formatter is
+/// best-effort and never panics on bad input).
+///
+/// # Examples
+///
+/// ```ignore
+/// use itr::format::{println_json, set_fields_filter};
+/// set_fields_filter(vec!["id".into()]);
+/// println_json(r#"{"id":1,"title":"hello"}"#);
+/// // stdout: {"id":1}
+/// ```
 pub fn println_json(json_str: &str) {
     FIELDS_FILTER.with(|f| {
         let filter = f.borrow();
@@ -53,6 +82,25 @@ pub fn println_json(json_str: &str) {
     });
 }
 
+/// Output mode selected by `--format` on every CLI subcommand.
+///
+/// - `Compact` (default) — token-efficient key/value lines for agent
+///   consumption.
+/// - `Json` — machine-readable JSON, suitable for piping into `jq` or another
+///   tool. Respects the `--fields` filter.
+/// - `Pretty` — human-oriented tables, DOT graphs, etc.
+/// - `Oneline` — one record per line (mostly identical to compact for detail
+///   views, but listings collapse to a tab-separated single line per issue).
+///
+/// # Examples
+///
+/// ```ignore
+/// use itr::format::Format;
+/// assert_eq!(Format::from_str("json"), Some(Format::Json));
+/// assert_eq!(Format::from_str("garbage"), None);
+/// assert!(Format::Json.is_json());
+/// assert!(!Format::Pretty.is_json());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Format {
     Compact,
@@ -62,6 +110,17 @@ pub enum Format {
 }
 
 impl Format {
+    /// Parse a `--format` argument value. Returns `None` for unknown inputs so
+    /// the CLI layer can produce a helpful error.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use itr::format::Format;
+    /// assert_eq!(Format::from_str("compact"), Some(Format::Compact));
+    /// assert_eq!(Format::from_str("oneline"), Some(Format::Oneline));
+    /// assert_eq!(Format::from_str(""), None);
+    /// ```
     pub fn from_str(s: &str) -> Option<Format> {
         match s {
             "compact" => Some(Format::Compact),
@@ -72,6 +131,16 @@ impl Format {
         }
     }
 
+    /// True when this is the JSON output mode. Useful for branches that emit
+    /// errors in JSON or text depending on `--format`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use itr::format::Format;
+    /// assert!(Format::Json.is_json());
+    /// assert!(!Format::Compact.is_json());
+    /// ```
     pub fn is_json(self) -> bool {
         matches!(self, Format::Json)
     }
@@ -79,6 +148,20 @@ impl Format {
 
 // --- Issue Detail ---
 
+/// Render a single issue detail (issue + notes + relations + breakdown) in
+/// the requested output mode.
+///
+/// `Compact` and `Oneline` collapse to the same multi-line key:value layout
+/// for detail views — only listings differ between those two modes.
+///
+/// # Examples
+///
+/// ```ignore
+/// use itr::format::{format_issue_detail, Format};
+/// # let detail: itr::models::IssueDetail = unimplemented!();
+/// let json = format_issue_detail(&detail, Format::Json);
+/// assert!(json.starts_with('{'));
+/// ```
 pub fn format_issue_detail(detail: &IssueDetail, fmt: Format) -> String {
     match fmt {
         Format::Json => apply_fields_filter(&serde_json::to_string(detail).unwrap_or_default()),
@@ -286,6 +369,18 @@ fn format_issue_detail_pretty(d: &IssueDetail) -> String {
 
 // --- Issue Summary List ---
 
+/// Render a list of issue summaries in the requested output mode.
+///
+/// Empty input renders to an empty string in every mode — `itr` follows the
+/// "empty stdout, exit 0" convention for queries that match nothing.
+///
+/// # Examples
+///
+/// ```ignore
+/// use itr::format::{format_issue_list, Format};
+/// assert_eq!(format_issue_list(&[], Format::Pretty), "");
+/// assert_eq!(format_issue_list(&[], Format::Compact), "");
+/// ```
 pub fn format_issue_list(issues: &[IssueSummary], fmt: Format) -> String {
     match fmt {
         Format::Json => apply_fields_filter(&serde_json::to_string(issues).unwrap_or_default()),
@@ -511,6 +606,20 @@ fn format_stats_compact(stats: &Stats) -> String {
 
 // --- Graph ---
 
+/// Render a dependency / blocker graph.
+///
+/// `Pretty` and `Oneline` both emit Graphviz DOT (`digraph itr { ... }`);
+/// `Compact` emits one `NODE:…` / `EDGE:…` line per element; `Json` serializes
+/// the raw [`GraphOutput`] struct.
+///
+/// # Examples
+///
+/// ```ignore
+/// use itr::format::{format_graph, Format};
+/// use itr::models::GraphOutput;
+/// let empty = GraphOutput { nodes: vec![], edges: vec![] };
+/// assert!(format_graph(&empty, Format::Pretty).contains("digraph itr"));
+/// ```
 pub fn format_graph(graph: &GraphOutput, fmt: Format) -> String {
     match fmt {
         Format::Json => serde_json::to_string(graph).unwrap_or_default(),
@@ -756,6 +865,21 @@ const VALID_FIELDS: &[&str] = &[
     "dry_run",
 ];
 
+/// Parse a `--fields` argument like `id,title,urgency` into a normalized
+/// list of field names.
+///
+/// Whitespace around entries is trimmed; empty entries are dropped silently.
+/// Unknown field names are *not* rejected here — see [`validate_fields`] for
+/// the soft-fallback warning step.
+///
+/// # Examples
+///
+/// ```ignore
+/// use itr::format::parse_fields;
+/// assert_eq!(parse_fields("id,title"), vec!["id", "title"]);
+/// assert_eq!(parse_fields(" id , , urgency "), vec!["id", "urgency"]);
+/// assert!(parse_fields("").is_empty());
+/// ```
 pub fn parse_fields(fields_str: &str) -> Vec<String> {
     fields_str
         .split(',')
@@ -764,8 +888,22 @@ pub fn parse_fields(fields_str: &str) -> Vec<String> {
         .collect()
 }
 
-/// Warn about unknown fields but keep them all. Unknown fields will simply
-/// not appear in the output (serde won't serialize what doesn't exist).
+/// Warn about unknown field names on stderr, but never drop or reject them —
+/// the caller keeps the filter intact. Unknown fields simply won't appear in
+/// output because serde has nothing matching them.
+///
+/// Soft-fallback by design: a typo in `--fields` produces a `REVIEW:` note
+/// rather than a hard error.
+///
+/// # Examples
+///
+/// ```ignore
+/// use itr::format::validate_fields;
+/// // No stderr output expected — all valid:
+/// validate_fields(&["id".into(), "title".into()]);
+/// // Emits a REVIEW: note to stderr but does not panic:
+/// validate_fields(&["bogus".into()]);
+/// ```
 pub fn validate_fields(fields: &[String]) {
     for f in fields {
         if !VALID_FIELDS.contains(&f.as_str()) {

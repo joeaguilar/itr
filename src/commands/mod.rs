@@ -37,30 +37,49 @@ use rusqlite::Connection;
 use std::cmp::Ordering;
 
 /// Build an `IssueSummary` for a single issue: compute urgency, resolve blockers.
+///
+/// Borrowing wrapper around [`build_issue_summary_owned`]. Prefer the owned
+/// variant when the caller owns the [`Issue`] (e.g. iterating `Vec<Issue>` with
+/// `into_iter()`) — it avoids cloning every string/vec field. This wrapper
+/// exists for callers that only have a borrow (e.g. `summary.rs` which iterates
+/// a slice and reuses each `Issue` afterwards).
 pub fn build_issue_summary(
     conn: &Connection,
     issue: &Issue,
     config: &UrgencyConfig,
 ) -> IssueSummary {
-    let urg = urgency::compute_urgency(issue, config, conn);
+    build_issue_summary_owned(conn, issue.clone(), config)
+}
+
+/// Owned-input variant of [`build_issue_summary`].
+///
+/// Moves the [`Issue`]'s string and vec fields directly into the resulting
+/// [`IssueSummary`], avoiding the per-field `.clone()` storm that the borrowing
+/// wrapper incurs. Use this from any caller that has ownership of the `Issue`.
+pub fn build_issue_summary_owned(
+    conn: &Connection,
+    issue: Issue,
+    config: &UrgencyConfig,
+) -> IssueSummary {
+    let urg = urgency::compute_urgency(&issue, config, conn);
     let blocked_by = db::get_blockers(conn, issue.id).unwrap_or_default();
     let is_blocked = db::is_blocked(conn, issue.id).unwrap_or(false);
     IssueSummary {
         id: issue.id,
-        title: issue.title.clone(),
-        status: issue.status.clone(),
-        priority: issue.priority.clone(),
-        kind: issue.kind.clone(),
+        title: issue.title,
+        status: issue.status,
+        priority: issue.priority,
+        kind: issue.kind,
         urgency: urg,
         is_blocked,
         blocked_by,
-        tags: issue.tags.clone(),
-        files: issue.files.clone(),
-        skills: issue.skills.clone(),
-        acceptance: issue.acceptance.clone(),
-        assigned_to: issue.assigned_to.clone(),
-        created_at: issue.created_at.clone(),
-        updated_at: issue.updated_at.clone(),
+        tags: issue.tags,
+        files: issue.files,
+        skills: issue.skills,
+        acceptance: issue.acceptance,
+        assigned_to: issue.assigned_to,
+        created_at: issue.created_at,
+        updated_at: issue.updated_at,
     }
 }
 

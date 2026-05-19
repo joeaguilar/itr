@@ -13,6 +13,28 @@ Raw SQL is disabled unless the server starts with `itr ui --allow-dangerous`.
 When disabled, `POST /api/sql` returns `403` with
 `DANGEROUS_SQL_DISABLED`.
 
+## Session Token
+
+The token is generated once per `itr ui` process at startup by reading 24
+random bytes from SQLite's `randomblob(24)` and lowercase-hex-encoding them,
+producing a 48-character hexadecimal string (e.g. `a1b2c3...` of length 48).
+The token is bound to the running process: it is never persisted to disk, and
+every restart of `itr ui` mints a fresh token. There is no rotation, refresh,
+or revocation API — kill and restart the server to invalidate the current
+token. The token is emitted in the startup URL on stdout (and as the `url`
+field in `--format json` mode); copy it from there to drive the API directly.
+
+## Response Headers
+
+Every response (static assets, API JSON, and error JSON) includes the
+following headers in addition to `Content-Type`, `Content-Length`, and
+`Connection: close`:
+
+| Header | Value | Purpose |
+| --- | --- | --- |
+| `X-Content-Type-Options` | `nosniff` | Disables browser MIME sniffing of response bodies. |
+| `Referrer-Policy` | `no-referrer` | Prevents the browser from leaking the token-bearing URL via the `Referer` header. |
+
 ## Static Assets
 
 | Method | Path | Token | Response |
@@ -161,8 +183,25 @@ Query parameters:
 | `ready` | Boolean: `1`, `true`, `yes`, or `on`. Excludes blocked and closed issues. |
 | `blocked` | Boolean: only blocked issues. |
 | `all` | Boolean: include closed issues when no status filter is set. |
-| `sort` | `urgency` default, `created`, `updated`, `id`, or `priority`. |
+| `sort` | `urgency` (default), `created`, `updated`, `id`, or `priority`. |
 | `limit` | Maximum result count. |
+
+`assigned_to` is matched as an exact string. Passing an empty string
+(`?assigned_to=`) is treated as "no filter" rather than "match issues whose
+assignee is the empty string" — to find unassigned issues, omit the parameter
+and filter client-side, or use the raw SQL endpoint.
+
+`sort=priority` sorts by the priority string in **ascending alphabetic order**,
+with issue id as a tiebreaker. Because the four priority values do not sort
+into severity order alphabetically, the actual sequence is:
+
+1. `critical`
+2. `high`
+3. `low`
+4. `medium`
+
+This is unrelated to severity — high-severity issues should usually be
+surfaced via the default `sort=urgency`.
 
 Response:
 
@@ -295,6 +334,15 @@ Request body is a partial object. Supported fields:
 
 `parent_id` must be an integer issue id or `null`. Invalid `status`,
 `priority`, and `kind` values fall back to `open`, `medium`, and `task`.
+
+Patching `status` to `done` or `wontfix` **does not** remove dependency edges
+or report newly unblocked issues. It only updates the status field. To close
+an issue and unblock its dependents in one step, use
+`POST /api/issues/{id}/close` instead.
+
+Patching `assigned_to` to an empty string clears the assignee for that issue;
+this is distinct from the `assigned_to=` query parameter on
+`GET /api/issues`, which treats an empty value as "no filter".
 
 Response:
 
@@ -594,9 +642,14 @@ HTTP status mapping:
 | Status | Codes |
 | --- | --- |
 | `400` | `BAD_REQUEST`, `INVALID_VALUE`, `PARSE_ERROR`, `NO_FILTERS` |
+| `403` | `DANGEROUS_SQL_DISABLED` |
 | `404` | `NOT_FOUND` |
 | `409` | `CYCLE_DETECTED` |
 | `500` | `INTERNAL_ERROR`, `NO_DATABASE`, `DB_ERROR`, `IO_ERROR`, `UPGRADE_FAILED` |
+
+`DANGEROUS_SQL_DISABLED` is returned by `POST /api/sql` when the server was
+started without `--allow-dangerous`. Restart `itr ui --allow-dangerous` to
+enable raw SQL for the new session.
 
 Unknown API routes return `404` with `code: "NOT_FOUND"` after token
 validation. Missing or invalid tokens currently use `400` with

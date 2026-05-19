@@ -40,12 +40,18 @@ Server behavior:
 - `GET /` requires the current token in the query string or `X-ITR-Token`.
 - API routes require the current token in `X-ITR-Token` or the `token` query
   parameter.
-- Static assets under `/assets/` are served without token checks.
+- Two static asset routes are served without token checks: exactly
+  `/assets/app.css` and `/assets/app.js`. The `/assets/` prefix is not a
+  wildcard — every other path under `/assets/...` falls through to the
+  token-protected dynamic router and returns `404` for unknown routes.
 - Missing or wrong tokens are rejected before route-specific API behavior runs.
 - Possession of the current token is authorization for that UI process.
 
 This is bearer-token protection for a localhost tool. It is not a login session,
 not an identity system, and not durable authentication.
+
+See `docs/ui-api.md` for the full route inventory and `docs/architecture.md` for
+where the UI server fits in the overall command dispatch.
 
 ## Local machine access
 
@@ -77,6 +83,18 @@ Stop and restart `itr ui` to rotate the token.
 The UI token makes blind CSRF impractical: a different site should not know the
 random per-process token, and normal app requests use the non-simple
 `X-ITR-Token` header.
+
+The server does not check `Origin` or `Referer` headers on any request, and it
+does not emit `Access-Control-Allow-Origin`. Cross-origin protection relies on
+two browser behaviors:
+
+- Custom request headers like `X-ITR-Token` are non-simple, so a cross-origin
+  `fetch` from another web page triggers a CORS preflight. The `itr ui` server
+  does not answer `OPTIONS` with a permissive CORS response, so the preflight
+  fails and the browser blocks the real request before the token is ever sent.
+- Without the token, requests that do reach the server (for example, a simple
+  cross-origin `GET` to `/api/...` with no custom header) are rejected by the
+  token check.
 
 The server does not expose a CORS allowlist for other origins. Browser JavaScript
 from another origin should not be able to read API responses or complete normal
@@ -113,6 +131,36 @@ when experimenting with mutating SQL:
 cp .itr.db .itr.db.backup
 itr ui --allow-dangerous --no-open
 ```
+
+## Request body size limit
+
+The UI server enforces a 1 MiB (`1_048_576` bytes) cap on request bodies. The
+limit is read from `Content-Length` before any bytes are read off the socket,
+and requests that declare a larger body are rejected with a `400` before the
+body is consumed. This is a deliberate denial-of-service mitigation: a runaway
+or malicious client cannot make the localhost listener allocate an unbounded
+buffer or block a worker on a slow upload.
+
+The cap applies to every route the server accepts a body for, including
+`POST /api/issues`, note creation, dependency/relation writes, bulk resolve, and
+the raw SQL endpoint when `--allow-dangerous` is on. Issue payloads in normal
+use are well under this limit; the cap exists for safety, not for sizing.
+
+## Response headers
+
+Every response from `itr ui` (HTML, static assets, JSON, and error bodies)
+includes two hardening headers:
+
+- `X-Content-Type-Options: nosniff` — prevents browsers from second-guessing
+  the declared `Content-Type` on UI responses, so a stored value that ends up
+  in a response cannot be re-interpreted as a script or stylesheet.
+- `Referrer-Policy: no-referrer` — pages served by `itr ui` do not send a
+  `Referer` header on outgoing navigations or sub-resource requests, which
+  reduces accidental token leakage when the tokenized URL is the current page.
+
+These headers are emitted unconditionally by the response writer and apply to
+both `200` and error responses. They harden how the browser treats the UI; they
+do not authenticate requests.
 
 ## Operational guidance
 

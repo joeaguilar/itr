@@ -1,4 +1,4 @@
-use super::{build_issue_summary, sort_by_urgency_desc};
+use super::{build_issue_summary_owned, sort_by_urgency_desc};
 use crate::db;
 use crate::error::{self, ItrError};
 use crate::format::{self, Format};
@@ -22,9 +22,12 @@ pub fn run(
 
     let config = UrgencyConfig::load(conn);
 
+    // Consume issues by value so build_issue_summary_owned can move each
+    // Issue's string/vec fields directly into the resulting IssueSummary
+    // rather than cloning them.
     let mut summaries: Vec<IssueSummary> = issues
-        .iter()
-        .map(|i| build_issue_summary(conn, i, &config))
+        .into_iter()
+        .map(|i| build_issue_summary_owned(conn, i, &config))
         .collect();
 
     // Sort

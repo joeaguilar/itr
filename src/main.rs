@@ -41,7 +41,7 @@ fn main() {
 
     let fmt = Format::from_str(&cli.format).unwrap_or_else(|| {
         eprintln!(
-            "ERROR: Invalid format '{}'. Valid: compact, json, pretty",
+            "ERROR: Invalid format '{}'. Valid: compact, json, pretty, oneline",
             cli.format
         );
         std::process::exit(1);
@@ -213,6 +213,7 @@ fn run_command(
             skill,
             acceptance,
             parent,
+            no_parent,
             assigned_to,
             add_tag,
             remove_tag,
@@ -236,6 +237,7 @@ fn run_command(
             skill,
             acceptance,
             parent,
+            no_parent,
             assigned_to,
             add_tag,
             remove_tag,

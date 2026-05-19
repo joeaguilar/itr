@@ -26,6 +26,71 @@ Use export/import when:
 - You want to inspect or transform data before restoring it.
 - You want merge behavior instead of replacing an existing database file.
 
+## Backing Up Safely (WAL Companion Files)
+
+`itr` opens SQLite in WAL (Write-Ahead Logging) mode. When the database has
+been opened for writes, SQLite creates two companion files next to
+`.itr.db`:
+
+- `.itr.db-wal` — the write-ahead log holding pending changes not yet folded
+  into `.itr.db`.
+- `.itr.db-shm` — the shared-memory index SQLite uses to coordinate readers
+  and writers.
+
+If you copy only `.itr.db` while a writer is active (most commonly an
+`itr ui` session, but also any in-flight `add` / `update` / `close` /
+`claim` / `bulk` / `batch` invocation), the snapshot can miss writes that
+are still parked in `.itr.db-wal`. In the worst case the resulting copy is
+internally consistent but stale, or — if a checkpoint is mid-flight —
+opens dirty and triggers `DB_ERROR` on the next `itr` command.
+
+### Safe-Backup Procedure
+
+When a writer **may** be running (the common case for shared projects or
+when `itr ui` is open):
+
+1. Stop every active writer first. Quit `itr ui` and confirm no other
+   `itr` command is in flight.
+2. Run any read-only `itr` command (for example `itr stats`) once. Opening
+   the database cleanly triggers a SQLite checkpoint that folds
+   `.itr.db-wal` back into `.itr.db`.
+3. Copy **all three** files together if any companion files are still
+   present, so the snapshot is consistent even if a checkpoint did not
+   fully drain:
+
+   ```bash
+   cp .itr.db      .itr.db.backup
+   cp .itr.db-wal  .itr.db-wal.backup  2>/dev/null || true
+   cp .itr.db-shm  .itr.db-shm.backup  2>/dev/null || true
+   ```
+
+   The `2>/dev/null || true` guards are there because the companion files
+   may legitimately not exist after a clean checkpoint.
+
+When you can guarantee no writer is running and no companion files exist,
+copying `.itr.db` alone is sufficient:
+
+```bash
+cp .itr.db .itr.db.backup
+```
+
+### Exports Are Always Safe
+
+`itr export` reads through SQLite, which serializes the read against any
+in-flight writes. You can run `itr export > snapshot.jsonl` while `itr ui`
+is open without risking a torn snapshot — the export will reflect a
+consistent point-in-time view. Use export/import (described below) as the
+preferred backup path when stopping writers is inconvenient.
+
+### Do Not Commit Companion Files
+
+Add `.itr.db-wal` and `.itr.db-shm` to `.gitignore`. They are local
+runtime state, can contain data not yet merged into `.itr.db`, and
+conflict in unhelpful ways across machines. See
+[Troubleshooting → WAL Companion Files](troubleshooting.md#wal-companion-files-itrdb-wal-itrdb-shm)
+for the full lifecycle, when each file appears, and when it is safe to
+delete them manually.
+
 ## Export Formats
 
 Default export is JSONL: one issue bundle per line.
@@ -94,6 +159,20 @@ full-fidelity backup that includes audit history and relation rows. If import
 support for events or relations changes, add round-trip tests and update this
 section.
 
+When an import bundle contains `events` or `relations` records, import drops
+those rows but still writes the issue, notes, and dependency data. A single
+`REVIEW:` warning is emitted on stderr naming the dropped tables and the total
+number of dropped rows, for example:
+
+```
+REVIEW: import dropped data from unsupported tables: events (12 row(s)), relations (3 row(s)). Round-trip restore of audit history and relation rows is not implemented; use a direct .itr.db file copy for full-fidelity backups. See docs/backup-import-export.md.
+```
+
+The warning goes to stderr only — it does not change the exit code, the stdout
+import summary, or the `imported` / `skipped` counts. If you need a backup that
+preserves audit events and relations, use a direct `.itr.db` file copy as
+described above.
+
 ## Backup Before Bulk Changes
 
 Before large changes, take a file backup and an export snapshot:
@@ -112,11 +191,26 @@ itr batch update --dry-run -f json < updates.json
 
 ## Restore From A File Copy
 
-Stop any running `itr ui` session first, then replace the database:
+Stop any running `itr ui` session first, then replace the database. Also
+remove any stale `.itr.db-wal` / `.itr.db-shm` companion files so SQLite
+does not try to replay an outdated write-ahead log against the restored
+database:
 
 ```bash
 cp .itr.db .itr.db.bad
+rm -f .itr.db-wal .itr.db-shm
 cp .itr.db.before-bulk .itr.db
+itr doctor
+```
+
+If you saved companion files alongside the backup (see
+[Backing Up Safely](#backing-up-safely-wal-companion-files)), restore them
+together with `.itr.db` instead of deleting:
+
+```bash
+cp .itr.db.before-bulk      .itr.db
+cp .itr.db-wal.before-bulk  .itr.db-wal  2>/dev/null || true
+cp .itr.db-shm.before-bulk  .itr.db-shm  2>/dev/null || true
 itr doctor
 ```
 

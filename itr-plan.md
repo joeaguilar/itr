@@ -183,6 +183,12 @@ END;
 - `close_reason` captures why something was closed — essential for future agents to understand decisions.
 - `config` table stores per-project settings (urgency coefficients, default priority, etc.).
 
+> **Drift note (shipped schema):** The live schema is broader than what this plan describes. For the authoritative shipped schema see `docs/schema.md` (or run `itr schema`). Migrations applied on top of the v0 schema above:
+> - `migrate_add_skills` — adds a `skills` JSON-array column to `issues` representing agent capabilities required
+> - `migrate_add_assigned_to` — adds an `assigned_to` TEXT column to `issues`
+> - `migrate_add_events` — adds the `events` table for an append-only audit log
+> - `migrate_add_relations` — adds the `relations` table for typed non-blocking issue links (e.g. `relates-to`, `duplicate-of`)
+
 ---
 
 ## DB Location Strategy
@@ -250,7 +256,7 @@ This lets teams tune the scoring to match their workflow. An agent doing mostly 
 
 ## Output Formats
 
-Implement in `format.rs`. Three modes controlled by `--format` / `-f` flag:
+Implement in `format.rs`. Modes controlled by `--format` / `-f` flag. The shipped binary supports `compact`, `json`, `pretty`, and `oneline` (the last added post-plan for one-line-per-issue summaries — see `format.rs::format_oneline_*`).
 
 ### `compact` (default)
 
@@ -319,7 +325,7 @@ All commands defined via clap derive macros in `cli.rs`.
 ### Global Flags
 
 ```
---format, -f <FORMAT>    Output format: compact|json|pretty [default: compact]
+--format, -f <FORMAT>    Output format: compact|json|pretty|oneline [default: compact]
 --db <PATH>              Override database path (skips walk-up search)
 --quiet, -q              Suppress non-essential output (only emit data or errors)
 ```
@@ -615,9 +621,11 @@ Project health summary. Shows counts by status, priority, kind, blocked/unblocke
 Export the full database to a portable format.
 
 ```bash
-itr export > backup.jsonl          # JSONL, one issue per line (default)
-itr export --format json > all.json  # Single JSON array
+itr export > backup.jsonl                       # JSONL, one issue per line (default)
+itr export --export-format json > all.json      # Single JSON array
 ```
+
+> **Drift note:** The export-payload selector shipped as `--export-format` (not `--format`). The global `--format` / `-f` flag controls CLI output formatting (compact/json/pretty/oneline) and is reserved for that purpose, so `itr export` uses a dedicated flag for its payload shape.
 
 Export includes all issues (including closed), notes, and dependencies. This is the interchange format for backup, migration, and sharing.
 
@@ -680,11 +688,10 @@ Dump the current database schema as SQL. Useful for agent self-documentation.
 
 | Code | Meaning |
 |------|---------|
-| 0    | Success |
+| 0    | Success (including empty result sets) |
 | 1    | Error (not found, validation failure, DB error, cycle detected) |
-| 2    | Empty result set (no matching issues — distinct from error) |
 
-Exit code 2 is critical for agents. It lets them distinguish "the query worked but found nothing" from "something went wrong."
+> **Drift note:** This plan originally proposed a third exit code (`2 = empty result set`) to distinguish "found nothing" from "something went wrong." The shipped contract collapsed that to exit 0 with empty stdout — empty results are not an error condition. Agents detect emptiness by reading stdout, not by exit code.
 
 ---
 
@@ -704,7 +711,9 @@ With `--format json`, errors on stderr are also JSON:
 {"error": "Issue 99 not found", "code": "NOT_FOUND"}
 ```
 
-Error codes for JSON mode: `NOT_FOUND`, `INVALID_VALUE`, `CYCLE_DETECTED`, `DB_ERROR`, `PARSE_ERROR`, `NO_DATABASE`, `STALE_IN_PROGRESS`
+Error codes for JSON mode: `NOT_FOUND`, `INVALID_VALUE`, `CYCLE_DETECTED`, `DB_ERROR`, `PARSE_ERROR`, `NO_DATABASE`
+
+> **Drift note:** This plan originally listed `STALE_IN_PROGRESS` as a planned error code. It was never implemented — staleness detection lives in `itr doctor` (see `Issues stuck in in-progress`) as a soft report, not as a CLI error variant. The `ItrError` enum has no such variant.
 
 ---
 
@@ -994,13 +1003,15 @@ Features deliberately deferred from v0.1 to keep scope tight, but architecturall
 
 ### MCP Server Mode
 
-Add a `itr mcp` subcommand that runs itr as an MCP (Model Context Protocol) server over stdio. This would let Claude Code (and other MCP-compatible agents) interact with itr via structured tool calls instead of CLI subprocess invocations, reducing overhead and improving reliability.
+> **Status: deferred / not implemented.** No `itr mcp` subcommand has shipped. Agents currently drive `itr` via CLI subprocess invocations (see `itr agent-info` and the `itr` Claude Code skill installed by `itr skill install`). Tool naming below references the legacy `nit_*` prefix from the v0 plan and is TBD — if/when an MCP mode lands it will use `itr_*` to match the current binary name.
 
-The Rust MCP SDK (`rmcp` crate) supports this. Each itr command becomes an MCP tool:
+A future `itr mcp` subcommand could run itr as an MCP (Model Context Protocol) server over stdio. This would let Claude Code (and other MCP-compatible agents) interact with itr via structured tool calls instead of CLI subprocess invocations, reducing overhead and improving reliability.
+
+The Rust MCP SDK (`rmcp` crate) supports this. Each itr command would map to an MCP tool (sketch, names TBD):
 
 ```
-nit_add, nit_list, nit_get, nit_update, nit_close,
-nit_note, nit_next, nit_ready, nit_depend, nit_graph, nit_stats
+itr_add, itr_list, itr_get, itr_update, itr_close,
+itr_note, itr_next, itr_ready, itr_depend, itr_graph, itr_stats
 ```
 
 This is architecturally cheap to add because the command implementations already return structured data — the MCP layer just serializes it differently.

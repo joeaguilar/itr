@@ -23,8 +23,9 @@ just test          # release build + integration tests
 just test-debug    # debug build + integration tests
 just lint          # cargo clippy --all-targets -- -D warnings
 just fmt           # cargo fmt --all
-just verify        # release + lint + test + fmt-check (full pre-push validation)
-just ci            # fmt-check + lint + test
+just deny          # cargo deny check (license, advisory, ban checks)
+just verify        # release + lint + test + fmt-check + deny (full pre-push validation)
+just ci            # fmt-check + lint + deny + test
 ```
 
 Unit tests live in `src/util.rs` and `src/format.rs`; the shell-based integration suite is `tests/integration.sh`. The integration suite uses `python3 -c` with `json.load` for JSON parsing (not `jq`). The UI integration test starts a localhost server, so sandboxed environments may need localhost bind/connect permission.
@@ -40,7 +41,7 @@ Always invoke as `itr` (on PATH). Never use full binary paths like `~/.cargo/bin
 ### Key Modules
 
 - **`cli.rs`** — Clap `#[derive(Parser)]` definitions for all commands and subcommands. Adding a new command means: add variant to `Commands` enum here, add match arm in `main.rs::run_command`, create handler in `src/commands/`.
-- **`db.rs`** — All SQLite operations. Contains the schema as a const string, CRUD functions for issues/notes/dependencies/config, cycle detection via BFS, and the walk-up `.itr.db` finder. This is the largest file (~1070 lines).
+- **`db.rs`** — All SQLite operations. Contains the schema as a const string, CRUD functions for issues/notes/dependencies/config, cycle detection via BFS, and the walk-up `.itr.db` finder. This is the largest file in the project.
 - **`util.rs`** — Small helpers shared across modules (tag/skill parsing, date math, etc.). Carries unit tests under `#[cfg(test)]`.
 - **`models.rs`** — All data structs (`Issue`, `Note`, `IssueDetail`, `IssueSummary`, `BatchAddInput`, `GraphOutput`, `Stats`, `ExportData`, `SearchResult`, `UrgencyBreakdown`). Uses `serde` derive for JSON serialization. `IssueDetail` uses `#[serde(flatten)]` on its `issue` field.
 - **`urgency.rs`** — Urgency scoring engine. Scores are never stored — always computed fresh from current state. `UrgencyConfig` loads coefficients from the `config` table with hardcoded defaults. The `compute_urgency_with_breakdown` function returns both the score and a component breakdown.

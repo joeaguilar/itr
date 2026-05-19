@@ -45,19 +45,46 @@ errors to the shared error handler.
 
 Shared command helpers live in `src/commands/mod.rs`:
 
-- `build_issue_summary`
-- `build_issue_detail`
-- `sort_by_urgency_desc`
-- `print_detail_with_unblocked`
+- `build_issue_summary` — borrowing wrapper that clones the `Issue`;
+- `build_issue_summary_owned` — owned variant for callers with `Vec<Issue>` via
+  `into_iter()`, avoiding the per-field clone storm;
+- `build_issue_detail`;
+- `HasUrgency` trait — abstracts the urgency score lookup so collections of
+  `IssueSummary`, `SearchResult`, or other scored types share one sort path;
+- `sort_by_urgency_desc` — generic over `HasUrgency`;
+- `print_detail_with_unblocked`.
+
+## Key Modules
+
+Small leaf modules that don't deserve their own architectural section but are
+load-bearing for the rest of the codebase:
+
+- **`src/util.rs`** — pure helpers shared across command handlers: comma-list
+  parsing (`parse_comma_list`, `parse_comma_list_lower`), tag/skill set edits
+  (`apply_tags`, `apply_skills`), and the `days_since` ISO-date helper used by
+  the urgency age factor. All helpers follow the soft-fallback rule: malformed
+  input degrades to an empty list or `0.0` rather than erroring. Unit-tested
+  in-file under `#[cfg(test)]`.
+- **`src/agent_docs.rs`** — a single `AGENT_DOCS` const string surfaced by
+  `itr agent-info` (alias `getting-started`). It teaches agents the standard
+  claim/note/close workflow and the full command reference. Keep its examples
+  in sync with the actual CLI when commands change — there is no automated
+  drift check.
 
 ## Database Layer
 
 `src/db.rs` owns persistence:
 
 - schema SQL for initial database creation;
-- idempotent migrations called from `open_db`;
+- idempotent migrations called from `open_db` (including `migrate_add_skills`
+  which adds the `skills TEXT` column on existing databases);
 - SQLite connection setup with WAL and foreign keys;
 - issue, note, dependency, config, event, relation, and FTS helpers;
+- skills helpers — the `skills` column is read, written, filtered (AND logic in
+  `list`), and indexed in the FTS `skills_text` field alongside title/context;
+- cycle-check helpers — `has_path` (BFS over dependency blocker edges) and
+  `is_self_or_descendant` (BFS over `parent_id` edges to block parent-cycle
+  creation);
 - database discovery by `ITR_DB_PATH`, `--db`, or walk-up search.
 
 Command handlers should reuse DB helpers instead of writing duplicate SQL. When

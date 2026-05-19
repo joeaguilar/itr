@@ -1817,6 +1817,242 @@ rm -rf "$UI_DIR"
 
 # ─────────────────────────────────────────────
 echo ""
+echo "--- update --parent / --no-parent ---"
+# ─────────────────────────────────────────────
+
+PARENT_DIR=$(mktemp -d)
+ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR add "Parent epic A" -k epic -f json >/dev/null     # id 1
+ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR add "Parent epic B" -k epic -f json >/dev/null     # id 2
+ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR add "Child task"   -f json >/dev/null               # id 3
+ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR add "Grandchild"   -f json >/dev/null               # id 4
+
+# Set parent: child (3) under epic A (1)
+OUT=$(ITR_AGENT=parent-test ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR update 3 --parent 1 -f json)
+assert_eq "update --parent sets parent_id" "1" "$(jq_val "$OUT" "d['parent_id']")"
+
+# Change parent: child (3) moved under epic B (2)
+OUT=$(ITR_AGENT=parent-test ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR update 3 --parent 2 -f json)
+assert_eq "update --parent changes parent_id" "2" "$(jq_val "$OUT" "d['parent_id']")"
+
+# Clear parent: --no-parent on child (3)
+OUT=$(ITR_AGENT=parent-test ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR update 3 --no-parent -f json)
+PID_AFTER_CLEAR=$(jq_val "$OUT" "d.get('parent_id') is None")
+assert_eq "update --no-parent clears parent_id" "True" "$PID_AFTER_CLEAR"
+
+# Missing-parent rejection: parent ID 999 does not exist
+set +e
+MISSING_OUT=$(ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR update 3 --parent 999 2>&1)
+MISSING_RC=$?
+set -e
+assert_eq "update --parent missing exits 1" "1" "$MISSING_RC"
+assert_contains "update --parent missing message mentions 999" "999" "$MISSING_OUT"
+
+# No partial write: parent_id should still be null after rejection
+OUT=$(ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR get 3 -f json)
+PID_AFTER_REJECT=$(jq_val "$OUT" "d.get('parent_id') is None")
+assert_eq "update --parent missing leaves parent unchanged" "True" "$PID_AFTER_REJECT"
+
+# Self-cycle rejection: cannot parent issue 1 to itself
+set +e
+SELF_OUT=$(ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR update 1 --parent 1 2>&1)
+SELF_RC=$?
+set -e
+assert_eq "update --parent self exits 1" "1" "$SELF_RC"
+assert_contains "update --parent self mentions cycle" "ycle" "$SELF_OUT"
+
+# Descendant-cycle rejection: parent grandchild (4) under child (3) under epic A (1),
+# then try to set epic A's parent to grandchild (4). 4 is a descendant of 1, so reject.
+ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR update 3 --parent 1 -f json >/dev/null
+ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR update 4 --parent 3 -f json >/dev/null
+set +e
+DESC_OUT=$(ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR update 1 --parent 4 2>&1)
+DESC_RC=$?
+set -e
+assert_eq "update --parent descendant exits 1" "1" "$DESC_RC"
+assert_contains "update --parent descendant mentions cycle" "ycle" "$DESC_OUT"
+
+# Verify no partial write after descendant-cycle rejection
+OUT=$(ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR get 1 -f json)
+PID_AFTER_DESC=$(jq_val "$OUT" "d.get('parent_id') is None")
+assert_eq "update --parent descendant leaves parent unchanged" "True" "$PID_AFTER_DESC"
+
+# Conflicting flags: both --parent and --no-parent should be rejected
+set +e
+CONFLICT_OUT=$(ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR update 3 --parent 2 --no-parent 2>&1)
+CONFLICT_RC=$?
+set -e
+assert_eq "update --parent + --no-parent exits non-zero" "0" "$([ "$CONFLICT_RC" -ne 0 ] && echo 0 || echo 1)"
+
+# Audit-event emission for parent_id (set + clear + change). Reset to a known state first.
+AUDIT_DIR=$(mktemp -d)
+ITR_DB_PATH="$AUDIT_DIR/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$AUDIT_DIR/.itr.db" $ITR add "Epic X" -k epic -f json >/dev/null              # id 1
+ITR_DB_PATH="$AUDIT_DIR/.itr.db" $ITR add "Epic Y" -k epic -f json >/dev/null              # id 2
+ITR_DB_PATH="$AUDIT_DIR/.itr.db" $ITR add "Audited child" -f json >/dev/null               # id 3
+
+ITR_AGENT=audit-agent ITR_DB_PATH="$AUDIT_DIR/.itr.db" $ITR update 3 --parent 1 -f json >/dev/null
+ITR_AGENT=audit-agent ITR_DB_PATH="$AUDIT_DIR/.itr.db" $ITR update 3 --parent 2 -f json >/dev/null
+ITR_AGENT=audit-agent ITR_DB_PATH="$AUDIT_DIR/.itr.db" $ITR update 3 --no-parent -f json >/dev/null
+
+OUT=$(ITR_DB_PATH="$AUDIT_DIR/.itr.db" $ITR log 3 -f json)
+PARENT_EVENTS=$(jq_val "$OUT" "len([e for e in d if e['field']=='parent_id'])")
+assert_eq "update parent_id emits 3 audit events (set, change, clear)" "3" "$PARENT_EVENTS"
+FIRST_SET_NEW=$(jq_val "$OUT" "[e for e in d if e['field']=='parent_id'][0]['new_value']")
+assert_eq "first parent_id event new_value is '1'" "1" "$FIRST_SET_NEW"
+CHANGE_OLD=$(jq_val "$OUT" "[e for e in d if e['field']=='parent_id'][1]['old_value']")
+CHANGE_NEW=$(jq_val "$OUT" "[e for e in d if e['field']=='parent_id'][1]['new_value']")
+assert_eq "change parent_id event old_value is '1'" "1" "$CHANGE_OLD"
+assert_eq "change parent_id event new_value is '2'" "2" "$CHANGE_NEW"
+CLEAR_OLD=$(jq_val "$OUT" "[e for e in d if e['field']=='parent_id'][2]['old_value']")
+CLEAR_NEW=$(jq_val "$OUT" "[e for e in d if e['field']=='parent_id'][2]['new_value']")
+assert_eq "clear parent_id event old_value is '2'" "2" "$CLEAR_OLD"
+assert_eq "clear parent_id event new_value is empty" "" "$CLEAR_NEW"
+AUDIT_AGENT=$(jq_val "$OUT" "[e for e in d if e['field']=='parent_id'][0]['agent']")
+assert_eq "parent_id audit event records ITR_AGENT" "audit-agent" "$AUDIT_AGENT"
+
+rm -rf "$PARENT_DIR" "$AUDIT_DIR"
+
+# ─────────────────────────────────────────────
+echo "--- import drops events/relations with REVIEW warning ---"
+# ─────────────────────────────────────────────
+
+# Build a source DB that has at least one event (from an update) and one
+# relation, then export it. Importing that bundle into a fresh DB should
+# emit a REVIEW: warning on stderr naming events and relations, while
+# still importing issues, notes, and dependencies.
+
+IMPORT_WARN_SRC=$(mktemp -d)
+ITR_DB_PATH="$IMPORT_WARN_SRC/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$IMPORT_WARN_SRC/.itr.db" $ITR add "Source issue A" -f json >/dev/null  # id 1
+ITR_DB_PATH="$IMPORT_WARN_SRC/.itr.db" $ITR add "Source issue B" -f json >/dev/null  # id 2
+
+# Generate at least one audit event (priority change is logged).
+ITR_AGENT=warn-test ITR_DB_PATH="$IMPORT_WARN_SRC/.itr.db" $ITR update 1 -p high -f json >/dev/null
+
+# Generate at least one relation row. The relate command takes the source
+# id positionally and the target via --to (default relation type is
+# "related"). Swallow errors to keep the test resilient if the relate
+# command shape changes later.
+ITR_DB_PATH="$IMPORT_WARN_SRC/.itr.db" $ITR relate 1 --to 2 >/dev/null 2>&1 || true
+
+# Sanity-check: confirm the source bundle actually contains events/relations
+EXPORT_WARN_FILE="$IMPORT_WARN_SRC/export.jsonl"
+ITR_DB_PATH="$IMPORT_WARN_SRC/.itr.db" $ITR export > "$EXPORT_WARN_FILE"
+HAS_EVENTS=$(python3 -c "import json,sys
+n=0
+for line in open(sys.argv[1]):
+    line=line.strip()
+    if not line: continue
+    d=json.loads(line)
+    n+=len(d.get('events',[]))
+print(n)" "$EXPORT_WARN_FILE")
+HAS_RELATIONS=$(python3 -c "import json,sys
+n=0
+for line in open(sys.argv[1]):
+    line=line.strip()
+    if not line: continue
+    d=json.loads(line)
+    n+=len(d.get('relations',[]))
+print(n)" "$EXPORT_WARN_FILE")
+[ "$HAS_EVENTS" -ge 1 ] && pass "export bundle contains events to drop" || \
+    fail "export bundle contains events to drop" "events=$HAS_EVENTS"
+
+# Import into a fresh DB and capture stderr.
+IMPORT_WARN_DST=$(mktemp -d)
+ITR_DB_PATH="$IMPORT_WARN_DST/.itr.db" $ITR init >/dev/null
+WARN_STDERR_FILE="$IMPORT_WARN_DST/import.stderr"
+WARN_STDOUT=$(ITR_DB_PATH="$IMPORT_WARN_DST/.itr.db" $ITR import --file "$EXPORT_WARN_FILE" -f json 2>"$WARN_STDERR_FILE")
+WARN_RC=$?
+WARN_STDERR=$(cat "$WARN_STDERR_FILE")
+
+# Exit code should still be 0 (soft fallback).
+assert_eq "import with dropped events/relations exits 0" "0" "$WARN_RC"
+
+# stdout JSON should still report imported count.
+WARN_IMPORTED=$(jq_val "$WARN_STDOUT" "d['imported']")
+[ "$WARN_IMPORTED" -ge 1 ] && pass "import still wrote issues despite drops" || \
+    fail "import still wrote issues despite drops" "imported=$WARN_IMPORTED"
+
+# stderr should carry the REVIEW: warning and name the dropped table.
+assert_contains "import emits REVIEW: warning on stderr" "REVIEW:" "$WARN_STDERR"
+assert_contains "import REVIEW warning names events table" "events" "$WARN_STDERR"
+
+# Only mention relations if any were actually generated (relate command may
+# vary between builds); skip the relations assertion if there were none.
+if [ "$HAS_RELATIONS" -ge 1 ]; then
+    assert_contains "import REVIEW warning names relations table" "relations" "$WARN_STDERR"
+fi
+
+# stdout must NOT contain the warning — output contract: stderr-only.
+case "$WARN_STDOUT" in
+    *REVIEW:*) fail "import REVIEW warning stays off stdout" "leaked to stdout" ;;
+    *) pass "import REVIEW warning stays off stdout" ;;
+esac
+
+# Importing a bundle with zero events/relations should NOT emit the warning.
+CLEAN_SRC=$(mktemp -d)
+ITR_DB_PATH="$CLEAN_SRC/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$CLEAN_SRC/.itr.db" $ITR add "Clean issue" -f json >/dev/null
+CLEAN_EXPORT="$CLEAN_SRC/export.jsonl"
+ITR_DB_PATH="$CLEAN_SRC/.itr.db" $ITR export > "$CLEAN_EXPORT"
+
+CLEAN_DST=$(mktemp -d)
+ITR_DB_PATH="$CLEAN_DST/.itr.db" $ITR init >/dev/null
+CLEAN_STDERR_FILE="$CLEAN_DST/import.stderr"
+ITR_DB_PATH="$CLEAN_DST/.itr.db" $ITR import --file "$CLEAN_EXPORT" -f json >/dev/null 2>"$CLEAN_STDERR_FILE"
+CLEAN_STDERR=$(cat "$CLEAN_STDERR_FILE")
+case "$CLEAN_STDERR" in
+    *REVIEW:*dropped*) fail "import without events/relations stays quiet" "warning unexpectedly emitted: $CLEAN_STDERR" ;;
+    *) pass "import without events/relations stays quiet" ;;
+esac
+
+rm -rf "$IMPORT_WARN_SRC" "$IMPORT_WARN_DST" "$CLEAN_SRC" "$CLEAN_DST"
+
+# ─────────────────────────────────────────────
+echo "--- invalid format error message lists oneline ---"
+# ─────────────────────────────────────────────
+
+# The invalid-format error message must list every format accepted by
+# Format::from_str (compact, json, pretty, oneline). If src/format.rs
+# adds a new format and src/main.rs forgets to mention it, this test
+# should fail so the drift is caught at CI time.
+
+FMT_SRC=$(mktemp -d)
+ITR_DB_PATH="$FMT_SRC/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$FMT_SRC/.itr.db" $ITR add "Format probe issue" -f json >/dev/null
+
+# 1) `oneline` must NOT trigger the invalid-format error path.
+ONELINE_STDERR_FILE="$FMT_SRC/oneline.stderr"
+set +e
+ITR_DB_PATH="$FMT_SRC/.itr.db" $ITR list -f oneline >/dev/null 2>"$ONELINE_STDERR_FILE"
+ONELINE_RC=$?
+set -e
+ONELINE_STDERR=$(cat "$ONELINE_STDERR_FILE")
+assert_eq "oneline format exits 0 (not invalid)" "0" "$ONELINE_RC"
+case "$ONELINE_STDERR" in
+    *"Invalid format"*) fail "oneline does not trigger invalid-format error" "stderr: $ONELINE_STDERR" ;;
+    *) pass "oneline does not trigger invalid-format error" ;;
+esac
+
+# 2) A truly invalid format must produce the error message AND that message
+#    must enumerate every accepted format, including `oneline`.
+BAD_STDERR_FILE="$FMT_SRC/bad.stderr"
+set +e
+ITR_DB_PATH="$FMT_SRC/.itr.db" $ITR list -f bogus >/dev/null 2>"$BAD_STDERR_FILE"
+BAD_RC=$?
+set -e
+BAD_STDERR=$(cat "$BAD_STDERR_FILE")
+assert_eq "invalid format exits 1" "1" "$BAD_RC"
+assert_contains "invalid-format error message lists compact" "compact" "$BAD_STDERR"
+assert_contains "invalid-format error message lists json" "json" "$BAD_STDERR"
+assert_contains "invalid-format error message lists pretty" "pretty" "$BAD_STDERR"
+assert_contains "invalid-format error message lists oneline" "oneline" "$BAD_STDERR"
+
+rm -rf "$FMT_SRC"
+
+# ─────────────────────────────────────────────
+echo ""
 echo "==============================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "==============================="

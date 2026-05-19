@@ -1,26 +1,44 @@
 <#
 .SYNOPSIS
-    Install the itr CLI on Windows from the latest GitHub Release.
+    Install or update the itr CLI on Windows from the latest GitHub Release.
 
 .DESCRIPTION
     Downloads a prebuilt itr binary matching the host architecture
     (x86_64 or arm64), verifies its SHA256 checksum, and installs it
     into a directory on PATH.
 
+    When -Update is supplied (or the positional `update` argument), the
+    installer prefers an existing itr.exe already on PATH and replaces it
+    in-place rather than always writing to $InstallDir. This mirrors the
+    `install.sh --update` behavior on Unix.
+
 .PARAMETER Version
     Pin a specific release tag (e.g. v0.1.0). Defaults to the latest.
 
 .PARAMETER InstallDir
-    Install location. Defaults to $env:LOCALAPPDATA\Programs\itr.
+    Install location. Defaults to $env:LOCALAPPDATA\Programs\itr. When
+    -Update is set and an existing itr.exe is found on PATH, that location
+    wins over the default so the shell keeps resolving the same binary.
 
 .PARAMETER Repo
     GitHub repo slug. Defaults to joeaguilar/itr.
+
+.PARAMETER Update
+    Update an existing itr install if found on PATH; otherwise install it.
+    The positional value `update` (or `install`) is also accepted, e.g.
+    `.\install.ps1 update`.
 
 .EXAMPLE
     iwr -useb https://raw.githubusercontent.com/joeaguilar/itr/main/install.ps1 | iex
 
 .EXAMPLE
     .\install.ps1 -Version v0.1.0 -InstallDir C:\tools\itr
+
+.EXAMPLE
+    .\install.ps1 -Update
+
+.EXAMPLE
+    .\install.ps1 update
 
 .NOTES
     Manual checksum verification:
@@ -35,7 +53,10 @@
 param(
     [string]$Version = $env:ITR_VERSION,
     [string]$InstallDir = $env:ITR_INSTALL_DIR,
-    [string]$Repo = $(if ($env:ITR_REPO) { $env:ITR_REPO } else { 'joeaguilar/itr' })
+    [string]$Repo = $(if ($env:ITR_REPO) { $env:ITR_REPO } else { 'joeaguilar/itr' }),
+    [switch]$Update,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$Action
 )
 
 $ErrorActionPreference = 'Stop'
@@ -94,10 +115,80 @@ function Test-InPath {
     return ($parts -contains $Dir)
 }
 
+function Get-ExistingItrPath {
+    # Resolve the itr.exe that the current shell would invoke, if any.
+    $cmd = Get-Command itr -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Path -and (Test-Path $cmd.Path)) {
+        return $cmd.Path
+    }
+    return $null
+}
+
+function Get-ExistingItrInDir {
+    param([string]$Dir)
+    if (-not $Dir) { return $null }
+    $candidate = Join-Path $Dir 'itr.exe'
+    if (Test-Path $candidate) { return $candidate }
+    return Get-ExistingItrPath
+}
+
+function Show-ExistingVersion {
+    param([string]$BinPath)
+    if (-not $BinPath) { return }
+    try {
+        $ver = & $BinPath --version 2>$null
+        if ($ver) {
+            Write-Info "Current install: $ver ($BinPath)"
+        } else {
+            Write-Info "Current install: $BinPath"
+        }
+    } catch {
+        Write-Info "Current install: $BinPath"
+    }
+}
+
+# ---- Argument normalization ------------------------------------------------
+
+# Accept both `-Update` switch and a positional `update`/`install` token to
+# mirror install.sh's `--update` / `update` / `--install` / `install` parsing.
+$ActionMode = if ($Update) { 'update' } else { 'install' }
+if ($Action) {
+    foreach ($arg in $Action) {
+        switch -Regex ($arg) {
+            '^(--update|update)$'   { $ActionMode = 'update' }
+            '^(--install|install)$' { $ActionMode = 'install' }
+            '^(-h|--help)$' {
+                $scriptPath = $MyInvocation.MyCommand.Path
+                if ($scriptPath -and (Test-Path $scriptPath)) {
+                    Get-Help $scriptPath -Detailed
+                } else {
+                    Write-Host 'Usage:'
+                    Write-Host '  .\install.ps1 [-Update] [-Version <tag>] [-InstallDir <path>] [-Repo <slug>]'
+                    Write-Host '  .\install.ps1 update      # positional form, mirrors install.sh'
+                    Write-Host ''
+                    Write-Host 'Environment overrides:'
+                    Write-Host '  ITR_VERSION       Pin a specific release tag (defaults to latest).'
+                    Write-Host '  ITR_INSTALL_DIR   Override the install directory.'
+                    Write-Host '  ITR_REPO          Override the GitHub repo slug.'
+                }
+                exit 0
+            }
+            default {
+                Write-Err "Unknown argument: $arg"
+                exit 1
+            }
+        }
+    }
+}
+
 # ---- Main ------------------------------------------------------------------
 
 Write-Host ''
-Write-Info 'Installing itr — the zero-config issue tracker CLI'
+if ($ActionMode -eq 'update') {
+    Write-Info 'Updating itr — the zero-config issue tracker CLI'
+} else {
+    Write-Info 'Installing itr — the zero-config issue tracker CLI'
+}
 Write-Host ''
 
 $target = Get-Target
@@ -108,8 +199,22 @@ if (-not $Version) {
 }
 Write-Info "Release: $Version"
 
+# Install-dir selection mirrors install.sh::choose_install_dir:
+#   1. Explicit -InstallDir / $env:ITR_INSTALL_DIR wins.
+#   2. Otherwise, if an existing itr.exe is on PATH, replace it in-place so
+#      the shell keeps resolving the same binary (especially for updates,
+#      but also for plain installs where the user already has itr).
+#   3. Otherwise fall back to $env:LOCALAPPDATA\Programs\itr.
+$existingItr = Get-ExistingItrPath
 if (-not $InstallDir) {
-    $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\itr'
+    if ($existingItr) {
+        $InstallDir = Split-Path -Parent $existingItr
+        if ($ActionMode -eq 'install') {
+            Write-Info "Existing itr.exe found on PATH — installing alongside it at $InstallDir"
+        }
+    } else {
+        $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\itr'
+    }
 }
 $InstallDir = [Environment]::ExpandEnvironmentVariables($InstallDir)
 
@@ -164,8 +269,21 @@ try {
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     }
     $binDst = Join-Path $InstallDir 'itr.exe'
+
+    $existingBefore = Get-ExistingItrInDir -Dir $InstallDir
+    Show-ExistingVersion -BinPath $existingBefore
+
+    if ($existingBefore) {
+        Write-Info "Updating $binDst"
+    } else {
+        Write-Info "Installing to $InstallDir"
+    }
     Copy-Item -Force $binSrc $binDst
-    Write-Ok "Installed $binDst"
+    if ($existingBefore) {
+        Write-Ok "Updated $binDst"
+    } else {
+        Write-Ok "Installed $binDst"
+    }
 
     if (-not (Test-InPath $InstallDir)) {
         $added = Add-ToUserPath -Dir $InstallDir

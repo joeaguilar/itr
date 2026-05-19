@@ -42,6 +42,8 @@ pub fn run(
     let tx = conn.unchecked_transaction()?;
     let mut imported = 0;
     let mut skipped = 0;
+    let mut dropped_events: usize = 0;
+    let mut dropped_relations: usize = 0;
 
     for item in &items {
         let issue = &item.issue;
@@ -50,6 +52,12 @@ pub fn run(
             skipped += 1;
             continue;
         }
+
+        // Soft fallback: import does not restore audit events or relation
+        // rows yet. Count them so we can surface a single REVIEW: warning
+        // on stderr after the transaction commits.
+        dropped_events += item.events.len();
+        dropped_relations += item.relations.len();
 
         let files_json = serde_json::to_string(&issue.files)?;
         let tags_json = serde_json::to_string(&issue.tags)?;
@@ -97,6 +105,23 @@ pub fn run(
     }
 
     tx.commit()?;
+
+    if dropped_events > 0 || dropped_relations > 0 {
+        let mut parts: Vec<String> = Vec::new();
+        if dropped_events > 0 {
+            parts.push(format!("events ({} row(s))", dropped_events));
+        }
+        if dropped_relations > 0 {
+            parts.push(format!("relations ({} row(s))", dropped_relations));
+        }
+        eprintln!(
+            "REVIEW: import dropped data from unsupported tables: {}. \
+             Round-trip restore of audit history and relation rows is not \
+             implemented; use a direct .itr.db file copy for full-fidelity \
+             backups. See docs/backup-import-export.md.",
+            parts.join(", ")
+        );
+    }
 
     match fmt {
         Format::Json => {

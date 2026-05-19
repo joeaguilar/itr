@@ -50,6 +50,8 @@ Environment overrides:
 | `ITR_INSTALL_DIR` | Install directory. Defaults to the active `itr` on `PATH`, `~/.cargo/bin`, or `~/.local/bin`. |
 | `ITR_FROM_SOURCE=1` | Skip download, build with cargo (must be run from a cloned repo). |
 
+See [docs/environment.md](docs/environment.md) for the full list (including `ITR_REPO` and runtime variables).
+
 ### Windows
 
 ```powershell
@@ -126,11 +128,17 @@ itr stats
   aliases, output formats, and exit rules.
 - [Schema and migrations](docs/schema.md) - SQLite tables, migrations, FTS, and
   audit/event behavior.
+- [Search](docs/search.md) - what `itr search` indexes, AND-by-default query
+  semantics, FTS5 vs LIKE fallback, and when to run `itr reindex`.
+- [Urgency scoring](docs/urgency.md) - the full coefficient table, per-component
+  math, and worked examples for `itr next` / `itr ready` ordering.
 - [UI API](docs/ui-api.md) - localhost JSON API used by `itr ui`.
 - [Security model](docs/security.md) - localhost binding, UI token behavior, and
   local trust boundaries.
 - [Backup, import, and export](docs/backup-import-export.md) - `.itr.db`
   backups, JSONL/JSON export, import, and recovery checks.
+- [Environment variables](docs/environment.md) - canonical reference for every
+  `ITR_*` variable read by the CLI, installers, and upgrade.
 - [Troubleshooting](docs/troubleshooting.md) - install, PATH, database, UI,
   search, and upgrade recovery.
 - [Testing](docs/testing.md) - contributor test commands and integration-suite
@@ -141,7 +149,7 @@ itr stats
 
 ## Output Formats
 
-All commands support `--format` / `-f` with three modes:
+All commands support `--format` / `-f` with four modes:
 
 ### compact (default)
 
@@ -191,27 +199,54 @@ Human-readable table format.
    2 |  11.0 | open        | medium   | feature | Add rate limiting                        |
 ```
 
+### oneline
+
+Tab-separated single line per issue. Useful for piping into `cut`, `awk`,
+or shell loops.
+
+```
+1	open	high	bug	"Fix login timeout"
+2	open	medium	feature	"Add rate limiting"
+```
+
+Columns are `id`, `status`, `priority`, `kind`, `"title"`, and `assignee`
+(only emitted when set).
+
 ## Commands
+
+Every variant of the CLI is grouped below. Subcommands of `batch`, `bulk`,
+`config`, and `skill` are listed under their respective parent tables.
 
 ### Core Workflow
 
 | Command | Description |
 |---------|-------------|
-| `itr init` | Create `.itr.db` in the current directory |
-| `itr add <TITLE>` | Create a new issue |
+| `itr init` | Create `.itr.db` in the current directory (`--agents-md` appends instructions to `AGENTS.md`) |
+| `itr add <TITLE>` | Create a new issue (alias: `itr create`) |
 | `itr list` | List issues (default: open/in-progress, unblocked, by urgency) |
 | `itr get <ID>` | Full detail for one issue |
 | `itr update <ID>` | Modify issue fields |
-| `itr close <ID> [REASON]` | Close an issue as done |
-| `itr note <ID> <TEXT>` | Append a note to an issue |
+| `itr close <ID> [REASON]` | Close an issue as done (`--wontfix`, `--duplicate-of <ID>`) |
+| `itr show` | All non-terminal issues; `itr show <ID>` aliases `itr get` |
+| `itr wip` / `itr current` | Show in-progress issues (shorthand for `list -s in-progress`) |
 | `itr ui` | Start a localhost browser UI for issue editing |
 
-### Dependencies
+### Notes
 
 | Command | Description |
 |---------|-------------|
-| `itr depend <ID> --on <ID>` | Mark an issue as blocked by another |
+| `itr note <ID> <TEXT>` | Append a timestamped note to an issue |
+| `itr note-update <NOTE_ID> <TEXT>` | Replace a note's content |
+| `itr note-delete <NOTE_ID>` | Delete a note by ID |
+
+### Dependencies & Relations
+
+| Command | Description |
+|---------|-------------|
+| `itr depend <ID> --on <ID>` | Mark an issue as blocked by another (alias: `itr deps`) |
 | `itr undepend <ID> --on <ID>` | Remove a dependency |
+| `itr relate <ID> --to <ID> --type related\|duplicate\|supersedes` | Create a relation between two issues |
+| `itr unrelate <ID> --from <ID>` | Remove a relation between two issues |
 | `itr graph` | Output the dependency graph (JSON or DOT format) |
 
 ### Agent Workflow
@@ -220,27 +255,58 @@ Human-readable table format.
 |---------|-------------|
 | `itr next` | Single highest-urgency unblocked open issue |
 | `itr next --claim` | Same, but atomically sets it to in-progress |
-| `itr claim` / `itr start` | Alias for `itr next --claim` |
+| `itr claim` / `itr start` | Alias for `itr next --claim` (accepts optional explicit `<ID>`) |
 | `itr ready` | All unblocked non-terminal issues, sorted by urgency |
-| `itr show` | All non-terminal issues (including blocked) |
-| `itr show <ID>` | Alias for `itr get <ID>` |
-| `itr create` | Alias for `itr add` |
-| `itr batch add` | Bulk-create issues from JSON array on stdin |
+| `itr assign <ID> <AGENT>` | Assign an issue to an agent |
+| `itr unassign <ID>` | Clear an issue's assignee |
+| `itr search "<QUERY>"` | Full-text search across all fields (see [docs/search.md](docs/search.md)) |
+| `itr reindex` | Rebuild the full-text search index |
+| `itr log [ID]` | View event history (audit log); omit `ID` for recent activity across all issues |
+
+### Bulk Operations
+
+`batch` reads a JSON array on stdin so each item carries its own changes;
+`bulk` applies the same change to every issue matching CLI filters.
+
+| Command | Description |
+|---------|-------------|
+| `itr batch add` | Bulk-create issues from JSON array on stdin (alias: `itr batch create`) |
+| `itr batch close` | Bulk-close issues from JSON array on stdin (per-issue reasons; `--dry-run`) |
+| `itr batch update` | Bulk-update issues from JSON array on stdin (per-issue changes; `--dry-run`) |
+| `itr batch note` | Bulk-add notes from JSON array `[{id, text, agent?}]` on stdin |
+| `itr bulk close` | Close every issue matching `--status/--priority/--kind/--tag/--skill/--assigned-to` (`--reason`, `--wontfix`, `--dry-run`) |
+| `itr bulk update` | Update fields (`--set-status`, `--set-priority`, `--add-tag`) on every issue matching filters (`--dry-run`) |
 
 ### Project Management
 
 | Command | Description |
 |---------|-------------|
 | `itr stats` | Counts by status/priority/kind, blocked ratio, average urgency |
+| `itr summary` | Project narrative for session start (combines stats + ready + recent activity) |
 | `itr doctor` | Integrity checks (orphaned deps, stuck issues, cycles) |
 | `itr doctor --fix` | Auto-fix safe issues |
-| `itr config list` | Show all urgency coefficients |
-| `itr config set <KEY> <VALUE>` | Tune urgency scoring |
 | `itr export` | Export all data as JSONL (or `--export-format json`) |
 | `itr import --file <PATH>` | Import from JSONL/JSON (supports `--merge`) |
 | `itr schema` | Dump the database schema SQL |
-| `itr skill install` | Install the Claude Code skill so agents auto-discover `itr` |
-| `itr upgrade` | Rebuild and reinstall itr from source |
+| `itr upgrade` | Rebuild and reinstall itr from source (`--no-pull`, `--source-dir <PATH>`) |
+
+### Configuration
+
+| Command | Description |
+|---------|-------------|
+| `itr config list` | Show all settings (urgency coefficients and other tunables) |
+| `itr config get <KEY>` | Print a single config value |
+| `itr config set <KEY> <VALUE>` | Tune urgency scoring or other settings |
+| `itr config reset` | Restore all defaults |
+
+### Agent Onboarding
+
+| Command | Description |
+|---------|-------------|
+| `itr agent-info` / `itr getting-started` | Print the full agent usage guide (no database required) |
+| `itr skill` | Print the embedded `SKILL.md` to stdout (composable) |
+| `itr skill install` | Install the Claude Code skill (`--scope user\|project`, `--force`) |
+| `itr skill path` | Print the install target path without writing (`--scope user\|project`) |
 
 ## itr ui
 
@@ -262,11 +328,28 @@ for the localhost trust boundary.
 
 ### Global Flags
 
+These flags are accepted by every subcommand.
+
+| Flag | Description |
+|------|-------------|
+| `-f, --format <FORMAT>` | Output format: `compact` (default), `json`, `pretty`, `oneline` |
+| `--db <PATH>` | Override database path (skips the walk-up search). Lower precedence than `ITR_DB_PATH` for everything except `itr init`, where the CLI flag wins |
+| `--fields <LIST>` | Comma-separated list of fields to include in JSON output (e.g. `--fields id,title,urgency`). Soft-fallback on typos: unknown field names emit a `REVIEW:` note on stderr and are simply omitted from the output |
+| `-q, --quiet` | Suppress non-essential output |
+
+Valid `--fields` names (mirrors the serialized JSON shape; unknown entries are
+warned about and dropped):
+
 ```
--f, --format <FORMAT>    Output format: compact|json|pretty [default: compact]
-    --db <PATH>          Override database path
--q, --quiet              Suppress non-essential output
+id, title, status, priority, kind, context, files, tags, skills, acceptance,
+parent_id, assigned_to, close_reason, created_at, updated_at, urgency,
+blocked_by, blocks, is_blocked, notes, urgency_breakdown, children,
+matched_fields, unblocked, context_snippets, relations,
+action, results, summary, outcome, error, total, ok, review, dry_run
 ```
+
+The first block applies to issues; the second block covers batch/bulk result
+envelopes and search-result metadata.
 
 ## itr add
 
@@ -332,31 +415,9 @@ Every issue has a computed urgency score that drives `itr next` and `itr ready`.
 urgency = priority + kind + blocking + blocked + age + in_progress + acceptance + notes
 ```
 
-### Default Coefficients
+Tune the coefficients per-project with `itr config set` (e.g. `itr config set urgency.priority.critical 15.0`); `itr config list` shows every key and `itr config reset` restores defaults.
 
-| Factor | Value | Description |
-|--------|-------|-------------|
-| `priority.critical` | 10.0 | |
-| `priority.high` | 6.0 | |
-| `priority.medium` | 3.0 | |
-| `priority.low` | 1.0 | |
-| `blocking` | 8.0 | Issue blocks other active issues |
-| `blocked` | -10.0 | Issue is blocked (deprioritize) |
-| `age` | 2.0 | Scales linearly over 10 days (0→2.0) |
-| `in_progress` | 4.0 | Already started — finish it |
-| `has_acceptance` | 1.0 | Has testable acceptance criteria |
-| `kind.bug` | 2.0 | Bugs get a boost |
-| `kind.epic` | -2.0 | Epics are containers, not direct work |
-| `notes_count` | 0.5 | More notes = more investigated (max 3.0) |
-
-### Customize
-
-```bash
-itr config set urgency.priority.critical 15.0
-itr config set urgency.kind.bug 5.0
-itr config list       # see all values
-itr config reset      # restore defaults
-```
+See [docs/urgency.md](docs/urgency.md) for the full coefficient table, per-component formulas, and a worked example.
 
 ## Exit Codes
 
@@ -369,7 +430,7 @@ Empty results are not errors — `itr list` with no matches exits 0 and outputs 
 
 ## Database
 
-`itr` stores everything in a single `.itr.db` SQLite file. It finds the database by walking up from the current directory, or you can set `ITR_DB_PATH` to point at a specific file.
+`itr` stores everything in a single `.itr.db` SQLite file. It finds the database by walking up from the current directory, or you can set `ITR_DB_PATH` to point at a specific file (see [docs/environment.md](docs/environment.md) for the full precedence rules).
 
 ```bash
 # Use env var
@@ -382,6 +443,20 @@ itr list --db /path/to/.itr.db
 ### Schema
 
 Four tables: `issues`, `dependencies`, `notes`, `config`. Run `itr schema` to see the full SQL.
+
+## Environment Variables
+
+`itr` reads a small set of environment variables. They are all optional — every
+behavior they enable also has an explicit CLI flag or sensible default.
+
+| Variable | Purpose |
+|----------|---------|
+| `ITR_DB_PATH` | Override the `.itr.db` location. Wins over `--db` for every command except `itr init` (where `--db` wins). |
+| `ITR_AGENT` | Default agent identity for claims, notes, and audit-log entries. |
+
+See [docs/environment.md](docs/environment.md) for the full list, scopes,
+precedence rules, and the installer-side variables (`ITR_VERSION`,
+`ITR_INSTALL_DIR`, `ITR_FROM_SOURCE`, `ITR_REPO`, `ITR_SOURCE_DIR`).
 
 ## Agent Integration
 

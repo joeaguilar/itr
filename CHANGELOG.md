@@ -15,6 +15,13 @@ All notable user-facing changes are recorded here.
   is the terse maintained history.
 - Built binaries embed `git describe --tags --always --dirty` through `build.rs`,
   falling back to the Cargo package version when git metadata is unavailable.
+- `Cargo.toml` intentionally pins `package.version` at `0.1.0` and does not track
+  the latest `v*` tag. Git tags are the source of truth for releases; `build.rs`
+  surfaces the tag-derived version at runtime. The Cargo field is only used as a
+  fallback for source builds with no git metadata, so bumping it on every release
+  would add churn without changing user-visible behavior. See the `0.1.0` Cargo
+  pin and the `v0.1.0` git tag (re-dated `2026-03-07` to mark the bootstrap point
+  for git-based history — see that entry below).
 
 ## Entry Format
 
@@ -36,6 +43,7 @@ All notable user-facing changes are recorded here.
 - Added: `itr ui`, a local browser editor served from the Rust binary with a
   localhost JSON API.
 - Docs: Expanded install, UI, and agent workflow documentation.
+- Docs: Added a GitHub Actions CI badge to the top of `README.md`.
 
 ### Upgrade notes
 
@@ -161,7 +169,9 @@ All notable user-facing changes are recorded here.
 - Fixed: Claim audit events are recorded.
 - Fixed: `--fields` validation and list field output.
 - Fixed: `assigned_to` appears in pretty list output.
-- Docs: Documented search semantics and soft-fallback philosophy.
+- Docs: Documented search semantics and soft-fallback philosophy. See
+  [`docs/search.md`](docs/search.md) for FTS5 vs LIKE dispatch, indexed fields,
+  AND-by-default semantics, and `itr reindex` guidance.
 
 ### Upgrade notes
 
@@ -315,6 +325,13 @@ All notable user-facing changes are recorded here.
 
 ## v0.1.0 - 2026-03-07
 
+> Ordering note: this entry is intentionally placed at the bottom in semver
+> order, not in date order. The `v0.1.0` tag was cut on `2026-03-07` (after
+> `v1.0.0` on `2026-03-01`) as a retroactive bootstrap marker for the
+> auto-version workflow's git-describe baseline; treating it as the lowest
+> version keeps the changelog scannable by release number. All later entries
+> follow strict newest-first ordering.
+
 ### Release notes
 
 - Added: Bootstrap version tag retained for git-based release history.
@@ -322,3 +339,6 @@ All notable user-facing changes are recorded here.
 ### Upgrade notes
 
 - Prefer the latest `v*` tag for installs.
+- The `Cargo.toml` `package.version` field is intentionally pinned at `0.1.0`;
+  release versions come from git tags via `build.rs`. See the Versioning
+  section at the top of this file.

@@ -219,6 +219,8 @@ Behavior:
   the LIKE fallback path.
 - `reindex` rebuilds FTS; `doctor` reports stale FTS row counts and can rebuild
   them with `--fix`.
+- See [docs/search.md](search.md) for query semantics, the FTS5/LIKE dispatch,
+  and when to run `itr reindex`.
 
 ## JSON-in-TEXT fields
 
@@ -234,6 +236,10 @@ Rules:
 - Search indexes these fields through their joined text forms.
 
 ## Migration rules
+
+See [docs/migrations.md](migrations.md) for the contributor walkthrough on
+adding a column or a new table, with worked case studies from the existing
+migrations.
 
 All migrations live in `src/db.rs` and are wired from `open_db`:
 

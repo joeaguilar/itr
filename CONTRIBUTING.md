@@ -374,7 +374,32 @@ itr close <ID> "Verified with cargo check and integration tests"
 ```
 
 Use clear acceptance criteria and include relevant files, tags, skills, and
-dependencies when creating issues.
+dependencies when creating issues. The conventions used for writing those
+issues (title shape, required acceptance lines, tag vocabulary, body
+structure) live in [STORY_STYLE.md](STORY_STYLE.md). `/sprint` and `/blitz`
+read that file in Phase 0, so keep new issues consistent with it.
+
+## Commit Messages
+
+Commit subjects on `main` drive the auto-versioning workflow
+(`.github/workflows/auto-version.yml`), so the prefix matters:
+
+- `feat: <subject>` — produces a minor version bump (new user-visible
+  capability).
+- `fix: <subject>` — produces a patch version bump (bug fix or regression
+  repair).
+- `<type>!: <subject>` — produces a major version bump (breaking change to a
+  CLI flag, JSON shape, exit-code contract, schema, or UI API). Any type
+  works as long as it ends with `!`.
+- Other prefixes (`docs:`, `chore:`, `refactor:`, `test:`, `ci:`, etc.) are
+  accepted as plain commits and do not bump the version.
+- Append `[skip version]` anywhere in the subject to bypass auto-tagging on a
+  commit that would otherwise produce a tag.
+
+Keep subjects short, imperative, and scoped to a single logical change. When a
+change touches a specific subsystem, prefer a scoped prefix such as
+`feat(ui):`, `fix(db):`, or `docs(testing):` — the auto-version workflow keys
+off the type prefix, not the optional scope.
 
 ## Releases And Versioning
 
@@ -382,13 +407,23 @@ dependencies when creating issues.
   falling back to the Cargo package version.
 - CI runs on pushes and pull requests to `main`.
 - Pushes to `main` can create version tags through `.github/workflows/auto-version.yml`.
-  Commit subjects using `feat:` produce a minor bump, `fix:` produces a patch
-  bump, and `type!:` produces a major bump. `[skip version]` skips auto-tagging.
+  See **Commit Messages** above for the prefix contract that drives auto-tagging.
 - Tags matching `v*` trigger `.github/workflows/release.yml`, which builds
   Linux, macOS, and Windows archives plus SHA256 files.
 - Install scripts download release assets and verify checksums when available.
 - Rerunning `install.sh` should update the active `itr` on `PATH`; keep
   installer behavior and README install/update guidance in sync.
+
+## Related Docs
+
+Cross-references that contributors usually want next:
+
+- [STORY_STYLE.md](STORY_STYLE.md) — issue/story writing conventions used by
+  `/sprint` and `/blitz`.
+- [docs/urgency.md](docs/urgency.md) — urgency formula, full coefficient
+  table, and a worked example for `itr next` / `itr ready` ordering.
+- [docs/migrations.md](docs/migrations.md) — step-by-step walkthrough for
+  adding a column or table to the SQLite schema, with worked case studies.
 
 ## Pull Request Checklist
 

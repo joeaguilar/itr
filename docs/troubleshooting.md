@@ -148,6 +148,9 @@ itr search "term" -f json
 If `itr reindex` reports FTS5 unavailable, the SQLite build does not support
 FTS5 in that environment. Normal search still falls back to LIKE-based matching.
 
+See [docs/search.md](search.md) for full query semantics, the FTS5/LIKE
+dispatch logic, and the complete list of indexed fields.
+
 ## `itr upgrade` Fails
 
 `itr upgrade` finds source, optionally runs `git pull`, builds release, and
@@ -249,3 +252,111 @@ itr doctor --fix
 `doctor --fix` can remove orphaned dependencies, stale blocker relationships,
 and rebuild stale FTS when available. It does not automatically resolve cycles,
 stale in-progress issues, or empty epics.
+
+## Updating An Existing Install
+
+`install.sh` accepts `--update` to refresh an existing install in place rather
+than dropping a new copy somewhere else on disk. The same script handles both
+fresh installs and updates — `--update` only changes the log line and is most
+useful in automation that wants to make the intent explicit.
+
+```bash
+./install.sh --update
+curl -fsSL https://raw.githubusercontent.com/joeaguilar/itr/main/install.sh | bash -s -- --update
+```
+
+The prebuilt-binary update workflow:
+
+1. Detect the host target (e.g. `aarch64-apple-darwin`,
+   `x86_64-unknown-linux-musl`).
+2. Resolve the release tag (`ITR_VERSION` if set, otherwise the latest
+   GitHub release).
+3. Download `itr-<tag>-<target>.tar.gz` and, when available, its `.sha256`
+   companion. A checksum mismatch aborts the install.
+4. Extract the archive into a temp directory.
+5. Pick an install directory via `choose_install_dir` (see below) and copy
+   the new binary over `itr` there, using `sudo install` when the
+   destination is not writable.
+6. Warn if the chosen directory is not on `PATH`.
+
+If the prebuilt download fails (for example, no GitHub Releases asset for the
+target, or no network), the script falls back to `cargo build --release`
+provided the working directory is a cloned `itr` repo and `cargo` is
+installed. To force the source path, set `ITR_FROM_SOURCE=1`.
+
+`install.sh --update` is the recommended way to move forward on a release
+boundary. `itr upgrade` is the in-tree alternative — it expects a source
+checkout, runs `cargo build --release`, and overwrites the current binary.
+Use `itr upgrade` when you are working from source; use `install.sh --update`
+when you installed from a release archive.
+
+### `choose_install_dir` Precedence
+
+`install.sh` picks the install destination in this order:
+
+1. `ITR_INSTALL_DIR` if set (tilde-expanded). Always wins.
+2. The directory of an existing `itr` already on `PATH`, when one exists and
+   resolves to a real file. This is intentional so updates replace the binary
+   the shell actually runs and do not leave a stale copy ahead on `PATH`.
+3. `$HOME/.cargo/bin` if it is already on `PATH` and the directory exists
+   (Rust users).
+4. `$HOME/.local/bin` as the final default.
+
+The Windows installer (`install.ps1`) defaults to
+`%LOCALAPPDATA%\Programs\itr` and adds it to the user `PATH` if missing.
+
+## WAL Companion Files (`.itr.db-wal`, `.itr.db-shm`)
+
+`itr` runs SQLite in WAL (Write-Ahead Logging) mode. When the database has
+been opened for writes, SQLite creates two companion files next to
+`.itr.db`:
+
+- `.itr.db-wal` — the write-ahead log holding pending changes.
+- `.itr.db-shm` — the shared-memory index used to coordinate readers and
+  writers.
+
+When they appear:
+
+- After any write (`add`, `update`, `close`, `claim`, `bulk`, `batch`, etc.).
+- During an `itr ui` session, for as long as the server holds connections.
+- They normally remain until the database is cleanly closed and a checkpoint
+  runs; on a busy database they can stick around between command invocations.
+
+Whether to commit or delete them:
+
+- **Do not commit them.** Add `.itr.db-wal` and `.itr.db-shm` to
+  `.gitignore`. They are local state, can contain data not yet merged into
+  `.itr.db`, and will conflict in unhelpful ways across machines.
+- **Do not delete them while any `itr` process is running.** Deleting them
+  during an active session can lose pending writes or corrupt the database.
+- **Safe to delete only when no `itr` process is running.** If the files
+  remain after the last writer exits, opening the database with any `itr`
+  command (for example `itr stats`) will checkpoint and tidy them up. If you
+  must remove them manually (e.g. to ship a clean snapshot), make sure
+  `itr ui` is stopped and no other `itr` invocation is in flight, then
+  remove both `.itr.db-wal` and `.itr.db-shm`. The next open will recreate
+  them as needed.
+- **For backups, commit only `.itr.db`.** Run a clean `itr` command first to
+  flush the WAL into the main database file, then copy `.itr.db` on its own.
+
+## Error Code Reference
+
+`itr` exits non-zero (always `1`) on hard failure and prints an error to
+stderr. In `-f json` mode the message is wrapped as
+`{"error": "...", "code": "..."}`. The full list of codes:
+
+| Code             | When it fires                                                                 | Typical fix                                                                 |
+|------------------|--------------------------------------------------------------------------------|-----------------------------------------------------------------------------|
+| `NOT_FOUND`      | An issue ID does not exist.                                                    | Check the ID with `itr list` or `itr search`.                               |
+| `CYCLE_DETECTED` | Adding a dependency would create a cycle.                                      | Drop one of the conflicting links with `itr undepend`, then retry.          |
+| `INVALID_VALUE`  | A user-supplied field value did not normalize to a valid option.               | Use a listed value (see the error message for valid options).               |
+| `NO_DATABASE`    | No `.itr.db` was found by walking up from the current directory.               | Run `itr init`, pass `--db`, or set `ITR_DB_PATH`. See top of this guide.   |
+| `DB_ERROR`       | SQLite returned an error (lock contention, corruption, schema mismatch, etc.). | Retry; if persistent, run `itr doctor` and check for stale WAL companions.  |
+| `PARSE_ERROR`    | JSON input to `batch` commands or stdin payloads was malformed.                | Validate the input with `python3 -m json.tool` and retry.                   |
+| `IO_ERROR`       | Filesystem error reading or writing a file (permissions, missing path).        | Check the path and permissions reported in the error.                       |
+| `UPGRADE_FAILED` | `itr upgrade` could not build, locate source, or overwrite the binary.        | See [`itr upgrade` Fails](#itr-upgrade-fails) above.                        |
+| `NO_FILTERS`     | A `bulk` command was invoked with no filter (would touch every issue).         | Add at least one filter (`--status`, `--tag`, etc.) or use `batch`.         |
+
+All errors exit `1`. Use the `code` field in JSON output to dispatch
+recoverable conditions in scripts rather than parsing the human-readable
+message.

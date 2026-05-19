@@ -1,5 +1,9 @@
 [package]
 name = "itr"
+# Intentionally pinned at 0.1.0. Release versions are derived from git tags
+# (`git describe --tags --always --dirty`) via build.rs and surfaced at runtime.
+# This field is only a fallback for source builds without git metadata. See
+# CHANGELOG.md "Versioning" for the full rationale.
 version = "0.1.0"
 edition = "2021"
 description = "Agent-first issue tracker CLI"
@@ -17,6 +21,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1"
+
+[dev-dependencies]
+proptest = "1"
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

@@ -89,3 +89,47 @@ The term "soft fallback" fills a genuine naming gap. It bridges the UX concept (
 The research converges on a clear thesis: **interrupting a process at the point of failure is nearly always more expensive than completing the process and correcting afterward**. The cognitive science shows context switches cost 23+ minutes to recover from and reduce productivity by 40%. Form UX research shows deferred validation preserves flow state and can generate 300% conversion improvements. AI agent studies show 50% task failure rates dominated by error cascading and context waste from retries. Compiler design proved decades ago that collecting all errors in one pass is strictly superior to stopping at the first one.
 
 The key insight for a blog audience: soft fallback isn't about ignoring errors — it's about *when* you address them. A blocking error says "stop everything and fix this now." A soft fallback says "noted — let's finish what we're doing, and then I'll show you everything that needs attention." The former optimizes for preventing any single error; the latter optimizes for completing the overall task. In almost every domain — forms, agents, compilers, tax filing, essay grading — the latter wins. The most actionable takeaway is that this pattern also generates superior analytics: knowing that users abandon because they lack their SSN (a bailout reason) is infinitely more useful than knowing they abandoned at step 3 (a positional fact). For AI agents, seeing all five failures at once enables targeted correction rather than expensive sequential retries that pollute the context window. Soft fallback turns errors from workflow-stopping events into data — and data is always more useful than a dead end.
+
+## Epilogue: how `itr` implements soft fallback as a first-class pattern
+
+The section above noted that **no major AI agent framework treats deferred
+error collection as a first-class pattern**. `itr` is a deliberate
+counter-example, built from the ground up around this philosophy for AI coding
+agents driving an issue tracker.
+
+Soft fallback is wired into the CLI contract, the storage layer, and the batch
+protocol — not bolted on per command:
+
+- **Normalize before validating.** `src/normalize.rs` maps synonyms (`urgent` →
+  `critical`, `wip` → `in-progress`, `bugfix` → `bug`) before any handler sees
+  the value. The agent's intent survives loose spelling.
+- **Default with a paper trail.** When `add` or `update` still can't recognize
+  a priority, kind, or status, the handler picks a safe default
+  (`medium`/`task`/`open`), tags the issue `_needs_review`, writes an `itr`
+  note explaining what was substituted, and exits 0. The work isn't lost and
+  the review surface is queryable later.
+- **Batch outcome buckets.** `batch add`, `batch close`, `batch update`, and
+  `batch note` return a per-item envelope of `ok`, `error`, and `review`
+  outcomes — every item is attempted, and the agent gets the full failure
+  picture in a single response instead of a partial result and an aborted
+  transaction.
+- **`REVIEW:` on stderr.** Recoverable problems (unknown `--fields` names,
+  `skill install` refusing to overwrite, `add --title` colliding with the
+  positional argument, browser-open failures from `itr ui`) emit a `REVIEW:`
+  line on stderr and continue. Stdout stays a clean machine surface.
+- **Hard errors only where recovery is impossible.** Missing database,
+  unparseable JSON, dependency cycles, and unsafe bulk operations without
+  filters still exit 1. The principle is that soft fallback applies when a
+  reasonable default exists — not when continuing would corrupt state.
+
+Together these give an agent the same affordance the essay grader, the
+TurboTax flow, and the modern Rust compiler give a human: finish the work,
+collect every problem, and present them as data to triage — instead of dying on
+the first surprise.
+
+For the canonical project-side framing of this philosophy and the soft-fallback
+rules contributors should preserve, see the **Soft Fallbacks Philosophy**
+section of [CLAUDE.md](../CLAUDE.md), the **Errors And Soft Fallbacks** section
+of [CONTRIBUTING.md](../CONTRIBUTING.md), and the **Soft Fallbacks** section of
+[command-contracts.md](command-contracts.md), which enumerates the specific
+per-command behaviors.

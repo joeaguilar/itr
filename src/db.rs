@@ -498,6 +498,38 @@ pub fn update_issue_parent(
     Ok(())
 }
 
+/// Check if `candidate` is `id` itself or any descendant of `id` via `parent_id` edges.
+/// Used to prevent parent-cycle creation when setting `id`'s parent to `candidate`.
+/// Reuses the BFS pattern from `has_path` (dependency cycle detection).
+pub fn is_self_or_descendant(conn: &Connection, id: i64, candidate: i64) -> Result<bool, ItrError> {
+    if id == candidate {
+        return Ok(true);
+    }
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(id);
+
+    while let Some(current) = queue.pop_front() {
+        if !visited.insert(current) {
+            continue;
+        }
+        // Follow: which issues have `current` as their parent? (descendants of `current`)
+        let mut stmt = conn.prepare("SELECT id FROM issues WHERE parent_id = ?1")?;
+        let children: Vec<i64> = stmt
+            .query_map(params![current], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        for child in children {
+            if child == candidate {
+                return Ok(true);
+            }
+            if !visited.contains(&child) {
+                queue.push_back(child);
+            }
+        }
+    }
+    Ok(false)
+}
+
 // --- Dependencies ---
 
 pub fn add_dependency(

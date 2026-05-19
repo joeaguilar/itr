@@ -4,6 +4,13 @@ This document records stable command behavior for contributors. It is not clap
 help. Keep stdout machine-consumable, preserve aliases, and treat stderr as the
 place for diagnostics, hints, warnings, review notes, and progress.
 
+For the wider context of how these commands hang together, see
+[architecture.md](architecture.md) — module shape, DB discovery, and the
+embedded UI server. For the philosophy behind the recoverable-input behavior
+documented under **Soft Fallbacks** below, see
+[soft_fallbacks.md](soft_fallbacks.md), which explains why `itr` defaults,
+warns, and continues instead of hard-failing on normalizable input.
+
 ## Global Contract
 
 All commands accept the global parser flags from `src/cli.rs`:
@@ -63,7 +70,8 @@ Stable empty-result messages:
 
 ## Soft Fallbacks
 
-Preserve these as non-fatal behavior:
+These are the per-command surfaces of the project-wide pattern documented in
+[soft_fallbacks.md](soft_fallbacks.md). Preserve them as non-fatal behavior:
 
 - Priority synonyms normalize before validation: `urgent`, `p0`, `highest` to
   `critical`; `p1` to `high`; `p2`, `normal` to `medium`; `p3`, `lowest` to
