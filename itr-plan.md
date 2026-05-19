@@ -1,5 +1,7 @@
 # `itr` — Agent-First Issue Tracker CLI
 
+> **Historical design doc.** This is the original v0.1 specification, written before implementation. Many things in it have shipped, some have drifted, and a few never landed. Treat it as planning context only — for current behavior consult `README.md`, `docs/command-contracts.md`, and `itr agent-info`. Known drift: `itr ui` shipped (not in plan); exit code 2 was never adopted (empty results exit 0); `STALE_IN_PROGRESS` error code never shipped; output format gained `oneline`; schema gained `skills`/`assigned_to` columns plus `events`/`relations` tables. See `docs/limitations.md` for current limitations and roadmap.
+
 ## Project Overview
 
 Build a Rust CLI tool called `itr` (nitpick) that manages a local SQLite-backed issue database. The primary consumers are AI coding agents (e.g., Claude Code), not humans. Every design decision should optimize for machine-parseable output, minimal token overhead, stdin/stdout composability, and deterministic behavior.

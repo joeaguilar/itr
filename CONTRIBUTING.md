@@ -322,6 +322,17 @@ Update docs with behavior changes, not just code.
 - `src/agent_docs.rs` is embedded into `itr agent-info` and `itr init
   --agents-md`.
 - `skills/itr/SKILL.md` is embedded into `itr skill`; rebuild after editing.
+- `CHANGELOG.md` records user-facing release history and upgrade notes.
+- `docs/architecture.md` explains the high-level system shape.
+- `docs/command-contracts.md` records stable CLI behavior.
+- `docs/schema.md` documents SQLite schema and migration rules.
+- `docs/ui-api.md` documents the localhost UI API.
+- `docs/security.md` documents the local UI security model.
+- `docs/backup-import-export.md` documents backup and data portability.
+- `docs/troubleshooting.md` documents common recovery flows.
+- `docs/testing.md` documents test conventions.
+- `docs/limitations.md` documents constraints, compatibility coverage, and future
+  directions.
 - `docs/soft_fallbacks.md` explains the philosophy behind recoverable errors.
 - Keep command examples current and always invoke the CLI as `itr`.
 
@@ -376,6 +387,8 @@ dependencies when creating issues.
 - Tags matching `v*` trigger `.github/workflows/release.yml`, which builds
   Linux, macOS, and Windows archives plus SHA256 files.
 - Install scripts download release assets and verify checksums when available.
+- Rerunning `install.sh` should update the active `itr` on `PATH`; keep
+  installer behavior and README install/update guidance in sync.
 
 ## Pull Request Checklist
 

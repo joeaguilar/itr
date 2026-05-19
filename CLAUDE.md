@@ -27,20 +27,21 @@ just verify        # release + lint + test + fmt-check (full pre-push validation
 just ci            # fmt-check + lint + test
 ```
 
-There are no unit tests yet — only the shell-based integration test suite in `tests/integration.sh`. The test suite uses `python3 -c` with `json.load` for JSON parsing (not `jq`). The UI integration test starts a localhost server, so sandboxed environments may need localhost bind/connect permission.
+Unit tests live in `src/util.rs` and `src/format.rs`; the shell-based integration suite is `tests/integration.sh`. The integration suite uses `python3 -c` with `json.load` for JSON parsing (not `jq`). The UI integration test starts a localhost server, so sandboxed environments may need localhost bind/connect permission.
 
 ## Architecture
 
 ### Core Flow
 
-`main.rs` parses CLI args via clap derive macros (`cli.rs`), resolves the database path, and dispatches to command handlers. Three commands (`init`, `schema`, `upgrade`) don't need an existing database; all others require one. `ui` resolves the DB like other DB-backed commands, then starts a localhost-only request loop.
+`main.rs` parses CLI args via clap derive macros (`cli.rs`), resolves the database path, and dispatches to command handlers. Five commands (`init`, `schema`, `upgrade`, `agent-info`, `skill`) don't need an existing database; all others require one. `ui` resolves the DB like other DB-backed commands, then starts a localhost-only request loop.
 
 Always invoke as `itr` (on PATH). Never use full binary paths like `~/.cargo/bin/itr` or `./target/release/itr`.
 
 ### Key Modules
 
 - **`cli.rs`** — Clap `#[derive(Parser)]` definitions for all commands and subcommands. Adding a new command means: add variant to `Commands` enum here, add match arm in `main.rs::run_command`, create handler in `src/commands/`.
-- **`db.rs`** — All SQLite operations. Contains the schema as a const string, CRUD functions for issues/notes/dependencies/config, cycle detection via BFS, and the walk-up `.itr.db` finder. This is the largest file (~730 lines).
+- **`db.rs`** — All SQLite operations. Contains the schema as a const string, CRUD functions for issues/notes/dependencies/config, cycle detection via BFS, and the walk-up `.itr.db` finder. This is the largest file (~1070 lines).
+- **`util.rs`** — Small helpers shared across modules (tag/skill parsing, date math, etc.). Carries unit tests under `#[cfg(test)]`.
 - **`models.rs`** — All data structs (`Issue`, `Note`, `IssueDetail`, `IssueSummary`, `BatchAddInput`, `GraphOutput`, `Stats`, `ExportData`, `SearchResult`, `UrgencyBreakdown`). Uses `serde` derive for JSON serialization. `IssueDetail` uses `#[serde(flatten)]` on its `issue` field.
 - **`urgency.rs`** — Urgency scoring engine. Scores are never stored — always computed fresh from current state. `UrgencyConfig` loads coefficients from the `config` table with hardcoded defaults. The `compute_urgency_with_breakdown` function returns both the score and a component breakdown.
 - **`format.rs`** — Output formatting for three modes: `compact` (token-efficient default), `json`, `pretty` (human tables/DOT graphs). Each data type has its own `format_*` function.
@@ -58,11 +59,11 @@ Each file exports a `run()` function that takes `&Connection`, command-specific 
 
 ### Database
 
-Core tables are `issues`, `dependencies`, `notes`, and `config`; migrations also add `events`, `relations`, `skills`, and `assigned_to`. Schema and migrations live in `db.rs`. WAL mode and foreign keys are enabled. `files`, `tags`, and `skills` are JSON arrays stored in TEXT columns. DB is found by walking up from cwd, or via `ITR_DB_PATH` env var or `--db` flag. The `skills` field represents agent capabilities required for an issue, and can be used to filter in `list`, `search`, `next`, `ready`, `claim`, and `ui`.
+Core tables are `issues`, `dependencies`, `notes`, and `config`; migrations also add the `events` and `relations` tables, plus `skills` and `assigned_to` columns on `issues`. Schema and migrations live in `db.rs`. WAL mode and foreign keys are enabled. `files`, `tags`, and `skills` are JSON arrays stored in TEXT columns. DB is found by walking up from cwd, or via `ITR_DB_PATH` env var (which takes precedence over `--db`, except `init` which inverts that). The `skills` column represents agent capabilities required for an issue, and can be used to filter in `list`, `search`, `next`, `ready`, `claim`, and `ui`.
 
 ### Local UI
 
-`itr ui` starts a local web UI bound to `127.0.0.1`. It serves embedded assets and uses a per-session token in the browser URL plus `X-ITR-Token` for API requests. Supported v1 workflows: search/filter, issue add/edit, close/wontfix, notes, dependencies, relations, and previewed bulk resolve. It intentionally does not hard-delete issues; pruning means resolving or cleanup tagging.
+`itr ui` starts a local web UI bound to `127.0.0.1`. It serves embedded assets and uses a per-session token in the browser URL plus `X-ITR-Token` for API requests. Supported v1 workflows: search/filter, issue add/edit, close/wontfix, notes, dependencies, relations, previewed bulk resolve, and raw SQL only when started with `--allow-dangerous`. Normal UI routes intentionally do not hard-delete issues; pruning means resolving or cleanup tagging. Dangerous SQL mode is full SQLite access to the opened database.
 
 ### Exit Codes
 

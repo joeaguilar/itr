@@ -28,9 +28,24 @@ Local UI:
 itr ui
 itr ui --db path/to/.itr.db
 itr ui --port 8787 --no-open
+itr ui --allow-dangerous --no-open
 ```
 
 In sandboxed environments, UI tests may need permission to bind/connect to `127.0.0.1`.
+`--allow-dangerous` enables raw SQL against the opened SQLite database and should
+be treated as full database access.
+
+Install and update:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/joeaguilar/itr/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/joeaguilar/itr/main/install.sh | bash -s -- --update
+cargo install --path . --force
+```
+
+Check `install.sh` and `install.ps1` before answering install or update questions.
+The release installer should update the active `itr` found on `PATH`; source
+installs use `cargo install --path . --force`.
 
 ## Code Map
 
@@ -48,7 +63,7 @@ In sandboxed environments, UI tests may need permission to bind/connect to `127.
 
 Keep `itr ui` dependency-light and portable. Do not add Node, Electron, Tauri, an async runtime, or a frontend build step unless explicitly requested.
 
-All mutating UI API routes should reuse Rust DB helpers and preserve audit/event behavior where appropriate. The UI must not expose hard issue deletion in v1; prune-style workflows mean previewed bulk resolve or cleanup tagging.
+All mutating UI API routes should reuse Rust DB helpers and preserve audit/event behavior where appropriate. The normal UI must not expose hard issue deletion in v1; prune-style workflows mean previewed bulk resolve or cleanup tagging. Raw SQL is only available behind `itr ui --allow-dangerous`.
 
 The UI should stay dense and operational: table-first search/filter, direct detail editing, notes, dependencies, relations, and bulk resolve.
 

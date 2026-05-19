@@ -34,14 +34,20 @@ On x86_64 Linux the installer downloads the **fully-static musl build by default
 curl -fsSL https://raw.githubusercontent.com/joeaguilar/itr/main/install.sh | bash
 ```
 
-The script auto-detects your platform, downloads the matching tarball from the latest GitHub Release, verifies its SHA256 checksum, and installs to `~/.local/bin` (or `~/.cargo/bin` if it's already on PATH).
+The script auto-detects your platform, downloads the matching tarball from the latest GitHub Release, verifies its SHA256 checksum, and installs to an existing `itr` location on `PATH`, `~/.cargo/bin` if it is already on `PATH`, or `~/.local/bin`.
+
+To update an existing install, rerun the installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/joeaguilar/itr/main/install.sh | bash -s -- --update
+```
 
 Environment overrides:
 
 | Variable | Effect |
 | -------- | ------ |
 | `ITR_VERSION` | Pin a specific tag (e.g. `v0.1.0`). Defaults to latest. |
-| `ITR_INSTALL_DIR` | Install directory. Defaults to `~/.local/bin`. |
+| `ITR_INSTALL_DIR` | Install directory. Defaults to the active `itr` on `PATH`, `~/.cargo/bin`, or `~/.local/bin`. |
 | `ITR_FROM_SOURCE=1` | Skip download, build with cargo (must be run from a cloned repo). |
 
 ### Windows
@@ -111,6 +117,27 @@ itr close 1 "Fixed pool size in config, verified with load test"
 # Check project health
 itr stats
 ```
+
+## Documentation
+
+- [Architecture](docs/architecture.md) - CLI flow, DB boundaries, formatting,
+  UI server, and tests.
+- [Command contracts](docs/command-contracts.md) - stable command behavior,
+  aliases, output formats, and exit rules.
+- [Schema and migrations](docs/schema.md) - SQLite tables, migrations, FTS, and
+  audit/event behavior.
+- [UI API](docs/ui-api.md) - localhost JSON API used by `itr ui`.
+- [Security model](docs/security.md) - localhost binding, UI token behavior, and
+  local trust boundaries.
+- [Backup, import, and export](docs/backup-import-export.md) - `.itr.db`
+  backups, JSONL/JSON export, import, and recovery checks.
+- [Troubleshooting](docs/troubleshooting.md) - install, PATH, database, UI,
+  search, and upgrade recovery.
+- [Testing](docs/testing.md) - contributor test commands and integration-suite
+  conventions.
+- [Known limitations and roadmap](docs/limitations.md) - intentional constraints,
+  compatibility coverage, and future directions.
+- [Changelog](CHANGELOG.md) - release history and upgrade notes.
 
 ## Output Formats
 
@@ -221,13 +248,17 @@ Human-readable table format.
 itr ui
 itr ui --db path/to/.itr.db
 itr ui --port 8787 --no-open
+itr ui --allow-dangerous --no-open
 ```
 
 Starts a local web UI bound to `127.0.0.1`. It serves embedded assets from the
 `itr` binary and uses a per-session token in the browser URL for API requests.
 The UI supports search/filter, add, edit, close/wontfix, notes,
-dependencies, relations, and previewed bulk resolve workflows. It does not
-hard-delete issues; pruning in the UI means resolving or cleanup tagging.
+dependencies, relations, previewed bulk resolve workflows, and a raw SQL editor
+only when started with `--allow-dangerous`. Without that flag, the raw SQL API is
+disabled. Dangerous mode can read or mutate any table in the SQLite database.
+See [UI API](docs/ui-api.md) for route details and [Security model](docs/security.md)
+for the localhost trust boundary.
 
 ### Global Flags
 
@@ -419,6 +450,7 @@ cargo build --release
 ```
 
 The integration test suite covers init, add, list, get, update, close, notes, dependencies (including cycle detection), next, ready, batch add, graph, stats, export/import round-trip, config, doctor, exit codes, and environment variable overrides.
+See [Testing](docs/testing.md) for contributor test conventions.
 
 ## License
 
