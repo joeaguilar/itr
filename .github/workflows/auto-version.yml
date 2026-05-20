@@ -57,7 +57,11 @@ jobs:
           # Determine bump type (highest wins)
           BUMP="none"
           while IFS= read -r -d $'\036' commit || [ -n "$commit" ]; do
-            subject=$(printf '%s\n' "$commit" | sed -n '1p')
+            # First non-empty line is the subject. Using `sed -n '1p'` would
+            # break every record after the first: git log inserts a newline
+            # between records, so records 2+ have a leading blank line and
+            # sed would return "" as the subject.
+            subject=$(printf '%s' "$commit" | awk 'NF{print; exit}')
             # Breaking change: type!: subject or BREAKING CHANGE footer/body line
             if printf '%s\n' "$subject" | grep -qE '^[a-z]+(\(.+\))?!:' || \
                printf '%s\n' "$commit" | grep -qE '^BREAKING CHANGE:'; then

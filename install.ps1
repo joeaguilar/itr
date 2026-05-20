@@ -84,16 +84,27 @@ function Resolve-LatestTag {
     # Follow the /releases/latest redirect to avoid the API rate limit.
     $url = "https://github.com/$Repo/releases/latest"
     $resp = Invoke-WebRequest -Uri $url -MaximumRedirection 0 -ErrorAction SilentlyContinue
+    $tag = $null
     if ($resp.StatusCode -ne 302 -and $resp.StatusCode -ne 301) {
         # PowerShell 7 may have followed the redirect; pull from the final URI.
         if ($resp.BaseResponse.RequestMessage.RequestUri) {
             $final = $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
-            return ($final -split '/')[-1]
+            $tag = ($final -split '/')[-1]
+        } else {
+            throw "Could not resolve latest release tag from $url"
         }
-        throw "Could not resolve latest release tag from $url"
+    } else {
+        $location = $resp.Headers.Location
+        $tag = ($location -split '/')[-1]
     }
-    $location = $resp.Headers.Location
-    return ($location -split '/')[-1]
+    # When a repo has no published releases, GitHub redirects /releases/latest
+    # to /releases, so the last URL segment is the literal string "releases"
+    # rather than a real tag. Detect that and fail loudly instead of building
+    # a bogus download URL.
+    if (-not $tag -or $tag -eq 'releases') {
+        throw "No published releases found at https://github.com/$Repo/releases. Publish a release (e.g. v0.1.0) with the Windows zip + sha256 assets, or pin a tag with -Version."
+    }
+    return $tag
 }
 
 function Add-ToUserPath {
