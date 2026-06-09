@@ -15,3 +15,6 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Tooling caches
+.kgr-cache.json
