@@ -1,0 +1,6 @@
+$ itr add New work -p medium -k task -f json
+--- exit ---
+0
+--- stdout ---
+{"id":1,"title":"New work","status":"open","priority":"medium","kind":"task","context":"","files":[],"tags":[],"skills":[],"acceptance":"","parent_id":null,"assigned_to":"","close_reason":"","created_at":"<TS>","updated_at":"<TS>","urgency":3.0,"blocked_by":[],"blocks":[],"is_blocked":false,"notes":[],"urgency_breakdown":{"components":[["priority.medium",3.0],["kind.task",0.0],["age",0.0]]}}
+--- stderr ---

@@ -1,0 +1,20 @@
+$ itr note --help
+--- exit ---
+0
+--- stdout ---
+Append a note to an issue
+
+Usage: itr note [OPTIONS] <ID> [TEXT]
+
+Arguments:
+  <ID>    Issue ID
+  [TEXT]  Note content
+
+Options:
+      --agent <AGENT>    Agent/session identifier [default: ]
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

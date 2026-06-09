@@ -1,0 +1,13 @@
+$ itr next
+--- exit ---
+0
+--- stdout ---
+ID:1 STATUS:open PRIORITY:high KIND:bug URGENCY:11.0
+TITLE: Fixture issue
+CONTEXT: ctx
+ACCEPTANCE: acc
+CREATED: <TS>
+UPDATED: <TS>
+--- URGENCY BREAKDOWN ---
+priority.high=6.0 kind.bug=2.0 age=2.0 has_acceptance=1.0
+--- stderr ---

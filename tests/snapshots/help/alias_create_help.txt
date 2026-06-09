@@ -1,0 +1,32 @@
+$ itr create --help
+--- exit ---
+0
+--- stdout ---
+Create a new issue
+
+Usage: itr add [OPTIONS] [TITLE]
+
+Arguments:
+  [TITLE]  Issue title
+
+Options:
+  -p, --priority <PRIORITY>        Priority: critical|high|medium|low [default: medium]
+  -k, --kind <KIND>                Kind: bug|feature|task|epic [default: task]
+  -c, --context <CONTEXT>          Freeform context/description
+      --files <FILES>              Comma-separated file paths
+      --file <FILE>                File path (repeatable)
+      --tags <TAGS>                Comma-separated tags
+  -t, --tag <TAG>                  Tag (repeatable)
+      --skills <SKILLS>            Comma-separated skills (agent capabilities required)
+      --skill <SKILL>              Skill (repeatable)
+  -a, --acceptance <ACCEPTANCE>    Acceptance criteria
+  -b, --blocked-by <BLOCKED_BY>    Comma-separated issue IDs this depends on
+      --parent <PARENT>            Parent epic ID
+      --assigned-to <ASSIGNED_TO>  Assign to agent
+      --stdin-json                 Read a JSON issue object from stdin
+  -f, --format <FORMAT>            Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>                    Override database path (skips walk-up search)
+  -q, --quiet                      Suppress non-essential output
+      --fields <FIELDS>            Comma-separated list of fields to include in JSON output
+  -h, --help                       Print help
+--- stderr ---

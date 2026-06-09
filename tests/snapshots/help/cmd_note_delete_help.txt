@@ -1,0 +1,18 @@
+$ itr note-delete --help
+--- exit ---
+0
+--- stdout ---
+Delete a note by ID
+
+Usage: itr note-delete [OPTIONS] <ID>
+
+Arguments:
+  <ID>  Note ID
+
+Options:
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

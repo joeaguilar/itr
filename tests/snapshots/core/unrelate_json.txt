@@ -1,0 +1,6 @@
+$ itr unrelate 1 --from 2 -f json
+--- exit ---
+0
+--- stdout ---
+{"removed":true,"source_id":1,"target_id":2}
+--- stderr ---

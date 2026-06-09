@@ -1,0 +1,7 @@
+$ itr batch create
+--- exit ---
+0
+--- stdout ---
+BATCH_ADD: 1 items (1 ok, 0 error, 0 review)
+  OK:1
+--- stderr ---

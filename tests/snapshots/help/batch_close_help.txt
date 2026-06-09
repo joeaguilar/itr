@@ -1,0 +1,16 @@
+$ itr batch close --help
+--- exit ---
+0
+--- stdout ---
+Bulk-close issues from JSON array on stdin (per-issue reasons)
+
+Usage: itr batch close [OPTIONS]
+
+Options:
+      --dry-run          Preview without applying changes
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

@@ -1,0 +1,6 @@
+$ itr reindex -f json
+--- exit ---
+0
+--- stdout ---
+{"action":"reindex","indexed":2}
+--- stderr ---

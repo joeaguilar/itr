@@ -1,0 +1,6 @@
+$ itr assign 1 agent-x -f json
+--- exit ---
+0
+--- stdout ---
+{"id":1,"title":"Fixture issue","status":"open","priority":"high","kind":"bug","context":"ctx","files":[],"tags":[],"skills":[],"acceptance":"acc","parent_id":null,"assigned_to":"agent-x","close_reason":"","created_at":"<TS>","updated_at":"<TS>","urgency":11.083333333333334,"blocked_by":[],"blocks":[],"is_blocked":false,"notes":[{"id":1,"issue_id":1,"content":"Assigned to agent-x","agent":"itr","created_at":"<TS>"}],"urgency_breakdown":{"components":[["priority.high",6.0],["kind.bug",2.0],["age",2.0],["has_acceptance",1.0],["notes",0.08333333333333333]]}}
+--- stderr ---

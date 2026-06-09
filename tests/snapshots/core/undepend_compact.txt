@@ -1,0 +1,7 @@
+$ itr undepend 2 --on 1
+--- exit ---
+0
+--- stdout ---
+UNDEPEND: 2 no longer blocked by 1
+UNBLOCKED:2 "Another"
+--- stderr ---

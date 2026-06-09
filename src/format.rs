@@ -548,10 +548,58 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
 
 pub fn format_stats(stats: &Stats, fmt: Format) -> String {
     match fmt {
-        Format::Json => serde_json::to_string(stats).unwrap_or_default(),
+        Format::Json => stats_to_deterministic_json(stats),
         Format::Compact => format_stats_compact(stats),
         Format::Pretty | Format::Oneline => format_stats_compact(stats), // same for now
     }
+}
+
+/// Serialize [`Stats`] to JSON with a deterministic contract.
+///
+/// The `Stats` struct stores its count buckets in `HashMap`s, whose iteration
+/// order is randomized per process — serializing it directly produces
+/// byte-different output for semantically identical data, which makes byte-level
+/// snapshot tests flap (issue #139). This builds the JSON with a fixed
+/// top-level field order and **sorted** nested count-map keys (via `BTreeMap`),
+/// preserving the exact same JSON shape and values while removing the
+/// nondeterminism. See `docs/command-contracts.md` for the documented contract.
+fn stats_to_deterministic_json(stats: &Stats) -> String {
+    use serde_json::{Map, Value};
+    use std::collections::BTreeMap;
+
+    // Nested count maps: sort keys for a stable, deterministic order.
+    let ordered_map = |m: &std::collections::HashMap<String, i64>| -> Value {
+        let sorted: BTreeMap<&String, &i64> = m.iter().collect();
+        let mut obj = Map::new();
+        for (k, v) in sorted {
+            obj.insert(k.clone(), Value::from(*v));
+        }
+        Value::Object(obj)
+    };
+
+    // Top-level object. `serde_json::Map` (without the `preserve_order`
+    // feature) is backed by a `BTreeMap`, so the top-level keys serialize in a
+    // stable alphabetical order regardless of insertion order. Combined with
+    // the sorted nested maps above, the whole `Stats` object is deterministic.
+    let mut obj = Map::new();
+    obj.insert("total".to_string(), Value::from(stats.total));
+    obj.insert("by_status".to_string(), ordered_map(&stats.by_status));
+    obj.insert("by_priority".to_string(), ordered_map(&stats.by_priority));
+    obj.insert("by_kind".to_string(), ordered_map(&stats.by_kind));
+    obj.insert("blocked".to_string(), Value::from(stats.blocked));
+    obj.insert("ready".to_string(), Value::from(stats.ready));
+    obj.insert(
+        "avg_urgency".to_string(),
+        round_urgency_value(stats.avg_urgency),
+    );
+    obj.insert("by_skills".to_string(), ordered_map(&stats.by_skills));
+    obj.insert("by_assignee".to_string(), ordered_map(&stats.by_assignee));
+    obj.insert(
+        "oldest_open".to_string(),
+        serde_json::to_value(&stats.oldest_open).unwrap_or(Value::Null),
+    );
+
+    Value::Object(obj).to_string()
 }
 
 fn format_stats_compact(stats: &Stats) -> String {
@@ -622,10 +670,49 @@ fn format_stats_compact(stats: &Stats) -> String {
 /// ```
 pub fn format_graph(graph: &GraphOutput, fmt: Format) -> String {
     match fmt {
-        Format::Json => serde_json::to_string(graph).unwrap_or_default(),
+        Format::Json => graph_to_deterministic_json(graph),
         Format::Compact => format_graph_compact(graph),
         Format::Pretty | Format::Oneline => format_graph_dot(graph),
     }
+}
+
+/// Serialize [`GraphOutput`] to JSON with a deterministic urgency-precision
+/// contract.
+///
+/// Node urgency is an `f64` computed fresh from current state, so values like
+/// `9.00019212962963` leak into JSON and make byte-level snapshots flap on
+/// runs that differ only in float noise (issue #139). This rounds each node's
+/// urgency to [`URGENCY_JSON_DECIMALS`] decimal places at the serialization
+/// boundary — the ranking math is untouched, only the rendered precision is
+/// pinned. See `docs/command-contracts.md` for the documented contract.
+fn graph_to_deterministic_json(graph: &GraphOutput) -> String {
+    use serde_json::Value;
+
+    let mut value = serde_json::to_value(graph).unwrap_or(Value::Null);
+    if let Some(nodes) = value.get_mut("nodes").and_then(Value::as_array_mut) {
+        for node in nodes.iter_mut() {
+            if let Some(urg) = node.get("urgency").and_then(Value::as_f64) {
+                node["urgency"] = round_urgency_value(urg);
+            }
+        }
+    }
+    value.to_string()
+}
+
+/// Number of decimal places urgency is rounded to in JSON output. Keeps
+/// parseable formats byte-stable without affecting urgency ranking.
+const URGENCY_JSON_DECIMALS: i32 = 4;
+
+/// Round an urgency `f64` to the JSON precision contract and return it as a
+/// JSON number `Value`. Integral results (e.g. `9.0`) serialize as `9.0`
+/// because the source value is always a float; callers that need it embedded in
+/// an object should insert the returned `Value` directly.
+fn round_urgency_value(urgency: f64) -> serde_json::Value {
+    let factor = 10f64.powi(URGENCY_JSON_DECIMALS);
+    let rounded = (urgency * factor).round() / factor;
+    // serde_json::Number::from_f64 is None only for NaN/Inf; fall back to 0.0.
+    serde_json::Number::from_f64(rounded)
+        .map_or_else(|| serde_json::Value::from(0.0), serde_json::Value::Number)
 }
 
 fn format_graph_compact(graph: &GraphOutput) -> String {

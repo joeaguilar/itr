@@ -1,0 +1,6 @@
+$ itr search zzznotfoundzzz -f json
+--- exit ---
+0
+--- stdout ---
+[]
+--- stderr ---

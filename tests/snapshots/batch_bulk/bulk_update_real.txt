@@ -1,0 +1,6 @@
+$ itr bulk update --priority low --set-priority medium --add-tag triaged
+--- exit ---
+0
+--- stdout ---
+BULK_UPDATE: 1 issues [3]
+--- stderr ---

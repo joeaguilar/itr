@@ -1,0 +1,9 @@
+$ itr batch close
+--- exit ---
+0
+--- stdout ---
+BATCH_CLOSE: 2 items (1 ok, 1 error, 0 review)
+  OK:1
+  NOTE:1 "shipped"
+  ERROR:99 "Issue 99 not found"
+--- stderr ---

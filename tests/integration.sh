@@ -2053,6 +2053,200 @@ rm -rf "$FMT_SRC"
 
 # ─────────────────────────────────────────────
 echo ""
+echo "--- deterministic JSON contracts (stats key order + graph urgency precision) ---"
+# ─────────────────────────────────────────────
+#
+# Regression for issue #139: parseable JSON outputs must be deterministic so
+# byte-level snapshot tests don't flap on semantically-identical data.
+#
+#   (a) `stats -f json` must emit object keys AND nested count-map keys in a
+#       fixed order. Seed two freshly-init'd temp DBs identically and assert
+#       the raw stdout bytes are identical, plus assert the documented key
+#       order explicitly.
+#   (b) `graph -f json` urgency values must honor a fixed precision contract
+#       (<= DET_URG_DECIMALS decimal places), stable across two fresh DBs.
+
+DET_URG_DECIMALS=4
+
+# Seed an identical fixture into a fresh DB. Avoids age/time drift by not
+# relying on wall-clock-sensitive fields for the byte comparison: the two DBs
+# are created back-to-back and seeded with the same script.
+seed_det_db() {
+    local db="$1"
+    ITR_DB_PATH="$db" $ITR init -q >/dev/null
+    # A spread of priorities, kinds, statuses, skills, and a dependency edge so
+    # every nested count-map (by_status / by_priority / by_kind / by_skills /
+    # by_assignee) is exercised and the graph has nodes + an edge with urgency.
+    ITR_DB_PATH="$db" $ITR add "Det critical bug" -p critical -k bug --skills "rust,db" --assigned-to "agent-a" >/dev/null
+    ITR_DB_PATH="$db" $ITR add "Det high feature" -p high -k feature --skills "rust" --assigned-to "agent-b" >/dev/null
+    ITR_DB_PATH="$db" $ITR add "Det low epic" -p low -k epic >/dev/null
+    ITR_DB_PATH="$db" $ITR add "Det medium task" -p medium -k task >/dev/null
+    ITR_DB_PATH="$db" $ITR update 2 -s in-progress >/dev/null
+    ITR_DB_PATH="$db" $ITR depend 4 --on 1 >/dev/null
+}
+
+DET_DIR_A=$(mktemp -d)
+DET_DIR_B=$(mktemp -d)
+seed_det_db "$DET_DIR_A/.itr.db"
+seed_det_db "$DET_DIR_B/.itr.db"
+
+# Capture stats JSON for both DBs to files. We pass these files to python via
+# argv (not stdin): the analysis scripts below use heredocs, which consume
+# stdin, so the JSON must come in as a file argument.
+DET_STATS_A_FILE="$DET_DIR_A/stats.json"
+DET_STATS_B_FILE="$DET_DIR_B/stats.json"
+ITR_DB_PATH="$DET_DIR_A/.itr.db" $ITR stats -f json > "$DET_STATS_A_FILE"
+ITR_DB_PATH="$DET_DIR_B/.itr.db" $ITR stats -f json > "$DET_STATS_B_FILE"
+
+# (a.1) Byte-identical stats JSON across two identically-seeded fresh DBs.
+if cmp -s "$DET_STATS_A_FILE" "$DET_STATS_B_FILE"; then
+    pass "stats -f json byte-identical across two fresh DBs"
+else
+    fail "stats -f json byte-identical across two fresh DBs" \
+        "A=$(cat "$DET_STATS_A_FILE") B=$(cat "$DET_STATS_B_FILE")"
+fi
+
+# (a.2) Top-level object keys appear in a fixed, documented order.
+DET_STATS_TOPKEYS=$(python3 - "$DET_STATS_A_FILE" <<'PY'
+import sys, json
+order = []
+def hook(pairs):
+    order.append([k for k, _ in pairs])
+    return dict(pairs)
+with open(sys.argv[1], encoding="utf-8") as f:
+    json.loads(f.read(), object_pairs_hook=hook)
+# object_pairs_hook fires bottom-up (nested objects first), so the top-level
+# Stats object is the LAST one decoded.
+print(','.join(order[-1]))
+PY
+)
+# serde_json's Map (default build) sorts object keys alphabetically, which is a
+# stable, deterministic order. Assert that exact order.
+assert_eq "stats -f json top-level key order is deterministic" \
+    "avg_urgency,blocked,by_assignee,by_kind,by_priority,by_skills,by_status,oldest_open,ready,total" \
+    "$DET_STATS_TOPKEYS"
+
+# (a.3) Nested count-map keys appear in a fixed (sorted) order — the part that
+#       was nondeterministic under HashMap serialization.
+DET_BY_STATUS_KEYS=$(python3 - "$DET_STATS_A_FILE" <<'PY'
+import sys, json
+captured = {}
+def hook(pairs):
+    d = dict(pairs)
+    # Capture the inner maps by recognising their key signatures.
+    keyset = set(d.keys())
+    if {"open", "in-progress", "done", "wontfix"} <= keyset:
+        captured["by_status"] = [k for k, _ in pairs]
+    if {"critical", "high", "medium", "low"} <= keyset:
+        captured["by_priority"] = [k for k, _ in pairs]
+    if {"bug", "feature", "task", "epic"} <= keyset:
+        captured["by_kind"] = [k for k, _ in pairs]
+    return d
+with open(sys.argv[1], encoding="utf-8") as f:
+    json.loads(f.read(), object_pairs_hook=hook)
+print('|'.join([
+    ','.join(captured.get("by_status", [])),
+    ','.join(captured.get("by_priority", [])),
+    ','.join(captured.get("by_kind", [])),
+]))
+PY
+)
+assert_eq "stats -f json nested count-map keys are sorted/deterministic" \
+    "done,in-progress,open,wontfix|critical,high,low,medium|bug,epic,feature,task" \
+    "$DET_BY_STATUS_KEYS"
+
+# (b) graph -f json urgency precision contract: every node urgency must have at
+#     most DET_URG_DECIMALS decimal places, and be stable across two fresh DBs.
+DET_GRAPH_A_FILE="$DET_DIR_A/graph.json"
+DET_GRAPH_B_FILE="$DET_DIR_B/graph.json"
+ITR_DB_PATH="$DET_DIR_A/.itr.db" $ITR graph --all -f json > "$DET_GRAPH_A_FILE"
+ITR_DB_PATH="$DET_DIR_B/.itr.db" $ITR graph --all -f json > "$DET_GRAPH_B_FILE"
+
+DET_URG_OK=$(python3 - "$DET_GRAPH_A_FILE" "$DET_URG_DECIMALS" <<'PY'
+import sys, json
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+max_dec = int(sys.argv[2])
+bad = []
+for node in data["nodes"]:
+    # repr() yields the shortest round-trip decimal string for the float, so its
+    # fractional digit count reflects the precision serde/json actually emitted.
+    val = node["urgency"]
+    s = repr(val)
+    if "e" in s or "E" in s:
+        bad.append((node["id"], s, "scientific notation"))
+        continue
+    if "." in s:
+        decimals = len(s.split(".", 1)[1])
+        if decimals > max_dec:
+            bad.append((node["id"], s, f"{decimals} decimals"))
+    # Also verify rounding to the contract precision is idempotent (no drift).
+    if round(val, max_dec) != val:
+        bad.append((node["id"], s, "not rounded to contract precision"))
+print("ok" if not bad else "BAD:" + ";".join(f"#{i}={s}({why})" for i, s, why in bad))
+PY
+)
+assert_eq "graph -f json urgency honors fixed precision contract (<= $DET_URG_DECIMALS decimals)" "ok" "$DET_URG_OK"
+
+# (b.2) Same urgency precision determinism across the second fresh DB.
+DET_URG_OK_B=$(python3 - "$DET_GRAPH_B_FILE" "$DET_URG_DECIMALS" <<'PY'
+import sys, json
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+max_dec = int(sys.argv[2])
+bad = []
+for node in data["nodes"]:
+    val = node["urgency"]
+    s = repr(val)
+    if "e" in s or "E" in s:
+        bad.append((node["id"], s, "scientific notation")); continue
+    if "." in s and len(s.split(".", 1)[1]) > max_dec:
+        bad.append((node["id"], s, "too many decimals"))
+    if round(val, max_dec) != val:
+        bad.append((node["id"], s, "not rounded"))
+print("ok" if not bad else "BAD:" + ";".join(f"#{i}={s}({why})" for i, s, why in bad))
+PY
+)
+assert_eq "graph -f json urgency precision stable on second fresh DB" "ok" "$DET_URG_OK_B"
+
+rm -rf "$DET_DIR_A" "$DET_DIR_B"
+
+# ─────────────────────────────────────────────
+# Auto-discovered normalized snapshot contracts (issue #140)
+# ─────────────────────────────────────────────
+#
+# This is the ONLY hook the snapshot harness adds to integration.sh. Each
+# tests/contracts/<area>.sh sources tests/contracts/_lib.sh and registers cases
+# via `snapshot` / `snapshot_seeded`. Those helpers reuse THIS suite's $ITR
+# binary, isolated temp DBs, normalization, and the pass/fail counters above —
+# so contract results fold straight into the totals and the verify gate
+# exercises them.
+#
+# New contract areas are added purely by dropping a new
+# tests/contracts/<area>.sh plus tests/snapshots/<area>/*.txt. Never edit this
+# block to add an area — it loops over every *.sh except _lib.sh automatically.
+CONTRACTS_DIR="$SCRIPT_DIR/tests/contracts"
+if [ -d "$CONTRACTS_DIR" ]; then
+    echo ""
+    echo "==============================="
+    echo "Snapshot contracts (auto-discovered)"
+    echo "==============================="
+    # $ITR is exported so _lib.sh / contract files resolve the same binary.
+    export ITR
+    shopt -s nullglob
+    for contract_file in "$CONTRACTS_DIR"/*.sh; do
+        case "$(basename "$contract_file")" in
+            _lib.sh) continue ;;
+        esac
+        # Source so registered cases use the suite's PASS/FAIL/TESTS counters.
+        # shellcheck source=/dev/null
+        . "$contract_file"
+    done
+    shopt -u nullglob
+fi
+
+# ─────────────────────────────────────────────
+echo ""
 echo "==============================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "==============================="

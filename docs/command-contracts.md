@@ -168,6 +168,15 @@ Commands: `stats`, `summary`.
 - `stats -f json` is a `Stats` object with totals, status/priority/kind maps,
   blocked/ready counts, average urgency, skill and assignee maps, and optional
   oldest-open detail. Compact, pretty, and oneline share labeled compact lines.
+  - **Deterministic JSON contract (issue #139).** `stats -f json` emits a
+    byte-stable object: top-level keys are serialized in alphabetical order, and
+    every nested count map (`by_status`, `by_priority`, `by_kind`, `by_skills`,
+    `by_assignee`) has its keys sorted alphabetically. This holds even though
+    the in-memory `Stats` buckets are `HashMap`s with per-process-randomized
+    iteration order — the JSON is rebuilt at the serialization boundary
+    (`format::stats_to_deterministic_json`). Snapshot harnesses MAY compare
+    `stats -f json` byte-for-byte. The `avg_urgency` field follows the same
+    fixed float-precision contract as graph urgency (below).
 - `summary -f json` is a session summary object with counts, completion
   percent, oldest open issue, in-progress issues, ready issues, and recent
   events. Non-JSON modes share compact narrative lines beginning with
@@ -181,6 +190,128 @@ Command: `graph`.
 - Compact emits `NODE:` and `EDGE:` lines.
 - Pretty emits Graphviz DOT.
 - Oneline currently also emits Graphviz DOT.
+- **Deterministic urgency precision (issue #139).** In `graph -f json`, each
+  node's `urgency` is rounded to a fixed 4 decimal places at the serialization
+  boundary (`format::graph_to_deterministic_json`). Urgency is computed fresh as
+  an `f64`, so the raw value can carry trailing float noise (e.g.
+  `9.00019212962963`); rounding pins the rendered precision without changing the
+  underlying urgency *ranking* math. Snapshot harnesses MAY treat node
+  `urgency` as byte-stable to 4 decimals; the same precision contract applies to
+  `stats -f json`'s `avg_urgency`.
+
+## JSON Determinism And Snapshotting
+
+For byte-level snapshot testing of parseable (`-f json`) output, the following
+fields have an explicit determinism contract rather than being compared
+structurally:
+
+| Output | Field(s) | Contract |
+| --- | --- | --- |
+| `stats -f json` | top-level object keys | Alphabetical key order (byte-stable). |
+| `stats -f json` | `by_status`, `by_priority`, `by_kind`, `by_skills`, `by_assignee` | Nested count-map keys sorted alphabetically (byte-stable). |
+| `stats -f json` | `avg_urgency` | Float rounded to 4 decimal places. |
+| `graph -f json` | each node `urgency` | Float rounded to 4 decimal places. |
+
+All other JSON fields preserve their serde-derived struct field order, which is
+already deterministic. List/array element order follows the underlying query
+sort and is deterministic for a fixed database state. A regression test
+(`tests/integration.sh`, "deterministic JSON contracts") seeds two freshly
+created temp databases identically and asserts `stats -f json` is byte-identical
+across them and that `graph -f json` urgency honors the 4-decimal precision
+contract.
+
+## Normalized Output Snapshot Harness
+
+Issue #140 adds a checked-in, auto-discovery snapshot harness so that output
+changes (compact, JSON, pretty, stderr, and exit status) are reviewed
+deliberately as git diffs against expected baselines. It is dependency-light
+(pure Bash + `sed` + `diff`) and runs against the same `itr` binary the
+integration suite uses, so `just verify` exercises it.
+
+### Layout
+
+```
+tests/
+  integration.sh                # auto-discovers and runs contract files at the end
+  contracts/
+    _lib.sh                     # shared harness library (sourced, never run)
+    example.sh                  # example area (the harness self-proof)
+    <area>.sh                   # one file per area; sources _lib.sh, registers cases
+  snapshots/
+    example/<case>.txt          # expected normalized snapshot per case
+    <area>/<case>.txt
+```
+
+### Snapshot file format
+
+Each `tests/snapshots/<area>/<case>.txt` is the normalized capture of one
+command, with labeled sections so a diff pinpoints the channel that drifted:
+
+```
+$ itr <args...>
+--- exit ---
+<exit status>
+--- stdout ---
+<normalized stdout>
+--- stderr ---
+<normalized stderr>
+```
+
+### Normalizations applied (to both stdout and stderr)
+
+| Entropy                             | Replaced with  |
+| ----------------------------------- | -------------- |
+| UTC ISO-8601 timestamps             | `<TS>`         |
+| mktemp temp paths (per-case DB dir) | `<TMP>`        |
+| `127.0.0.1:PORT` / `localhost:PORT` | `:<PORT>`      |
+| UI session tokens (`token=…`, `X-ITR-Token:`) | `<TOKEN>` |
+| version describe/dirty suffix (`itr v2.9.6-1-gdb7e324`) | `itr X.Y.Z` |
+
+Keep snapshotted commands deterministic — the same determinism rules above
+(sorted maps, fixed float precision, no un-normalized run-varying fields)
+apply. If a command emits entropy the table does not cover, extend
+`contract_normalize` in `tests/contracts/_lib.sh` rather than special-casing a
+snapshot.
+
+### How to add a new contract area
+
+1. Create `tests/contracts/<area>.sh` that sources `_lib.sh` relative to
+   itself and registers cases:
+
+   ```bash
+   #!/usr/bin/env bash
+   CONTRACT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+   . "$CONTRACT_DIR/_lib.sh"
+
+   echo ""
+   echo "--- contract: <area> ---"
+
+   # Each case runs in its own freshly-init'd temp DB. The literal `--`
+   # separates harness positionals from the itr argv.
+   snapshot <area> <case>                       -- <itr args...>
+   snapshot <area> <case_with_stdin> '<stdin json>' -- batch add -f json
+
+   # Seed fixtures first when the assertion needs existing issues:
+   seed_<area>() { ITR_DB_PATH="$1" "$ITR" add "Fixture" >/dev/null 2>&1; }
+   snapshot_seeded <area> <case> seed_<area>    -- get 1
+   ```
+
+2. Generate baselines, then review them in git:
+
+   ```bash
+   UPDATE_SNAPSHOTS=1 ./tests/integration.sh      # writes tests/snapshots/<area>/*.txt
+   git diff tests/snapshots/<area>/                # eyeball the captured bytes
+   ./tests/integration.sh                          # assert mode — must be green
+   ```
+
+3. Commit `tests/contracts/<area>.sh` and `tests/snapshots/<area>/*.txt`.
+   **Never edit `tests/integration.sh`** — its end-of-suite loop discovers
+   every `tests/contracts/*.sh` (except `_lib.sh`) automatically and folds the
+   results into the suite totals.
+
+On a mismatch the harness prints a labeled `diff -u` naming the command, args,
+exit status, stdout, and stderr, then exits non-zero through the normal suite
+reporting.
 
 ### Events
 
@@ -299,3 +430,54 @@ stdout is JSONL, and `--export-format json` stdout is a JSON array.
 | `search` | Query terms use AND semantics across indexed/searchable fields; supports filters and limit. | Search results or empty result. |
 | `wip`, `current` | Shorthand for in-progress issue list, including blocked issues. | Issue list. |
 | `show` | With ID, same contract as `get`; without ID, lists non-terminal issues including blocked; `--all` includes terminal issues. | Issue detail or issue list. |
+
+## Historical Baseline Output Diff (Developer Tool)
+
+The snapshot harness above (issue #140) is the *gate*: it asserts current output
+against checked-in baselines on every run of `tests/integration.sh`. Issue #145
+adds a complementary **developer tool**, `tests/tools/baseline-diff.sh`, for a
+different question: *how did the output standard change versus a released or
+remote ref?* It is intentionally **not** part of the verify gate.
+
+| Question | Use |
+| --- | --- |
+| "Did current output drift from its checked-in baseline?" | Snapshot harness (`tests/contracts/*.sh`), run by the gate. |
+| "How does current output differ from `origin/main` / a tag / an old commit?" | `tests/tools/baseline-diff.sh` (on demand). |
+
+When you deliberately change the CLI output contract (a new field, a reworded
+compact line, a changed exit status), the workflow is:
+
+1. Regenerate snapshot baselines and review them as a git diff
+   (`UPDATE_SNAPSHOTS=1 ./tests/integration.sh`, then `git diff tests/snapshots/`).
+   This keeps the *gate* honest.
+2. Optionally run `tests/tools/baseline-diff.sh --baseline origin/main` to get a
+   normalized, command-by-command report of the delta against the released ref —
+   useful for changelog notes and for confirming the change matches intent.
+
+The tool's contract:
+
+- **Inputs.** `--baseline <ref>` (required) plus a current target: by default it
+  builds the working tree, or `--target-binary <path>` / `--baseline-binary
+  <path>` to use prebuilt binaries.
+- **Isolation.** The baseline ref is built in a detached `git worktree` under a
+  temp dir with an isolated `CARGO_TARGET_DIR`; it never touches the user's
+  working tree, index, or HEAD, and cleans up on exit.
+- **Dirty-tree guard.** It refuses (exit 3) on a dirty working tree unless
+  `--allow-dirty` is given, because "current" is ambiguous with uncommitted
+  changes.
+- **Normalization.** It reuses `contract_normalize` from
+  `tests/contracts/_lib.sh`, so runtime entropy (`<TS>`, `<TMP>`, `:<PORT>`,
+  `<TOKEN>`, `itr X.Y.Z`) is stripped identically to the snapshot gate.
+- **Report.** Plain text with a header (baseline ref + binary identities), a
+  per-command summary table marking each command `SAME`/`DIFF` and flagging
+  `*CHANGED*` exit statuses, and, for each changed command, a normalized
+  `diff -u` plus an exit-status delta line.
+- **Exit codes.** `0` ran successfully (differences are data, not failure);
+  `2` usage/argument error; `3` refused dirty tree; `4` environment error (not a
+  git repo, ref not found, build failed).
+
+It is covered by the auto-discovered smoke test
+`tests/contracts/baseline_tool.sh`, which the verify gate runs. The smoke test
+exercises the tool's control flow (dirty guard, argument validation, happy-path
+report structure, and a stub-vs-real diff proving changed commands / changed
+exit status / unified diffs) without a slow full cross-ref build.

@@ -1,0 +1,7 @@
+$ itr bulk close --priority high --reason done
+--- exit ---
+0
+--- stdout ---
+BULK_CLOSE: 1 issues [1]
+UNBLOCKED:2 "Dependent"
+--- stderr ---

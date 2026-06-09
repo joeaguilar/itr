@@ -1,0 +1,6 @@
+$ itr bulk close --priority high --dry-run
+--- exit ---
+0
+--- stdout ---
+BULK_CLOSE: 2 issues [1,2] (dry-run)
+--- stderr ---

@@ -1,0 +1,9 @@
+$ itr list -f pretty
+--- exit ---
+0
+--- stdout ---
+   # |   Urg | Status      | Pri      | Kind    | Assignee   | Title                                    | Blocked
+-----|-------|-------------|----------|---------|------------|------------------------------------------|--------
+   1 |  11.0 | open        | high     | bug     |            | Fixture issue                            | 
+   2 |   3.0 | open        | low      | task    |            | Another                                  | 
+--- stderr ---

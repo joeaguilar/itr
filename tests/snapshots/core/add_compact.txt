@@ -1,0 +1,13 @@
+$ itr add New work -p high -k bug -c context here -a done when green
+--- exit ---
+0
+--- stdout ---
+ID:1 STATUS:open PRIORITY:high KIND:bug URGENCY:9.0
+TITLE: New work
+CONTEXT: context here
+ACCEPTANCE: done when green
+CREATED: <TS>
+UPDATED: <TS>
+--- URGENCY BREAKDOWN ---
+priority.high=6.0 kind.bug=2.0 has_acceptance=1.0
+--- stderr ---

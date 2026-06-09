@@ -1,0 +1,6 @@
+$ itr --version
+--- exit ---
+0
+--- stdout ---
+itr X.Y.Z
+--- stderr ---

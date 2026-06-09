@@ -1,0 +1,6 @@
+$ itr note 1 Investigating --agent worker
+--- exit ---
+0
+--- stdout ---
+NOTE:1 ISSUE:1 (worker) Investigating
+--- stderr ---

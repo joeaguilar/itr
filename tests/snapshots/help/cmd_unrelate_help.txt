@@ -1,0 +1,19 @@
+$ itr unrelate --help
+--- exit ---
+0
+--- stdout ---
+Remove a relation between two issues
+
+Usage: itr unrelate [OPTIONS] --from <FROM> <ID>
+
+Arguments:
+  <ID>  Source issue ID
+
+Options:
+      --from <FROM>      Target issue ID
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

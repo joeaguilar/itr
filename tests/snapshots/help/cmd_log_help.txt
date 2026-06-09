@@ -1,0 +1,21 @@
+$ itr log --help
+--- exit ---
+0
+--- stdout ---
+View event history (audit log)
+
+Usage: itr log [OPTIONS] [ID]
+
+Arguments:
+  [ID]  Issue ID (omit for recent events across all issues)
+
+Options:
+  -n, --limit <LIMIT>    Max events to show [default: 50]
+      --since <SINCE>    Only show events since this timestamp (ISO 8601)
+      --agent <AGENT>    Filter by agent name
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

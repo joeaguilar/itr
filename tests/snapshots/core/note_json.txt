@@ -1,0 +1,6 @@
+$ itr note 1 Investigating --agent worker -f json
+--- exit ---
+0
+--- stdout ---
+{"id":1,"issue_id":1,"content":"Investigating","agent":"worker","created_at":"<TS>"}
+--- stderr ---

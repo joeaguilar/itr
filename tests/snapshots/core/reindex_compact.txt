@@ -1,0 +1,6 @@
+$ itr reindex
+--- exit ---
+0
+--- stdout ---
+REINDEX: Rebuilt FTS index for 2 issues
+--- stderr ---

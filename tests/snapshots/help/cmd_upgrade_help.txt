@@ -1,0 +1,17 @@
+$ itr upgrade --help
+--- exit ---
+0
+--- stdout ---
+Rebuild and reinstall itr from source
+
+Usage: itr upgrade [OPTIONS]
+
+Options:
+      --no-pull                  Skip git pull (rebuild current source only)
+      --source-dir <SOURCE_DIR>  Override source directory
+  -f, --format <FORMAT>          Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>                  Override database path (skips walk-up search)
+  -q, --quiet                    Suppress non-essential output
+      --fields <FIELDS>          Comma-separated list of fields to include in JSON output
+  -h, --help                     Print help
+--- stderr ---

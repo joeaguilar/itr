@@ -1,0 +1,6 @@
+$ itr summary -f json
+--- exit ---
+0
+--- stdout ---
+{"total":2,"done":0,"open":2,"in_progress":0,"blocked":0,"ready":2,"completion_pct":0.0,"oldest_open":{"id":1,"title":"Fixture issue","days_old":<DAYS>},"in_progress_issues":[],"ready_issues":[{"id":1,"title":"Fixture issue","priority":"high","kind":"bug","urgency":11.0,"assigned_to":""},{"id":2,"title":"Another","priority":"low","kind":"task","urgency":3.0,"assigned_to":""}],"recent_events":[]}
+--- stderr ---

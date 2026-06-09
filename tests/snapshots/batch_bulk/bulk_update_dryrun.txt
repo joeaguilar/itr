@@ -1,0 +1,6 @@
+$ itr bulk update --priority high --set-status in-progress --dry-run
+--- exit ---
+0
+--- stdout ---
+BULK_UPDATE: 2 issues [1,2] (dry-run)
+--- stderr ---

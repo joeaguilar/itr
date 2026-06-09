@@ -1,0 +1,19 @@
+$ itr deps --help
+--- exit ---
+0
+--- stdout ---
+Add a dependency (issue becomes blocked by --on)
+
+Usage: itr depend [OPTIONS] --on <ON> <ID>
+
+Arguments:
+  <ID>  Issue ID that will be blocked
+
+Options:
+      --on <ON>          Issue ID that blocks it
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

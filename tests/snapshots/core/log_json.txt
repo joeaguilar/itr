@@ -1,0 +1,6 @@
+$ itr log 1 -f json
+--- exit ---
+0
+--- stdout ---
+[{"id":1,"issue_id":1,"field":"status","old_value":"open","new_value":"in-progress","agent":"","created_at":"<TS>"}]
+--- stderr ---

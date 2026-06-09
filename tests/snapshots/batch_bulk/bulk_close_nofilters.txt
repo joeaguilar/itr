@@ -1,0 +1,7 @@
+$ itr bulk close
+--- exit ---
+1
+--- stdout ---
+
+--- stderr ---
+ERROR: At least one filter is required for bulk operations

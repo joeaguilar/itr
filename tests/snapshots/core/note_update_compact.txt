@@ -1,0 +1,6 @@
+$ itr note-update 1 Edited content
+--- exit ---
+0
+--- stdout ---
+NOTE:1 ISSUE:1 (seed) Edited content
+--- stderr ---

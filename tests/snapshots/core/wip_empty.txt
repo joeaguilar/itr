@@ -1,0 +1,6 @@
+$ itr wip -f json
+--- exit ---
+0
+--- stdout ---
+[]
+--- stderr ---

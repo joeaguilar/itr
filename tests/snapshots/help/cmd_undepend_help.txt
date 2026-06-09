@@ -1,0 +1,19 @@
+$ itr undepend --help
+--- exit ---
+0
+--- stdout ---
+Remove a dependency
+
+Usage: itr undepend [OPTIONS] --on <ON> <ID>
+
+Arguments:
+  <ID>  Issue ID that was blocked
+
+Options:
+      --on <ON>          Issue ID that was blocking it
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

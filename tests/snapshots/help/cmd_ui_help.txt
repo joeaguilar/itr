@@ -1,0 +1,18 @@
+$ itr ui --help
+--- exit ---
+0
+--- stdout ---
+Start a local browser UI for editing the itr database
+
+Usage: itr ui [OPTIONS]
+
+Options:
+      --port <PORT>      Localhost port to bind. Use 0 to auto-select an available port [default: 0]
+      --no-open          Print the URL without opening the default browser
+      --allow-dangerous  Enable the raw SQL editor and /api/sql route
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

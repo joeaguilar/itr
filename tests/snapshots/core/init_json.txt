@@ -1,0 +1,6 @@
+$ itr init -f json
+--- exit ---
+0
+--- stdout ---
+{"action":"init","created":false,"path":"<TMP>/.itr.db"}
+--- stderr ---

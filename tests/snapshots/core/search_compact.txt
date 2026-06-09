@@ -1,0 +1,9 @@
+$ itr search Fixture
+--- exit ---
+0
+--- stdout ---
+ID:1 STATUS:open PRIORITY:high KIND:bug URGENCY:11.0 MATCHED:title
+TITLE: Fixture issue
+ACCEPTANCE: acc
+SNIPPET[title]: **Fixture** issue
+--- stderr ---

@@ -1,0 +1,6 @@
+$ itr close 1 Fixed it -f json
+--- exit ---
+0
+--- stdout ---
+{"acceptance":"acc","assigned_to":"","blocked_by":[],"blocks":[],"close_reason":"Fixed it","context":"ctx","created_at":"<TS>","files":[],"id":1,"is_blocked":false,"kind":"bug","notes":[],"parent_id":null,"priority":"high","skills":[],"status":"done","tags":[],"title":"Fixture issue","updated_at":"<TS>","urgency":11.0,"urgency_breakdown":{"components":[["priority.high",6.0],["kind.bug",2.0],["age",2.0],["has_acceptance",1.0]]}}
+--- stderr ---

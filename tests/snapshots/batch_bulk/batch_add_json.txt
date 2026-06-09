@@ -1,0 +1,6 @@
+$ itr batch add -f json
+--- exit ---
+0
+--- stdout ---
+{"action":"batch_add","results":[{"id":1,"outcome":"ok","issue":{"id":1,"title":"A","status":"open","priority":"high","kind":"task","context":"","files":[],"tags":[],"skills":[],"acceptance":"","parent_id":null,"assigned_to":"","close_reason":"","created_at":"<TS>","updated_at":"<TS>","urgency":6.0,"blocked_by":[],"blocks":[],"is_blocked":false,"notes":[],"urgency_breakdown":{"components":[["priority.high",6.0],["kind.task",0.0],["age",0.0]]}}},{"id":2,"outcome":"ok","issue":{"id":2,"title":"B","status":"open","priority":"medium","kind":"task","context":"","files":[],"tags":[],"skills":[],"acceptance":"","parent_id":null,"assigned_to":"","close_reason":"","created_at":"<TS>","updated_at":"<TS>","urgency":3.0,"blocked_by":[],"blocks":[],"is_blocked":false,"notes":[],"urgency_breakdown":{"components":[["priority.medium",3.0],["kind.task",0.0],["age",0.0]]}}}],"summary":{"total":2,"ok":2,"error":0,"review":0}}
+--- stderr ---

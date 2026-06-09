@@ -1,0 +1,56 @@
+$ itr --help
+--- exit ---
+0
+--- stdout ---
+Agent-first issue tracker CLI
+
+Usage: itr [OPTIONS] <COMMAND>
+
+Commands:
+  init         Initialize a new .itr.db database
+  add          Create a new issue [aliases: create]
+  list         List issues with filtering
+  get          Get full detail for a single issue
+  update       Update an issue
+  close        Close an issue (shorthand for update --status done)
+  note         Append a note to an issue
+  note-delete  Delete a note by ID
+  note-update  Update a note's content
+  depend       Add a dependency (issue becomes blocked by --on) [aliases: deps]
+  undepend     Remove a dependency
+  next         Get the highest-urgency unblocked issue
+  ready        List all unblocked, non-terminal issues by urgency
+  batch        Per-item operations from JSON stdin (add/close/update/note with individual control)
+  bulk         Filter-based operations (same change to all matching issues)
+  graph        Output the dependency graph
+  stats        Project health summary
+  summary      Project narrative for session start (combines stats + ready + recent activity)
+  export       Export the full database
+  import       Import issues from JSONL or JSON
+  doctor       Run database integrity checks
+  ui           Start a local browser UI for editing the itr database
+  config       Manage per-project configuration
+  agent-info   Print the full agent usage guide (no database required) [aliases: getting-started]
+  skill        Emit or install the Claude Code skill that teaches agents to use itr
+  schema       Dump the current database schema
+  upgrade      Rebuild and reinstall itr from source
+  claim        Claim the highest-urgency unblocked issue (shorthand for next --claim) [aliases: start]
+  assign       Assign an issue to an agent
+  unassign     Unassign an issue
+  log          View event history (audit log)
+  relate       Create a relation between two issues
+  unrelate     Remove a relation between two issues
+  reindex      Rebuild the full-text search index
+  search       Search issues by text across all fields
+  wip          Show in-progress issues (shorthand for list -s in-progress) [aliases: current]
+  show         Show issues or get detail for a single issue
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+  -V, --version          Print version
+--- stderr ---

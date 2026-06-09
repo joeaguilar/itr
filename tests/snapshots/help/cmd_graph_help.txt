@@ -1,0 +1,16 @@
+$ itr graph --help
+--- exit ---
+0
+--- stdout ---
+Output the dependency graph
+
+Usage: itr graph [OPTIONS]
+
+Options:
+      --all              Include resolved issues
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

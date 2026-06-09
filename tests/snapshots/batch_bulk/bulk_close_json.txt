@@ -1,0 +1,6 @@
+$ itr bulk close --priority high -f json
+--- exit ---
+0
+--- stdout ---
+{"action":"bulk_close","count":2,"ids":[1,2],"dry_run":false}
+--- stderr ---

@@ -1,0 +1,16 @@
+$ itr export --help
+--- exit ---
+0
+--- stdout ---
+Export the full database
+
+Usage: itr export [OPTIONS]
+
+Options:
+      --export-format <EXPORT_FORMAT>  Export format: jsonl|json [default: jsonl]
+  -f, --format <FORMAT>                Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>                        Override database path (skips walk-up search)
+  -q, --quiet                          Suppress non-essential output
+      --fields <FIELDS>                Comma-separated list of fields to include in JSON output
+  -h, --help                           Print help
+--- stderr ---

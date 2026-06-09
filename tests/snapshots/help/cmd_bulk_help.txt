@@ -1,0 +1,20 @@
+$ itr bulk --help
+--- exit ---
+0
+--- stdout ---
+Filter-based operations (same change to all matching issues)
+
+Usage: itr bulk [OPTIONS] <COMMAND>
+
+Commands:
+  close   Close all issues matching filters
+  update  Update fields on all issues matching filters
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

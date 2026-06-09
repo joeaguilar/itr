@@ -1,0 +1,8 @@
+$ itr wip
+--- exit ---
+0
+--- stdout ---
+ID:1 STATUS:in-progress PRIORITY:high KIND:bug URGENCY:15.0
+TITLE: Fixture issue
+ACCEPTANCE: acc
+--- stderr ---

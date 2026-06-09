@@ -1,0 +1,6 @@
+$ itr relate 1 --to 2
+--- exit ---
+0
+--- stdout ---
+RELATION:created 1 -> 2 (related)
+--- stderr ---

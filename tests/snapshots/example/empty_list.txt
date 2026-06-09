@@ -1,0 +1,6 @@
+$ itr list -f json
+--- exit ---
+0
+--- stdout ---
+[]
+--- stderr ---

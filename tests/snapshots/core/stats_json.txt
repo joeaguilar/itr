@@ -1,0 +1,6 @@
+$ itr stats -f json
+--- exit ---
+0
+--- stdout ---
+{"avg_urgency":7.0,"blocked":0,"by_assignee":{},"by_kind":{"bug":1,"epic":0,"feature":0,"task":1},"by_priority":{"critical":0,"high":1,"low":1,"medium":0},"by_skills":{},"by_status":{"done":0,"in-progress":0,"open":2,"wontfix":0},"oldest_open":{"days_old":<DAYS>,"id":1,"title":"Fixture issue"},"ready":2,"total":2}
+--- stderr ---

@@ -1,0 +1,8 @@
+$ itr export
+--- exit ---
+0
+--- stdout ---
+{"issue":{"id":1,"title":"High one","status":"open","priority":"high","kind":"task","context":"","files":[],"tags":[],"skills":[],"acceptance":"","parent_id":null,"assigned_to":"","close_reason":"","created_at":"<TS>","updated_at":"<TS>"},"notes":[],"blocked_by":[],"events":[],"relations":[]}
+{"issue":{"id":2,"title":"High two","status":"open","priority":"high","kind":"task","context":"","files":[],"tags":[],"skills":[],"acceptance":"","parent_id":null,"assigned_to":"","close_reason":"","created_at":"<TS>","updated_at":"<TS>"},"notes":[],"blocked_by":[],"events":[],"relations":[]}
+{"issue":{"id":3,"title":"Low one","status":"open","priority":"low","kind":"task","context":"","files":[],"tags":[],"skills":[],"acceptance":"","parent_id":null,"assigned_to":"","close_reason":"","created_at":"<TS>","updated_at":"<TS>"},"notes":[],"blocked_by":[],"events":[],"relations":[]}
+--- stderr ---

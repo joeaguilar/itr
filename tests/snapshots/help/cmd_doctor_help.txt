@@ -1,0 +1,16 @@
+$ itr doctor --help
+--- exit ---
+0
+--- stdout ---
+Run database integrity checks
+
+Usage: itr doctor [OPTIONS]
+
+Options:
+      --fix              Auto-fix safe issues
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

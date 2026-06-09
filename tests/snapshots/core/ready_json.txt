@@ -1,0 +1,6 @@
+$ itr ready -f json
+--- exit ---
+0
+--- stdout ---
+[{"id":1,"title":"Fixture issue","status":"open","priority":"high","kind":"bug","urgency":11.0,"is_blocked":false,"blocked_by":[],"tags":[],"files":[],"skills":[],"acceptance":"acc","assigned_to":"","created_at":"<TS>","updated_at":"<TS>"},{"id":2,"title":"Another","status":"open","priority":"low","kind":"task","urgency":3.0,"is_blocked":false,"blocked_by":[],"tags":[],"files":[],"skills":[],"acceptance":"","assigned_to":"","created_at":"<TS>","updated_at":"<TS>"}]
+--- stderr ---

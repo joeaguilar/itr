@@ -1,0 +1,16 @@
+$ itr init --help
+--- exit ---
+0
+--- stdout ---
+Initialize a new .itr.db database
+
+Usage: itr init [OPTIONS]
+
+Options:
+      --agents-md        Also append itr instructions to AGENTS.md
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

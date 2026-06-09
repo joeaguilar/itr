@@ -1,0 +1,19 @@
+$ itr show --help
+--- exit ---
+0
+--- stdout ---
+Show issues or get detail for a single issue
+
+Usage: itr show [OPTIONS] [ID]
+
+Arguments:
+  [ID]  Issue ID (omit to list all non-terminal issues)
+
+Options:
+      --all              Include all statuses (done, wontfix)
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

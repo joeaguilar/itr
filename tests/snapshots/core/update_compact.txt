@@ -1,0 +1,13 @@
+$ itr update 1 -s in-progress
+--- exit ---
+0
+--- stdout ---
+ID:1 STATUS:in-progress PRIORITY:high KIND:bug URGENCY:15.0
+TITLE: Fixture issue
+CONTEXT: ctx
+ACCEPTANCE: acc
+CREATED: <TS>
+UPDATED: <TS>
+--- URGENCY BREAKDOWN ---
+priority.high=6.0 kind.bug=2.0 age=2.0 in_progress=4.0 has_acceptance=1.0
+--- stderr ---

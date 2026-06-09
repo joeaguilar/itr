@@ -1,0 +1,25 @@
+$ itr bulk update --help
+--- exit ---
+0
+--- stdout ---
+Update fields on all issues matching filters
+
+Usage: itr bulk update [OPTIONS]
+
+Options:
+      --set-status <SET_STATUS>      New status
+      --set-priority <SET_PRIORITY>  New priority
+      --add-tag <ADD_TAG>            Add a tag to matched issues
+      --status <STATUS>              Filter by status [aliases: --filter-status]
+      --priority <PRIORITY>          Filter by priority [aliases: --filter-priority]
+      --kind <KIND>                  Filter by kind
+      --tag <TAG>                    Filter by tag
+      --skill <SKILL>                Filter by skill
+      --assigned-to <ASSIGNED_TO>    Filter by assignee
+      --dry-run                      Preview without applying changes
+  -f, --format <FORMAT>              Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>                      Override database path (skips walk-up search)
+  -q, --quiet                        Suppress non-essential output
+      --fields <FIELDS>              Comma-separated list of fields to include in JSON output
+  -h, --help                         Print help
+--- stderr ---

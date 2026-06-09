@@ -1,0 +1,39 @@
+$ itr update --help
+--- exit ---
+0
+--- stdout ---
+Update an issue
+
+Usage: itr update [OPTIONS] <ID>
+
+Arguments:
+  <ID>  Issue ID
+
+Options:
+  -s, --status <STATUS>              New status
+  -p, --priority <PRIORITY>          New priority
+  -k, --kind <KIND>                  New kind
+      --title <TITLE>                New title
+  -c, --context <CONTEXT>            Replace context
+      --files <FILES>                Replace files list (comma-separated)
+      --file <FILE>                  Replace file (repeatable)
+      --tags <TAGS>                  Replace tags list (comma-separated)
+  -t, --tag <TAG>                    Replace tag (repeatable)
+      --skills <SKILLS>              Replace skills list (comma-separated)
+      --skill <SKILL>                Replace skill (repeatable)
+  -a, --acceptance <ACCEPTANCE>      Replace acceptance criteria
+      --parent <PARENT>              Set parent epic
+      --no-parent                    Clear parent epic (sets `parent_id` to NULL)
+      --assigned-to <ASSIGNED_TO>    Assign to agent
+      --add-tag <ADD_TAG>            Append a tag (repeatable)
+      --remove-tag <REMOVE_TAG>      Remove a tag (repeatable)
+      --add-file <ADD_FILE>          Append a file (repeatable)
+      --remove-file <REMOVE_FILE>    Remove a file (repeatable)
+      --add-skill <ADD_SKILL>        Append a skill (repeatable)
+      --remove-skill <REMOVE_SKILL>  Remove a skill (repeatable)
+  -f, --format <FORMAT>              Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>                      Override database path (skips walk-up search)
+  -q, --quiet                        Suppress non-essential output
+      --fields <FIELDS>              Comma-separated list of fields to include in JSON output
+  -h, --help                         Print help
+--- stderr ---

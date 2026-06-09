@@ -1,0 +1,6 @@
+$ itr note-delete 1
+--- exit ---
+0
+--- stdout ---
+DELETED NOTE:1 ISSUE:1
+--- stderr ---

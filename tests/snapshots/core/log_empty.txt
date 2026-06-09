@@ -1,0 +1,6 @@
+$ itr log -f json
+--- exit ---
+0
+--- stdout ---
+[]
+--- stderr ---

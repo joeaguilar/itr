@@ -1,0 +1,38 @@
+$ itr skill install --help
+--- exit ---
+0
+--- stdout ---
+Write SKILL.md into the skills directory
+
+Usage: itr skill install [OPTIONS]
+
+Options:
+      --scope <SCOPE>
+          Install scope: user (~/.claude/skills/itr/) or project (./.claude/skills/itr/)
+
+          Possible values:
+          - user:    ~/.claude/skills/itr/SKILL.md
+          - project: ./.claude/skills/itr/SKILL.md
+          
+          [default: user]
+
+      --force
+          Overwrite an existing SKILL.md
+
+  -f, --format <FORMAT>
+          Output format: compact|json|pretty|oneline
+          
+          [default: compact]
+
+      --db <DB>
+          Override database path (skips walk-up search)
+
+  -q, --quiet
+          Suppress non-essential output
+
+      --fields <FIELDS>
+          Comma-separated list of fields to include in JSON output
+
+  -h, --help
+          Print help (see a summary with '-h')
+--- stderr ---

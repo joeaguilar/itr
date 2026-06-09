@@ -1,0 +1,10 @@
+$ itr batch update
+--- exit ---
+0
+--- stdout ---
+BATCH_UPDATE: 3 items (1 ok, 1 error, 1 review)
+  OK:1
+  REVIEW:2
+  NOTE:2 "priority 'bogus' not recognized, kept 'medium'. Valid: critical, high, medium, low"
+  ERROR:99 "Issue 99 not found"
+--- stderr ---

@@ -1,0 +1,6 @@
+$ itr claim -f json
+--- exit ---
+0
+--- stdout ---
+{"id":1,"title":"Fixture issue","status":"in-progress","priority":"high","kind":"bug","context":"ctx","files":[],"tags":[],"skills":[],"acceptance":"acc","parent_id":null,"assigned_to":"","close_reason":"","created_at":"<TS>","updated_at":"<TS>","urgency":15.0,"blocked_by":[],"blocks":[],"is_blocked":false,"notes":[],"urgency_breakdown":{"components":[["priority.high",6.0],["kind.bug",2.0],["age",2.0],["in_progress",4.0],["has_acceptance",1.0]]}}
+--- stderr ---

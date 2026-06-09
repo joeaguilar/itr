@@ -1,0 +1,20 @@
+$ itr skill --help
+--- exit ---
+0
+--- stdout ---
+Emit or install the Claude Code skill that teaches agents to use itr
+
+Usage: itr skill [OPTIONS] [COMMAND]
+
+Commands:
+  install  Write SKILL.md into the skills directory
+  path     Print the install target path without writing
+  help     Print this message or the help of the given subcommand(s)
+
+Options:
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

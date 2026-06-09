@@ -1,0 +1,6 @@
+$ itr note-delete 1 -f json
+--- exit ---
+0
+--- stdout ---
+{"id":1,"issue_id":1,"content":"original note","agent":"seed","created_at":"<TS>"}
+--- stderr ---

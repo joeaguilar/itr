@@ -1,0 +1,6 @@
+$ itr note-update 1 Edited content -f json
+--- exit ---
+0
+--- stdout ---
+{"id":1,"issue_id":1,"content":"Edited content","agent":"seed","created_at":"<TS>"}
+--- stderr ---

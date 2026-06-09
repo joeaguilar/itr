@@ -1,0 +1,24 @@
+$ itr bulk close --help
+--- exit ---
+0
+--- stdout ---
+Close all issues matching filters
+
+Usage: itr bulk close [OPTIONS]
+
+Options:
+      --reason <REASON>            Close reason
+      --wontfix                    Close as wontfix instead of done
+      --status <STATUS>            Filter by status
+      --priority <PRIORITY>        Filter by priority
+      --kind <KIND>                Filter by kind
+      --tag <TAG>                  Filter by tag
+      --skill <SKILL>              Filter by skill
+      --assigned-to <ASSIGNED_TO>  Filter by assignee
+      --dry-run                    Preview without applying changes
+  -f, --format <FORMAT>            Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>                    Override database path (skips walk-up search)
+  -q, --quiet                      Suppress non-essential output
+      --fields <FIELDS>            Comma-separated list of fields to include in JSON output
+  -h, --help                       Print help
+--- stderr ---

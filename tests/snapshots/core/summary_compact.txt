@@ -1,0 +1,10 @@
+$ itr summary
+--- exit ---
+0
+--- stdout ---
+PROJECT: 2 issues, 0 done (0%), 0 in-progress, 2 open (2 ready, 0 blocked)
+READY:
+  #1 high bug "Fixture issue" (urgency: 11.0)
+  #2 low task "Another" (urgency: 3.0)
+OLDEST-OPEN: #1 "Fixture issue" (<DAYS> days)
+--- stderr ---

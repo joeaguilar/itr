@@ -1,0 +1,21 @@
+$ itr start --help
+--- exit ---
+0
+--- stdout ---
+Claim the highest-urgency unblocked issue (shorthand for next --claim)
+
+Usage: itr claim [OPTIONS] [ID]
+
+Arguments:
+  [ID]  Optional issue ID to claim directly
+
+Options:
+      --skill <SKILL>              Filter by skill (repeatable, AND logic)
+      --agent <AGENT>              Agent name for assignment (falls back to `ITR_AGENT` env var)
+      --assigned-to <ASSIGNED_TO>  Filter by assignee
+  -f, --format <FORMAT>            Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>                    Override database path (skips walk-up search)
+  -q, --quiet                      Suppress non-essential output
+      --fields <FIELDS>            Comma-separated list of fields to include in JSON output
+  -h, --help                       Print help
+--- stderr ---

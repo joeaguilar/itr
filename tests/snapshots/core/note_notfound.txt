@@ -1,0 +1,7 @@
+$ itr note 999 nope
+--- exit ---
+1
+--- stdout ---
+
+--- stderr ---
+ERROR: Issue 999 not found

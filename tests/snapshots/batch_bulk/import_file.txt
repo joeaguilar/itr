@@ -1,0 +1,7 @@
+$ itr import --file /tmp/itr-batchbulk-tmp-importfile/import.jsonl
+--- exit ---
+1
+--- stdout ---
+
+--- stderr ---
+ERROR: JSON parse error: missing field `issue` at line 1 column 339

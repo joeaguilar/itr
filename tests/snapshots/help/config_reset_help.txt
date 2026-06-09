@@ -1,0 +1,15 @@
+$ itr config reset --help
+--- exit ---
+0
+--- stdout ---
+Restore all defaults
+
+Usage: itr config reset [OPTIONS]
+
+Options:
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

@@ -1,0 +1,6 @@
+$ itr create Via create alias -p low -k feature -f json
+--- exit ---
+0
+--- stdout ---
+{"id":1,"title":"Via create alias","status":"open","priority":"low","kind":"feature","context":"","files":[],"tags":[],"skills":[],"acceptance":"","parent_id":null,"assigned_to":"","close_reason":"","created_at":"<TS>","updated_at":"<TS>","urgency":1.0,"blocked_by":[],"blocks":[],"is_blocked":false,"notes":[],"urgency_breakdown":{"components":[["priority.low",1.0],["kind.feature",0.0],["age",0.0]]}}
+--- stderr ---

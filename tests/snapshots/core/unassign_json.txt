@@ -1,0 +1,6 @@
+$ itr unassign 1 -f json
+--- exit ---
+0
+--- stdout ---
+{"id":1,"title":"Fixture issue","status":"open","priority":"high","kind":"bug","context":"ctx","files":[],"tags":[],"skills":[],"acceptance":"acc","parent_id":null,"assigned_to":"","close_reason":"","created_at":"<TS>","updated_at":"<TS>","urgency":11.166666666666666,"blocked_by":[],"blocks":[],"is_blocked":false,"notes":[{"id":1,"issue_id":1,"content":"Assigned to agent-x","agent":"itr","created_at":"<TS>"},{"id":2,"issue_id":1,"content":"Unassigned from agent-x","agent":"itr","created_at":"<TS>"}],"urgency_breakdown":{"components":[["priority.high",6.0],["kind.bug",2.0],["age",2.0],["has_acceptance",1.0],["notes",0.16666666666666666]]}}
+--- stderr ---

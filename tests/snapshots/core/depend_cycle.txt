@@ -1,0 +1,7 @@
+$ itr depend 1 --on 2
+--- exit ---
+1
+--- stdout ---
+
+--- stderr ---
+ERROR: Cycle detected: 1 -> ... -> 2

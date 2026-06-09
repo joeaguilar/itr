@@ -1,0 +1,22 @@
+$ itr batch --help
+--- exit ---
+0
+--- stdout ---
+Per-item operations from JSON stdin (add/close/update/note with individual control)
+
+Usage: itr batch [OPTIONS] <COMMAND>
+
+Commands:
+  add     Bulk-create issues from JSON array on stdin [aliases: create]
+  close   Bulk-close issues from JSON array on stdin (per-issue reasons)
+  update  Bulk-update issues from JSON array on stdin (per-issue changes)
+  note    Bulk-add notes from JSON array on stdin [{id, text, agent?}]
+  help    Print this message or the help of the given subcommand(s)
+
+Options:
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

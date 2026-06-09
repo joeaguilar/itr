@@ -1,0 +1,33 @@
+$ itr skill path --help
+--- exit ---
+0
+--- stdout ---
+Print the install target path without writing
+
+Usage: itr skill path [OPTIONS]
+
+Options:
+      --scope <SCOPE>
+          Possible values:
+          - user:    ~/.claude/skills/itr/SKILL.md
+          - project: ./.claude/skills/itr/SKILL.md
+          
+          [default: user]
+
+  -f, --format <FORMAT>
+          Output format: compact|json|pretty|oneline
+          
+          [default: compact]
+
+      --db <DB>
+          Override database path (skips walk-up search)
+
+  -q, --quiet
+          Suppress non-essential output
+
+      --fields <FIELDS>
+          Comma-separated list of fields to include in JSON output
+
+  -h, --help
+          Print help (see a summary with '-h')
+--- stderr ---

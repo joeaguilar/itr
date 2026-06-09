@@ -1,0 +1,6 @@
+$ itr add Bad priority -p notarealpriority -f json
+--- exit ---
+0
+--- stdout ---
+{"id":1,"title":"Bad priority","status":"open","priority":"medium","kind":"task","context":"","files":[],"tags":["_needs_review"],"skills":[],"acceptance":"","parent_id":null,"assigned_to":"","close_reason":"","created_at":"<TS>","updated_at":"<TS>","urgency":3.0833333333333335,"blocked_by":[],"blocks":[],"is_blocked":false,"notes":[{"id":1,"issue_id":1,"content":"REVIEW: priority 'notarealpriority' not recognized, defaulted to 'medium'. Valid: critical, high, medium, low","agent":"itr","created_at":"<TS>"}],"urgency_breakdown":{"components":[["priority.medium",3.0],["kind.task",0.0],["age",0.0],["notes",0.08333333333333333]]}}
+--- stderr ---

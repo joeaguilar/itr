@@ -1,0 +1,19 @@
+$ itr note-update --help
+--- exit ---
+0
+--- stdout ---
+Update a note's content
+
+Usage: itr note-update [OPTIONS] <ID> <TEXT>
+
+Arguments:
+  <ID>    Note ID
+  <TEXT>  New content
+
+Options:
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

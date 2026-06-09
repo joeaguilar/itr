@@ -1,0 +1,19 @@
+$ itr ready --help
+--- exit ---
+0
+--- stdout ---
+List all unblocked, non-terminal issues by urgency
+
+Usage: itr ready [OPTIONS]
+
+Options:
+  -n, --limit <LIMIT>              Max results
+      --status <STATUS>            Filter by status within ready set
+      --skill <SKILL>              Filter by skill (repeatable, AND logic)
+      --assigned-to <ASSIGNED_TO>  Filter by assignee
+  -f, --format <FORMAT>            Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>                    Override database path (skips walk-up search)
+  -q, --quiet                      Suppress non-essential output
+      --fields <FIELDS>            Comma-separated list of fields to include in JSON output
+  -h, --help                       Print help
+--- stderr ---

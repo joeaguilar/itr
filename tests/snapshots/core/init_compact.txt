@@ -1,0 +1,6 @@
+$ itr init
+--- exit ---
+0
+--- stdout ---
+INIT: <TMP>/.itr.db
+--- stderr ---

@@ -1,0 +1,11 @@
+$ itr ready
+--- exit ---
+0
+--- stdout ---
+ID:1 STATUS:open PRIORITY:high KIND:bug URGENCY:11.0
+TITLE: Fixture issue
+ACCEPTANCE: acc
+
+ID:2 STATUS:open PRIORITY:low KIND:task URGENCY:3.0
+TITLE: Another
+--- stderr ---

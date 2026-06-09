@@ -1,0 +1,6 @@
+$ itr depend 2 --on 1
+--- exit ---
+0
+--- stdout ---
+DEPEND: 2 blocked by 1
+--- stderr ---

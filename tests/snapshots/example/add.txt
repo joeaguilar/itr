@@ -1,0 +1,11 @@
+$ itr add Snapshot me -p medium -k task
+--- exit ---
+0
+--- stdout ---
+ID:1 STATUS:open PRIORITY:medium KIND:task URGENCY:3.0
+TITLE: Snapshot me
+CREATED: <TS>
+UPDATED: <TS>
+--- URGENCY BREAKDOWN ---
+priority.medium=3.0
+--- stderr ---

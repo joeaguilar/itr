@@ -1,0 +1,19 @@
+$ itr assign --help
+--- exit ---
+0
+--- stdout ---
+Assign an issue to an agent
+
+Usage: itr assign [OPTIONS] <ID> <AGENT>
+
+Arguments:
+  <ID>     Issue ID
+  <AGENT>  Agent name
+
+Options:
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---

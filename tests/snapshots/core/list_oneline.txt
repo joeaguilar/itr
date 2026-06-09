@@ -1,0 +1,7 @@
+$ itr list -f oneline
+--- exit ---
+0
+--- stdout ---
+1	open	high	bug	"Fixture issue"
+2	open	low	task	"Another"
+--- stderr ---

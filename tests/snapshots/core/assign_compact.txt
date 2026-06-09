@@ -1,0 +1,16 @@
+$ itr assign 1 agent-x
+--- exit ---
+0
+--- stdout ---
+ID:1 STATUS:open PRIORITY:high KIND:bug URGENCY:11.1
+ASSIGNED:agent-x
+TITLE: Fixture issue
+CONTEXT: ctx
+ACCEPTANCE: acc
+CREATED: <TS>
+UPDATED: <TS>
+--- URGENCY BREAKDOWN ---
+priority.high=6.0 kind.bug=2.0 age=2.0 has_acceptance=1.0 notes=0.1
+--- NOTES ---
+[<TS>] (itr) Assigned to agent-x
+--- stderr ---

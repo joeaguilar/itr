@@ -1,0 +1,20 @@
+$ itr relate --help
+--- exit ---
+0
+--- stdout ---
+Create a relation between two issues
+
+Usage: itr relate [OPTIONS] --to <TO> <ID>
+
+Arguments:
+  <ID>  Source issue ID
+
+Options:
+      --to <TO>                        Target issue ID
+      --relation-type <RELATION_TYPE>  Relation type: duplicate|related|supersedes [default: related] [aliases: --type]
+  -f, --format <FORMAT>                Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>                        Override database path (skips walk-up search)
+  -q, --quiet                          Suppress non-essential output
+      --fields <FIELDS>                Comma-separated list of fields to include in JSON output
+  -h, --help                           Print help
+--- stderr ---

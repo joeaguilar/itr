@@ -1,0 +1,12 @@
+$ itr stats
+--- exit ---
+0
+--- stdout ---
+TOTAL:2
+BY_STATUS: open=2 in-progress=0 done=0 wontfix=0
+BY_PRIORITY: critical=0 high=1 medium=0 low=1
+BY_KIND: bug=1 feature=0 task=1 epic=0
+BLOCKED:0 READY:2
+AVG_URGENCY:7.0
+OLDEST_OPEN: ID:1 DAYS:<DAYS> "Fixture issue"
+--- stderr ---

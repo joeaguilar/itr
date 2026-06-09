@@ -1,0 +1,7 @@
+$ itr get 999 -f json
+--- exit ---
+1
+--- stdout ---
+
+--- stderr ---
+{"code":"NOT_FOUND","error":"Issue 999 not found"}

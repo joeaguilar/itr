@@ -1,0 +1,6 @@
+$ itr depend 2 --on 1 -f json
+--- exit ---
+0
+--- stdout ---
+{"action":"depend","blocked_id":2,"blocker_id":1,"created":true}
+--- stderr ---

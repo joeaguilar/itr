@@ -1,0 +1,8 @@
+$ itr graph
+--- exit ---
+0
+--- stdout ---
+NODE:1 STATUS:open URGENCY:19.0 "Fixture issue"
+NODE:2 STATUS:open URGENCY:-7.0 [BLOCKED] "Another"
+EDGE: 1 -> 2 (blocks)
+--- stderr ---

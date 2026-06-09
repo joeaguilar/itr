@@ -1,0 +1,6 @@
+$ itr bulk close --priority high --reason batch shipped
+--- exit ---
+0
+--- stdout ---
+BULK_CLOSE: 2 issues [1,2]
+--- stderr ---

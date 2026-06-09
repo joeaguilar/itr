@@ -1,0 +1,28 @@
+$ itr list --help
+--- exit ---
+0
+--- stdout ---
+List issues with filtering
+
+Usage: itr list [OPTIONS]
+
+Options:
+      --all                        Include all statuses
+  -s, --status <STATUS>            Filter by status (repeatable)
+  -p, --priority <PRIORITY>        Filter by priority (repeatable)
+  -k, --kind <KIND>                Filter by kind (repeatable)
+      --tag <TAG>                  Filter by tag (repeatable, AND logic) [aliases: --tags]
+      --tag-any <TAG_ANY>          Filter by tag with OR logic (repeatable, matches any)
+      --skill <SKILL>              Filter by skill (repeatable, AND logic)
+      --blocked                    Only show blocked issues
+      --include-blocked            Include blocked issues in results
+      --parent <PARENT>            Show children of an epic
+      --assigned-to <ASSIGNED_TO>  Filter by assignee
+      --sort <SORT>                Sort by: urgency|priority|created|updated|id [default: urgency]
+  -n, --limit <LIMIT>              Max results
+  -f, --format <FORMAT>            Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>                    Override database path (skips walk-up search)
+  -q, --quiet                      Suppress non-essential output
+      --fields <FIELDS>            Comma-separated list of fields to include in JSON output
+  -h, --help                       Print help
+--- stderr ---

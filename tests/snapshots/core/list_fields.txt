@@ -1,0 +1,6 @@
+$ itr list -f json --fields id,title,priority
+--- exit ---
+0
+--- stdout ---
+[{"id":1,"priority":"high","title":"Fixture issue"},{"id":2,"priority":"low","title":"Another"}]
+--- stderr ---

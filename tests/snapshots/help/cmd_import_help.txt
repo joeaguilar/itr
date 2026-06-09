@@ -1,0 +1,17 @@
+$ itr import --help
+--- exit ---
+0
+--- stdout ---
+Import issues from JSONL or JSON
+
+Usage: itr import [OPTIONS]
+
+Options:
+      --file <FILE>      Input file path (or stdin)
+      --merge            Skip existing IDs instead of erroring
+  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>          Override database path (skips walk-up search)
+  -q, --quiet            Suppress non-essential output
+      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+  -h, --help             Print help
+--- stderr ---
