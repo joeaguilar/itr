@@ -9,7 +9,7 @@
 ///
 /// Canonical values pass through untouched (lowercased):
 ///
-/// ```ignore
+/// ```text
 /// use itr::normalize::normalize_priority;
 /// assert_eq!(normalize_priority("HIGH"), "high");
 /// assert_eq!(normalize_priority("medium"), "medium");
@@ -17,7 +17,7 @@
 ///
 /// Common synonyms collapse to a canonical bucket:
 ///
-/// ```ignore
+/// ```text
 /// use itr::normalize::normalize_priority;
 /// assert_eq!(normalize_priority("urgent"), "critical");
 /// assert_eq!(normalize_priority("P0"), "critical");
@@ -27,7 +27,7 @@
 ///
 /// Unknown inputs survive (lowercased) so the caller can decide how to react:
 ///
-/// ```ignore
+/// ```text
 /// use itr::normalize::normalize_priority;
 /// assert_eq!(normalize_priority("Bogus"), "bogus");
 /// ```
@@ -50,7 +50,7 @@ pub fn normalize_priority(p: &str) -> String {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::normalize::normalize_kind;
 /// assert_eq!(normalize_kind("Feature"), "feature");
 /// assert_eq!(normalize_kind("enhancement"), "feature");
@@ -77,7 +77,7 @@ pub fn normalize_kind(k: &str) -> String {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::normalize::normalize_status;
 /// assert_eq!(normalize_status("TODO"), "open");
 /// assert_eq!(normalize_status("backlog"), "open");
@@ -107,7 +107,7 @@ use crate::error::ItrError;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::normalize::{normalize_priority, validate_priority};
 /// // Canonical or aliased input passes once normalized.
 /// assert!(validate_priority(&normalize_priority("urgent")).is_ok());
@@ -133,7 +133,7 @@ pub fn validate_priority(p: &str) -> Result<(), ItrError> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::normalize::{normalize_kind, validate_kind};
 /// assert!(validate_kind(&normalize_kind("feat")).is_ok());
 /// assert!(validate_kind("epic").is_ok());
@@ -157,7 +157,7 @@ pub fn validate_kind(k: &str) -> Result<(), ItrError> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::normalize::{normalize_status, validate_status};
 /// assert!(validate_status(&normalize_status("wip")).is_ok());
 /// assert!(validate_status("done").is_ok());
@@ -173,6 +173,70 @@ pub fn validate_status(s: &str) -> Result<(), ItrError> {
             valid: "open, in-progress, done, wontfix".to_string(),
         }),
     }
+}
+
+/// Normalize a list of user-supplied read-filter values with the same synonym
+/// tables as the write paths, returning the normalized values plus a REVIEW
+/// note for every value that is still not canonical after normalization.
+///
+/// Soft fallback: unrecognized values are kept (lowercased) so they simply
+/// match nothing, but the caller surfaces the notes on stderr instead of
+/// returning a silent empty result (#168).
+fn normalize_filter_values(
+    values: &[String],
+    normalize: fn(&str) -> String,
+    validate: fn(&str) -> Result<(), ItrError>,
+    field: &str,
+    valid: &str,
+) -> (Vec<String>, Vec<String>) {
+    let mut normalized = Vec::with_capacity(values.len());
+    let mut notes = Vec::new();
+    for value in values {
+        let canon = normalize(value);
+        if validate(&canon).is_err() {
+            notes.push(format!(
+                "REVIEW: {field} filter '{value}' not recognized; it will match nothing. Valid: {valid}"
+            ));
+        }
+        normalized.push(canon);
+    }
+    (normalized, notes)
+}
+
+/// Normalize status read-filter values (`wip` → `in-progress`, `closed` →
+/// `done`, ...). Returns `(normalized_values, review_notes)`.
+pub fn normalize_status_filters(values: &[String]) -> (Vec<String>, Vec<String>) {
+    normalize_filter_values(
+        values,
+        normalize_status,
+        validate_status,
+        "status",
+        "open, in-progress, done, wontfix",
+    )
+}
+
+/// Normalize priority read-filter values (`urgent` → `critical`, `p2` →
+/// `medium`, ...). Returns `(normalized_values, review_notes)`.
+pub fn normalize_priority_filters(values: &[String]) -> (Vec<String>, Vec<String>) {
+    normalize_filter_values(
+        values,
+        normalize_priority,
+        validate_priority,
+        "priority",
+        "critical, high, medium, low",
+    )
+}
+
+/// Normalize kind read-filter values (`enhancement` → `feature`, `chore` →
+/// `task`, ...). Returns `(normalized_values, review_notes)`.
+pub fn normalize_kind_filters(values: &[String]) -> (Vec<String>, Vec<String>) {
+    normalize_filter_values(
+        values,
+        normalize_kind,
+        validate_kind,
+        "kind",
+        "bug, feature, task, epic",
+    )
 }
 
 #[cfg(test)]
@@ -336,5 +400,44 @@ mod tests {
             prop_assert_eq!(normalize_kind(&s), lower.clone());
             prop_assert_eq!(normalize_status(&s), lower);
         }
+    }
+
+    // --- #168: read-filter normalization helpers ---
+
+    #[test]
+    fn status_filters_normalize_synonyms_without_notes() {
+        let (values, notes) = normalize_status_filters(&[
+            "wip".to_string(),
+            "closed".to_string(),
+            "OPEN".to_string(),
+        ]);
+        assert_eq!(values, vec!["in-progress", "done", "open"]);
+        assert!(notes.is_empty(), "recognized synonyms must not warn");
+    }
+
+    #[test]
+    fn priority_and_kind_filters_normalize_synonyms_without_notes() {
+        let (values, notes) = normalize_priority_filters(&["urgent".to_string()]);
+        assert_eq!(values, vec!["critical"]);
+        assert!(notes.is_empty());
+
+        let (values, notes) = normalize_kind_filters(&["enhancement".to_string()]);
+        assert_eq!(values, vec!["feature"]);
+        assert!(notes.is_empty());
+    }
+
+    #[test]
+    fn unrecognized_filter_values_keep_value_and_emit_review_note() {
+        let (values, notes) = normalize_status_filters(&["bogus".to_string()]);
+        assert_eq!(values, vec!["bogus"], "unknown values pass through");
+        assert_eq!(notes.len(), 1);
+        assert!(notes[0].starts_with("REVIEW: status filter 'bogus'"));
+        assert!(notes[0].contains("open, in-progress, done, wontfix"));
+
+        let (_, notes) = normalize_priority_filters(&["bogus".to_string()]);
+        assert!(notes[0].contains("critical, high, medium, low"));
+
+        let (_, notes) = normalize_kind_filters(&["bogus".to_string()]);
+        assert!(notes[0].contains("bug, feature, task, epic"));
     }
 }

@@ -20,9 +20,12 @@
 #     embeds full issue detail incl. created_at/updated_at -> <TS> and an
 #     urgency score that is deterministic on an age-0 fresh issue (same pattern
 #     the example area already relies on for `get`).
-#   - import --file cases use a FIXED path under /tmp whose directory name
-#     contains "tmp" so the normalizer collapses it to <TMP>; the seed fn
-#     writes the fixture to that same path before the asserted command runs.
+#   - import --file cases use a PER-RUN UNIQUE fixture root (mktemp -d), so
+#     concurrent suite runs can never race on a shared path (issue #198). The
+#     shared `snapshot` helper bakes RAW args into the snapshot's `$ itr ...`
+#     header line, so these two cases go through a thin local wrapper that
+#     records a stable <TMP>-abstracted command description instead. The root
+#     is removed at the end of this file.
 
 CONTRACT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=tests/contracts/_lib.sh
@@ -31,14 +34,17 @@ CONTRACT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo ""
 echo "--- contract: batch_bulk ---"
 
-# Fixed, normalizer-friendly paths for the import --file cases. Each directory
-# name contains "tmp", so /tmp/<...>tmp<...>/import.jsonl collapses to
-# <TMP>/import.jsonl in both the command header and any error message. The two
-# file cases use DISTINCT directories (never shared) so there is zero cross-case
-# state — the success case writes its fixture, the missing case points at a dir
-# that is never created.
-BB_IMPORT_FILE="/tmp/itr-batchbulk-tmp-importfile/import.jsonl"
-BB_IMPORT_MISSING="/tmp/itr-batchbulk-tmp-importmissing/import.jsonl"
+# Per-run UNIQUE fixture root for the import --file cases (issue #198). The
+# old fixed /tmp/itr-batchbulk-* path was left behind after runs and raced
+# between concurrent suite runs (observed live: a concurrent run's file
+# produced a phantom 'CLOBBERED' snapshot drift). mktemp -d yields a fresh
+# path every run, and `rm -rf "$BB_FIXTURE_ROOT"` at the end of this file
+# removes it. The two file cases still use DISTINCT subdirectories (never
+# shared) so there is zero cross-case state — the success case writes its
+# fixture, the missing case points at a subdir that is never created.
+BB_FIXTURE_ROOT="$(mktemp -d)"
+BB_IMPORT_FILE="$BB_FIXTURE_ROOT/importfile/import.jsonl"
+BB_IMPORT_MISSING="$BB_FIXTURE_ROOT/importmissing/import.jsonl"
 
 # ──────────────────────────────────────────────────────────────────────────
 # Seed helpers. Each receives the per-case DB path as $1.
@@ -74,12 +80,12 @@ seed_one() {
 }
 
 # One pre-existing issue (#1) plus a two-issue JSONL fixture written to the
-# DEDICATED import-file directory. Also clears the missing-file directory so the
+# DEDICATED import-file subdirectory under the per-run unique fixture root.
+# The importmissing/ subdir is NEVER created under the fresh root, so the
 # import_file_missing case is guaranteed to point at a nonexistent path. These
-# two directories are never shared, eliminating any cross-case path leakage.
+# two subdirectories are never shared, eliminating any cross-case path leakage.
 seed_one_and_import_file() {
     ITR_DB_PATH="$1" "$ITR" add "Existing one" -p high >/dev/null 2>&1
-    rm -rf "$(dirname "$BB_IMPORT_MISSING")"
     mkdir -p "$(dirname "$BB_IMPORT_FILE")"
     cat >"$BB_IMPORT_FILE" <<'EOF'
 {"id":1,"title":"Dup","priority":"high","kind":"bug","status":"open","context":"","files":[],"tags":[],"skills":[],"acceptance":"","blocked_by":[],"blocks":[],"parent_id":null,"children":[],"assigned_to":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","close_reason":"","notes":[],"urgency":0.0,"relations":[]}
@@ -108,8 +114,9 @@ snapshot batch_bulk batch_add_json \
     -- batch add -f json
 
 # Soft-fallback: unrecognized priority+kind default to medium/task and emit
-# REVIEW notes; outcome is "review", summary review=1. (Captures CURRENT
-# behavior; see issue #150 re: a known batch-add parent-field bug — not fixed.)
+# REVIEW notes; outcome is "review", summary review=1. (The batch-add
+# parent-field bug referenced here historically was fixed in #150: "parent"
+# is now a serde alias of "parent_id".)
 snapshot batch_bulk batch_add_softfallback \
     '[{"title":"C","priority":"bogus","kind":"nonsense"}]' \
     -- batch add -f json
@@ -223,14 +230,71 @@ snapshot_seeded batch_bulk import_merge_stdin seed_one \
     "$IMPORT_JSONL_TWO" \
     -- import --merge
 
-# --file replace from an on-disk fixture (#1 dup overwrites, #2 new): 2 imported.
-# Path collapses to <TMP>/import.jsonl via the normalizer.
-snapshot_seeded batch_bulk import_file seed_one_and_import_file \
-    -- import --file /tmp/itr-batchbulk-tmp-importfile/import.jsonl
+# Local wrapper for the two import --file cases. Same isolated-DB capture /
+# normalize / assert flow as the shared `snapshot_seeded`, with ONE difference:
+# the shared helper bakes the RAW args into the snapshot's `$ itr ...` header
+# line (only stdout/stderr pass through contract_normalize), so a per-run
+# unique fixture path would drift the snapshot on every run. This wrapper
+# records a stable <TMP>-abstracted command description instead — the same
+# desc-abstraction pattern tests/contracts/ui.sh uses for its port/token-
+# bearing commands — and additionally collapses $BB_FIXTURE_ROOT to <TMP> in
+# stdout/stderr (most-specific-first, before the shared normalizer) in case a
+# message ever echoes the fixture path. Assertion is delegated to the shared
+# _contract_assert so drift diffs / UPDATE_SNAPSHOTS / pass-fail counting stay
+# identical to every other case; `|| true` for the same set -e reason as the
+# public `snapshot` helper.
+#   _bb_snapshot_import_file <case> <seed_fn-or-""> <fixture-path> [import flags...]
+_bb_snapshot_import_file() {
+    local case="$1" seed_fn="$2" file_path="$3"; shift 3
+
+    local tmpdir db
+    tmpdir="$(mktemp -d)"
+    db="$tmpdir/.itr.db"
+    ITR_DB_PATH="$db" "$ITR" init -q >/dev/null 2>&1 || true
+    if [ -n "$seed_fn" ]; then
+        "$seed_fn" "$db" >/dev/null 2>&1 || true
+    fi
+
+    local out_file="$tmpdir/.stdout" err_file="$tmpdir/.stderr"
+    set +e
+    ITR_DB_PATH="$db" "$ITR" import "$@" --file "$file_path" >"$out_file" 2>"$err_file"
+    CONTRACT_EXIT=$?
+    set -e
+
+    CONTRACT_STDOUT="$(sed -e "s#${BB_FIXTURE_ROOT}#<TMP>#g" "$out_file" | contract_normalize "$tmpdir")"
+    CONTRACT_STDERR="$(sed -e "s#${BB_FIXTURE_ROOT}#<TMP>#g" "$err_file" | contract_normalize "$tmpdir")"
+
+    # Stable, path-abstracted description: <TMP>/<subpath under the root>.
+    local desc="import"
+    [ "$#" -gt 0 ] && desc="$desc $*"
+    desc="$desc --file <TMP>/${file_path#"$BB_FIXTURE_ROOT"/}"
+
+    CONTRACT_NORMALIZED="$(cat <<EOF
+\$ itr ${desc}
+--- exit ---
+$CONTRACT_EXIT
+--- stdout ---
+$CONTRACT_STDOUT
+--- stderr ---
+$CONTRACT_STDERR
+EOF
+)"
+    rm -rf "$tmpdir"
+
+    _contract_assert batch_bulk "$case" $desc || true
+}
+
+# --file replace from an on-disk fixture (#1 dup overwrites, #2 new). The
+# fixture lives under the per-run unique $BB_FIXTURE_ROOT; the recorded header
+# collapses it to <TMP>/importfile/import.jsonl.
+_bb_snapshot_import_file import_file seed_one_and_import_file "$BB_IMPORT_FILE"
 
 # --file pointing at a missing path -> hard error on stderr, exit 1. The
-# directory is cleared by seed_one_and_import_file (run by the prior case), and
-# this case never recreates it, so the read genuinely fails. Path collapses to
-# <TMP>/import.jsonl via the normalizer.
-snapshot batch_bulk import_file_missing \
-    -- import --file /tmp/itr-batchbulk-tmp-importmissing/import.jsonl
+# importmissing/ subdir is never created under the fresh per-run root, so the
+# read genuinely fails regardless of case order.
+_bb_snapshot_import_file import_file_missing "" "$BB_IMPORT_MISSING"
+
+# Per-run fixture cleanup: the import --file fixtures live under a unique
+# mktemp root, so nothing persists for the next run (and no shared path exists
+# for a concurrent run to clobber).
+rm -rf "$BB_FIXTURE_ROOT"

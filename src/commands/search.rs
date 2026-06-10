@@ -3,6 +3,7 @@ use crate::db;
 use crate::error::{self, ItrError};
 use crate::format::{self, Format};
 use crate::models::SearchResult;
+use crate::normalize;
 use crate::urgency::{self, UrgencyConfig};
 use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
@@ -30,13 +31,66 @@ pub fn run(
         return Ok(());
     }
 
+    let results = run_core(
+        conn,
+        query,
+        &terms,
+        all,
+        &statuses,
+        &priorities,
+        &kinds,
+        &skills,
+        assigned_to,
+        limit,
+    )?;
+
+    if results.is_empty() {
+        error::print_empty(fmt.is_json(), "No matching issues found.");
+        return Ok(());
+    }
+
+    println!("{}", format::format_search_results(&results, fmt));
+    Ok(())
+}
+
+/// Core search: resolve matching issue IDs, build results, and apply
+/// post-filters, sorting, and the limit.
+///
+/// Status/priority/kind filter values are normalized with the same synonym
+/// tables as the write paths (`wip` → `in-progress`, `closed` → `done`, ...);
+/// values still unrecognized after normalization emit a REVIEW note instead
+/// of silently matching nothing (#168).
+#[allow(clippy::too_many_arguments)]
+fn run_core(
+    conn: &Connection,
+    query: &str,
+    terms: &[String],
+    all: bool,
+    statuses: &[String],
+    priorities: &[String],
+    kinds: &[String],
+    skills: &[String],
+    assigned_to: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<SearchResult>, ItrError> {
+    let (statuses, status_notes) = normalize::normalize_status_filters(statuses);
+    let (priorities, priority_notes) = normalize::normalize_priority_filters(priorities);
+    let (kinds, kind_notes) = normalize::normalize_kind_filters(kinds);
+    for note in status_notes
+        .iter()
+        .chain(&priority_notes)
+        .chain(&kind_notes)
+    {
+        eprintln!("{}", note);
+    }
+
     // Try FTS5 first for ranked field matches, then append LIKE-only matches
     // such as notes, which are intentionally not indexed in the FTS table.
     let ids = if db::has_fts(conn) {
         let fts_ids = db::fts_search(conn, query)?;
         if fts_ids.is_empty() {
             // FTS returned nothing — fall back to LIKE in case FTS index is stale
-            db::search_issue_ids(conn, &terms, &statuses, &priorities, &kinds, all)?
+            db::search_issue_ids(conn, terms, &statuses, &priorities, &kinds, all)?
         } else {
             // Post-filter FTS results by status/priority/kind
             let mut filtered = fts_ids;
@@ -68,7 +122,7 @@ pub fn run(
             }
             let mut seen: HashSet<i64> = filtered.iter().copied().collect();
             let note_ids =
-                db::search_note_issue_ids(conn, &terms, &statuses, &priorities, &kinds, all)?;
+                db::search_note_issue_ids(conn, terms, &statuses, &priorities, &kinds, all)?;
             for id in note_ids {
                 if seen.insert(id) {
                     filtered.push(id);
@@ -77,12 +131,11 @@ pub fn run(
             filtered
         }
     } else {
-        db::search_issue_ids(conn, &terms, &statuses, &priorities, &kinds, all)?
+        db::search_issue_ids(conn, terms, &statuses, &priorities, &kinds, all)?
     };
 
     if ids.is_empty() {
-        error::print_empty(fmt.is_json(), "No matching issues found.");
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let config = UrgencyConfig::load(conn);
@@ -95,7 +148,15 @@ pub fn run(
         let blocked_by = db::get_blockers(conn, *id).unwrap_or_default();
         let is_blocked = db::is_blocked(conn, *id).unwrap_or(false);
         let (matched_fields, context_snippets) =
-            compute_matched_fields_with_snippets(&terms, &issue, &notes);
+            compute_matched_fields_with_snippets(terms, &issue, &notes);
+
+        // A hit with no literal field match is a false positive (e.g. an FTS
+        // token match like "100" for the query "100%" that the literal term
+        // does not support). Skip it so every returned result carries at
+        // least one matched field.
+        if matched_fields.is_empty() {
+            continue;
+        }
 
         results.push(SearchResult {
             id: issue.id,
@@ -142,8 +203,7 @@ pub fn run(
         results.truncate(n);
     }
 
-    println!("{}", format::format_search_results(&results, fmt));
-    Ok(())
+    Ok(results)
 }
 
 pub fn compute_matched_fields_with_snippets(
@@ -287,4 +347,69 @@ fn extract_snippet(text: &str, term: &str, context_chars: usize) -> Option<Strin
         "{}{}**{}**{}{}",
         prefix, before, matched, after, suffix
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn insert_issue(conn: &Connection, title: &str) -> i64 {
+        db::insert_issue(
+            conn,
+            title,
+            "medium",
+            "task",
+            "",
+            &[],
+            &[],
+            &[],
+            "",
+            None,
+            "",
+        )
+        .expect("insert issue")
+        .id
+    }
+
+    fn search_ids(conn: &Connection, query: &str, statuses: Vec<String>) -> Vec<i64> {
+        let terms: Vec<String> = query.split_whitespace().map(ToString::to_string).collect();
+        run_core(
+            conn,
+            query,
+            &terms,
+            false,
+            &statuses,
+            &[],
+            &[],
+            &[],
+            None,
+            None,
+        )
+        .expect("search")
+        .iter()
+        .map(|r| r.id)
+        .collect()
+    }
+
+    // --- #168: search --status accepts the same synonyms as write paths ---
+
+    #[test]
+    fn search_status_filter_normalizes_synonyms() {
+        let conn = db::open_test_db();
+        let wip_id = insert_issue(&conn, "frobnicate widget");
+        db::update_issue_field(&conn, wip_id, "status", "in-progress").expect("set status");
+        let done_id = insert_issue(&conn, "frobnicate gadget");
+        db::update_issue_field(&conn, done_id, "status", "done").expect("set status");
+
+        assert_eq!(
+            search_ids(&conn, "frobnicate", vec!["wip".to_string()]),
+            vec![wip_id],
+            "--status wip must match in-progress issues"
+        );
+        assert_eq!(
+            search_ids(&conn, "frobnicate", vec!["closed".to_string()]),
+            vec![done_id],
+            "--status closed must match done issues"
+        );
+    }
 }

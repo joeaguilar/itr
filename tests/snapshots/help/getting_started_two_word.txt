@@ -31,7 +31,8 @@ itr close <ID> "reason"        # Close when done
 - `itr search "<query>"` — Search across all fields (title, context, acceptance, tags, files, skills, notes). Uses FTS5 when available, falls back to case-insensitive substring matching. Multi-word queries: each term must match somewhere (AND logic, any field)
 - `itr list` — List issues with filtering (--status, --priority, --kind, --tag, --skill, --assigned-to)
 - `itr get <ID>` — Full detail for a single issue
-- `itr show` — Alias: no args = list, with ID = get
+- `itr get <ID>,<ID>,...` (or repeated IDs) — Batched detail for several issues in one call: JSON is an array of detail objects; compact is blank-line-separated per-issue blocks. Missing IDs become REVIEW notes on stderr (found issues still return, exit 0); duplicates are fetched once
+- `itr show` — Alias: no args = list, with ID(s) = get
 - `itr stats` — Project health summary
 - `itr graph` — Dependency graph (DOT format in pretty mode)
 
@@ -51,7 +52,7 @@ itr close <ID> "reason"        # Close when done
 - `itr unrelate <ID> --from <ID>` — Remove relation
 
 **Bulk Operations:**
-- `itr batch add` (alias: `batch create`) — Bulk-create from JSON array on stdin
+- `itr batch add` (alias: `batch create`) — Bulk-create from JSON array on stdin. Item fields mirror the `add` flags; `parent` and `parent_id` are both accepted; `blocked_by` takes integer IDs, "N" strings, or "@N" intra-batch references. Malformed items and unresolvable parents/blockers soft-fall per item instead of failing the batch
 - `itr batch close` — Bulk-close from JSON array on stdin (per-issue reasons, soft fallback)
 - `itr batch update` — Bulk-update from JSON array on stdin (per-issue changes, soft fallback)
 - `itr bulk close` — Close all matching filters (--reason, --wontfix, --status, --priority, --kind, --tag, --skill, --assigned-to, --dry-run)
@@ -108,12 +109,15 @@ Refuses to overwrite an existing `SKILL.md` without `--force` (soft fallback: em
 
 ### Token Reduction
 
-Use `--fields` to select only the fields you need (JSON mode only):
+Use `--fields` to select only the fields you need:
 ```
 itr list -f json --fields id,title,urgency,status
 itr ready -f json --fields id,title,priority
+itr stats -f json --fields total,by_status
 ```
-Valid fields: id, title, status, priority, kind, created, updated, context, files, tags, skills, acceptance, parent, assigned_to, urgency, blocked_by, notes, relations.
+`--fields` filters JSON output for issue/list/search/batch commands, plus top-level keys for `stats`, `graph`, and `log` JSON. It also filters issue/list/search compact output and list pretty output. Command/format combinations with no field filtering (e.g. oneline, DOT graphs, non-JSON stats/log/batch) emit a `REVIEW:` note to stderr and print unfiltered output.
+Valid fields: id, title, status, priority, kind, created_at, updated_at, context, files, tags, skills, acceptance, parent_id, assigned_to, close_reason, urgency, blocked_by, blocks, notes, relations.
+Stats/graph/log JSON also accept their own top-level keys (e.g. total, by_status, nodes, edges, issue_id, field).
 
 ### Urgency Scoring
 

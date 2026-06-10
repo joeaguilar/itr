@@ -186,7 +186,7 @@ Already well-organized. `db.rs` is now ~1,190 LOC (up from ~730 at the previous 
 - **`justfile` provides developer shortcuts.** `just test`, `just lint`, `just verify` (full pre-push validation). (`justfile`)
 - **Clippy `pedantic` enabled.** `Cargo.toml` carries `[lints.clippy] all = warn, pedantic = warn` with a short, explicitly-documented allowlist for noisy lints that conflict with project conventions (soft fallbacks, format-style choices, SQLite numeric casts). `dbg_macro` is denied. (`Cargo.toml:28-54`)
 - **Property-based tests added.** `proptest` is a dev-dependency; `normalize.rs` carries 16 `prop_*` cases (lowercase invariant, idempotence, canonical roundtrip, case-insensitivity, synonym→canonical→validation roundtrip for all three of priority/kind/status, plus an unknown-input passthrough) and `util.rs` carries the comma-parsing / tag normalization properties — covering the broad input spaces the shell tests can only sample. Originally framed as "27 property tests"; the on-disk count after wave 3 is 30 `prop_*` functions. (`src/normalize.rs` tests module, `src/util.rs` tests module, `Cargo.toml:25-26`)
-- **Doctests added on key public functions.** `///` example blocks (ignore-marked because this is a binary crate, not a library) on the headline functions in `normalize.rs` (8 blocks), `util.rs` (7), `urgency.rs` (5), `format.rs` (10). They render in `cargo doc` and document expected inputs/outputs even though they don't execute in CI.
+- **Doc examples on key public functions.** `///` example blocks fenced as `text` — illustrative prose, not executed doctests, because `itr` is a binary-only crate (no `[lib]` target) so `cargo test --doc` collects nothing. On the headline functions in `normalize.rs` (8 blocks), `util.rs` (7), `urgency.rs` (6), `format.rs` (10); they render in `cargo doc` and document expected inputs/outputs. Originally landed as `ignore`-marked doctests (#70); downgraded to non-doctest prose rather than adding a library facade (itr #147).
 
 **ACCEPTABLE:**
 
@@ -217,7 +217,7 @@ Deviations from the guide that are **intentional and should be preserved**:
 | No async | Use async for concurrent I/O | No network I/O; guide says "many CLI tools work perfectly with synchronous code" | `Cargo.toml` |
 | `db.rs` monolithic (~1,190 LOC) | Split by domain | All operations share schema/connection; splitting adds files without reducing complexity | CLAUDE.md |
 | `#[allow(clippy::too_many_arguments)]` on `add::run` / `update::run` | Use structs for >5 params | Direct CLI arg mapping; the `ListFilter` precedent shows the pattern when we choose to apply it | `commands/add.rs:32`, `db.rs:347` |
-| Doctests marked `ignore` | Doctests should execute | Binary crate — public functions are not callable as a library, so executable doctests would require a library facade | `normalize.rs`, `util.rs`, `urgency.rs`, `format.rs` |
+| Doc examples are illustrative `text` blocks, not doctests | Doctests should execute | Binary-only crate — public functions are not callable as a library, so executable doctests would require a `[lib]` facade; the former `ignore`-marked doctests were downgraded to non-doctest prose (itr #147) | `normalize.rs`, `util.rs`, `urgency.rs`, `format.rs` |
 
 ---
 
@@ -246,7 +246,7 @@ Deviations from the guide that are **intentional and should be preserved**:
 - ~~Emit `REVIEW:` notes for masked DB errors in `urgency.rs`~~ — landed at `urgency.rs:230,243,275`.
 - ~~Extract `ListFilter` struct~~ — landed in `models.rs:3-17`, consumed by `db::list_issues`, `commands/list.rs`, `commands/ready.rs`.
 - ~~Add `proptest` tests for `normalize.rs` and `util.rs`~~ — landed in the 2026-05-19 blitz (closes itr #69).
-- ~~Add doctests to key public functions in `normalize.rs`, `util.rs`, `urgency.rs`, `format.rs`~~ — landed in the 2026-05-19 blitz (closes itr #70).
+- ~~Add doctests to key public functions in `normalize.rs`, `util.rs`, `urgency.rs`, `format.rs`~~ — landed in the 2026-05-19 blitz (closes itr #70); later downgraded from `ignore` doctests to illustrative `text` blocks because the binary-only crate never executes them (itr #147).
 - ~~Reduce clone concentration in `build_issue_summary()`~~ — split into borrowed wrapper + `build_issue_summary_owned`; list/ready paths now consume by value (closes itr #71).
 
 ### Not Recommended (high effort, negative or negligible impact)

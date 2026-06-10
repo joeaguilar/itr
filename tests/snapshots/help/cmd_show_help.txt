@@ -2,12 +2,12 @@ $ itr show --help
 --- exit ---
 0
 --- stdout ---
-Show issues or get detail for a single issue
+Show issues or get detail for one or more issues
 
-Usage: itr show [OPTIONS] [ID]
+Usage: itr show [OPTIONS] [ID]...
 
 Arguments:
-  [ID]  Issue ID (omit to list all non-terminal issues)
+  [ID]...  Issue ID(s) — repeat or comma-separate; omit to list all non-terminal issues
 
 Options:
       --all              Include all statuses (done, wontfix)

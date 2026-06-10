@@ -2,5 +2,5 @@ $ itr graph -f json
 --- exit ---
 0
 --- stdout ---
-{"edges":[{"from":1,"to":2,"type":"blocks"}],"nodes":[{"id":1,"is_blocked":false,"status":"open","title":"Fixture issue","urgency":19.0},{"id":2,"is_blocked":true,"status":"open","title":"Another","urgency":-7.0}]}
+{"nodes":[{"id":1,"title":"Fixture issue","status":"open","urgency":19.0,"is_blocked":false},{"id":2,"title":"Another","status":"open","urgency":-7.0,"is_blocked":true}],"edges":[{"from":1,"to":2,"type":"blocks"}]}
 --- stderr ---

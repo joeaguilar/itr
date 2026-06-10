@@ -10,10 +10,11 @@ Arguments:
   <ID>  Source issue ID
 
 Options:
-      --from <FROM>      Target issue ID
-  -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
-      --db <DB>          Override database path (skips walk-up search)
-  -q, --quiet            Suppress non-essential output
-      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
-  -h, --help             Print help
+      --from <FROM>                    Target issue ID
+      --relation-type <RELATION_TYPE>  Only remove this relation type: duplicate|related|supersedes (default: all types) [aliases: --type]
+  -f, --format <FORMAT>                Output format: compact|json|pretty|oneline [default: compact]
+      --db <DB>                        Override database path (skips walk-up search)
+  -q, --quiet                          Suppress non-essential output
+      --fields <FIELDS>                Comma-separated list of fields to include in JSON output
+  -h, --help                           Print help
 --- stderr ---

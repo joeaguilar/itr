@@ -111,7 +111,9 @@ pub struct BatchAddInput {
     pub skills: Vec<String>,
     #[serde(default)]
     pub acceptance: String,
-    #[serde(default)]
+    /// Accepts both `parent_id` and `parent` — agents naturally mirror the
+    /// `--parent` CLI flag in JSON payloads (#150).
+    #[serde(default, alias = "parent")]
     pub parent_id: Option<i64>,
     #[serde(default)]
     pub assigned_to: String,

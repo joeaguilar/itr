@@ -24,6 +24,10 @@ install: release
 
 # ─── Test ────────────────────────────────────────────────────────────
 
+# Run Rust unit tests
+test-unit:
+    cargo test
+
 # Run integration test suite (release build)
 test: release
     ./tests/integration.sh
@@ -50,11 +54,11 @@ fmt:
 fmt-check:
     cargo fmt --all -- --check
 
-# Full verification: build + lint + test + format check + deny
-verify: release lint test fmt-check deny
+# Full verification: build + lint + unit tests + integration tests + format check + deny
+verify: release lint test-unit test fmt-check deny
 
-# Lint + format + test + deny (CI-style)
-ci: fmt-check lint deny test
+# Lint + format + deny + unit tests + integration tests (CI-style)
+ci: fmt-check lint deny test-unit test
 
 # ─── Clean ───────────────────────────────────────────────────────────
 

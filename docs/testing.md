@@ -22,6 +22,7 @@ Equivalent `just` recipes:
 just check
 just fmt-check
 just lint
+just test-unit
 just build
 just test-debug
 ```
@@ -58,12 +59,13 @@ just ci
 ```
 
 `./tests/integration.sh` defaults to `./target/release/itr`, so build release
-first. CI runs format check, clippy, cargo-deny, release build, and the release
-integration suite.
+first. CI runs format check, clippy, cargo-deny, `cargo test`, release build,
+and the release integration suite.
 
 `just verify` is the full pre-push gate: it chains the release build, clippy,
-the release integration suite, the format check, and `cargo deny check`. Prefer
-it before opening a PR or handing a change off to another agent.
+the unit tests (`cargo test`), the release integration suite, the format check,
+and `cargo deny check`. Prefer it before opening a PR or handing a change off
+to another agent.
 
 ## Integration harness conventions
 
@@ -232,8 +234,11 @@ Good examples:
 Run all unit tests with:
 
 ```bash
-cargo test
+cargo test        # or: just test-unit
 ```
+
+`just verify`, `just ci`, and the CI workflow all run `cargo test`, so unit
+tests gate every merge alongside the integration suite.
 
 Run focused tests while iterating:
 

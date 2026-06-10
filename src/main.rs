@@ -88,6 +88,60 @@ fn main() {
     }
 }
 
+/// Build the `ListFilter` for `itr list`.
+///
+/// Filters narrow results without changing blocked-visibility semantics
+/// (#169): blocked issues are always listed unless `--blocked` narrows to
+/// blocked-only. `--include-blocked` is accepted for compatibility but is
+/// now the default behavior.
+#[allow(clippy::too_many_arguments)]
+fn build_list_filter(
+    all: bool,
+    statuses: Vec<String>,
+    priorities: Vec<String>,
+    kinds: Vec<String>,
+    tags: Vec<String>,
+    tag_any: Vec<String>,
+    skills: Vec<String>,
+    blocked: bool,
+    _include_blocked: bool,
+    parent_id: Option<i64>,
+    assigned_to: Option<String>,
+) -> ListFilter {
+    ListFilter {
+        statuses,
+        priorities,
+        kinds,
+        tags,
+        tag_any,
+        skills,
+        blocked_only: blocked,
+        include_blocked: true,
+        parent_id,
+        assigned_to,
+        all,
+    }
+}
+
+/// Resolve the `(reason, wontfix)` pair passed to `close::run`.
+///
+/// `--duplicate-of` supplies a default reason naming the duplicate target,
+/// and `--wontfix` is honored rather than silently discarded when combined
+/// with `--duplicate-of` (#190).
+fn close_args(
+    reason: Option<String>,
+    wontfix: bool,
+    duplicate_of: Option<i64>,
+) -> (Option<String>, bool) {
+    match duplicate_of {
+        Some(dup_id) => (
+            Some(reason.unwrap_or_else(|| format!("Duplicate of #{}", dup_id))),
+            wontfix,
+        ),
+        None => (reason, wontfix),
+    }
+}
+
 fn run_command(
     command: Commands,
     conn: &rusqlite::Connection,
@@ -170,33 +224,23 @@ fn run_command(
             sort,
             limit,
         } => {
-            let no_filters = status.is_empty()
-                && priority.is_empty()
-                && kind.is_empty()
-                && tag.is_empty()
-                && tag_any.is_empty()
-                && skill.is_empty()
-                && !blocked
-                && parent.is_none()
-                && assigned_to.is_none();
-            let effective_include_blocked = include_blocked || (no_filters && !all);
-            let filter = ListFilter {
-                statuses: status,
-                priorities: priority,
-                kinds: kind,
-                tags: tag,
-                tag_any,
-                skills: skill,
-                blocked_only: blocked,
-                include_blocked: effective_include_blocked,
-                parent_id: parent,
-                assigned_to,
+            let filter = build_list_filter(
                 all,
-            };
+                status,
+                priority,
+                kind,
+                tag,
+                tag_any,
+                skill,
+                blocked,
+                include_blocked,
+                parent,
+                assigned_to,
+            );
             commands::list::run(conn, &filter, &sort, limit, fmt)
         }
 
-        Commands::Get { id } => commands::get::run(conn, id, fmt),
+        Commands::Get { ids } => commands::get::run(conn, &ids, fmt),
 
         Commands::Update {
             id,
@@ -268,14 +312,11 @@ fn run_command(
                 (None, Some(flag)) => Some(flag),
                 (pos, None) => pos,
             };
+            let (reason, wontfix) = close_args(effective_reason, wontfix, duplicate_of);
             if let Some(dup_id) = duplicate_of {
                 db::add_relation(conn, id, dup_id, "duplicate")?;
-                let reason =
-                    effective_reason.unwrap_or_else(|| format!("Duplicate of #{}", dup_id));
-                commands::close::run(conn, id, Some(reason), false, fmt)
-            } else {
-                commands::close::run(conn, id, effective_reason, wontfix, fmt)
             }
+            commands::close::run(conn, id, reason, wontfix, fmt)
         }
 
         Commands::Note { id, text, agent } => commands::note::run(conn, id, text, &agent, fmt),
@@ -400,7 +441,11 @@ fn run_command(
             relation_type,
         } => commands::relate::run_relate(conn, id, to, &relation_type, fmt),
 
-        Commands::Unrelate { id, from } => commands::relate::run_unrelate(conn, id, from, fmt),
+        Commands::Unrelate {
+            id,
+            from,
+            relation_type,
+        } => commands::relate::run_unrelate(conn, id, from, relation_type.as_deref(), fmt),
 
         Commands::Search {
             query,
@@ -447,22 +492,175 @@ fn run_command(
             fmt,
         ),
 
-        Commands::Show { id: Some(id), .. } => commands::get::run(conn, id, fmt),
-        Commands::Show { id: None, all } => {
-            if all {
-                eprintln!("hint: use `itr list --all` for full filtering options");
+        Commands::Show { ids, all } => {
+            if ids.is_empty() {
+                if all {
+                    eprintln!("hint: use `itr list --all` for full filtering options");
+                }
+                commands::list::run(
+                    conn,
+                    &ListFilter {
+                        include_blocked: true,
+                        all,
+                        ..ListFilter::default()
+                    },
+                    "urgency",
+                    None,
+                    fmt,
+                )
+            } else {
+                commands::get::run(conn, &ids, fmt)
             }
-            commands::list::run(
-                conn,
-                &ListFilter {
-                    include_blocked: true,
-                    all,
-                    ..ListFilter::default()
-                },
-                "urgency",
-                None,
-                fmt,
-            )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn filter_with(statuses: Vec<String>, priorities: Vec<String>) -> ListFilter {
+        build_list_filter(
+            false,
+            statuses,
+            priorities,
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            false,
+            false,
+            None,
+            None,
+        )
+    }
+
+    // --- #169: filters narrow results, they do not flip blocked-visibility ---
+
+    #[test]
+    fn status_filter_does_not_hide_blocked_issues() {
+        let filter = filter_with(vec!["done".to_string()], vec![]);
+        assert!(
+            filter.include_blocked,
+            "an explicit -s filter must keep the same blocked-visibility default as plain list"
+        );
+
+        let filter = filter_with(vec!["open".to_string()], vec![]);
+        assert!(filter.include_blocked);
+    }
+
+    #[test]
+    fn priority_filter_does_not_hide_blocked_issues() {
+        let filter = filter_with(vec![], vec!["high".to_string()]);
+        assert!(filter.include_blocked);
+    }
+
+    #[test]
+    fn blocked_only_filter_is_preserved() {
+        let filter = build_list_filter(
+            false,
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            true,
+            false,
+            None,
+            None,
+        );
+        assert!(
+            filter.blocked_only,
+            "--blocked must still narrow to blocked"
+        );
+    }
+
+    // --- #190: close --duplicate-of must not swallow --wontfix ---
+
+    #[test]
+    fn close_args_honors_wontfix_with_duplicate_of() {
+        let (reason, wontfix) = close_args(None, true, Some(3));
+        assert_eq!(reason.as_deref(), Some("Duplicate of #3"));
+        assert!(
+            wontfix,
+            "--wontfix must be honored alongside --duplicate-of"
+        );
+    }
+
+    #[test]
+    fn close_args_plain_duplicate_of_unchanged() {
+        let (reason, wontfix) = close_args(None, false, Some(7));
+        assert_eq!(reason.as_deref(), Some("Duplicate of #7"));
+        assert!(!wontfix);
+
+        let (reason, wontfix) = close_args(Some("custom".to_string()), false, Some(7));
+        assert_eq!(reason.as_deref(), Some("custom"));
+        assert!(!wontfix);
+
+        let (reason, wontfix) = close_args(Some("r".to_string()), true, None);
+        assert_eq!(reason.as_deref(), Some("r"));
+        assert!(wontfix);
+    }
+
+    #[test]
+    fn close_duplicate_of_with_wontfix_sets_wontfix_status() {
+        let conn = db::open_test_db();
+        let original = db::insert_issue(
+            &conn,
+            "original",
+            "medium",
+            "task",
+            "",
+            &[],
+            &[],
+            &[],
+            "",
+            None,
+            "",
+        )
+        .expect("insert original")
+        .id;
+        let dup = db::insert_issue(
+            &conn,
+            "dup",
+            "medium",
+            "task",
+            "",
+            &[],
+            &[],
+            &[],
+            "",
+            None,
+            "",
+        )
+        .expect("insert dup")
+        .id;
+
+        run_command(
+            Commands::Close {
+                id: dup,
+                positional_reason: None,
+                reason_flag: None,
+                wontfix: true,
+                duplicate_of: Some(original),
+            },
+            &conn,
+            std::path::Path::new("unused"),
+            Format::Compact,
+        )
+        .expect("close as duplicate + wontfix");
+
+        let issue = db::get_issue(&conn, dup).expect("get issue");
+        assert_eq!(
+            issue.status, "wontfix",
+            "--wontfix combined with --duplicate-of must close as wontfix"
+        );
+        assert_eq!(issue.close_reason, format!("Duplicate of #{}", original));
+        let relations = db::get_relations(&conn, dup).expect("relations");
+        assert!(
+            relations.iter().any(|r| r.relation_type == "duplicate"),
+            "duplicate relation must still be recorded"
+        );
     }
 }

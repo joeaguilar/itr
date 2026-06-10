@@ -2,5 +2,5 @@ $ itr unrelate 1 --from 2 -f json
 --- exit ---
 0
 --- stdout ---
-{"removed":true,"source_id":1,"target_id":2}
+{"removed":true,"removed_relations":[{"relation_type":"related","source_id":1,"target_id":2}],"source_id":1,"target_id":2}
 --- stderr ---

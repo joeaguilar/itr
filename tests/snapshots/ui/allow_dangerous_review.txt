@@ -1,0 +1,8 @@
+$ itr ui --port <PORT> --no-open --once --allow-dangerous
+--- exit ---
+0
+--- stdout ---
+UI: http://127.0.0.1:<PORT>/?token=<TOKEN>
+DB: <TMP>/.itr.db
+--- stderr ---
+REVIEW: raw SQL UI is enabled for <TMP>/.itr.db. Treat this session as full database access.

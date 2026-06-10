@@ -1,4 +1,4 @@
-$ itr import --file /tmp/itr-batchbulk-tmp-importfile/import.jsonl
+$ itr import --file <TMP>/importfile/import.jsonl
 --- exit ---
 1
 --- stdout ---

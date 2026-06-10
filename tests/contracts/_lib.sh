@@ -14,8 +14,12 @@
 #       result against a checked-in expected snapshot at
 #       tests/snapshots/<area>/<case>.txt. On mismatch it prints a unified diff
 #       (diff -u) labeled with command, args, stdout, stderr, and exit status,
-#       then records a failure. The temp DB and its directory are discarded
-#       after each call, so cases never share state.
+#       then records a failure. Failures (drift or missing snapshot) fold into
+#       the suite's FAIL counter and NEVER abort the run — `snapshot` /
+#       `snapshot_seeded` always return 0 so remaining cases still execute
+#       under integration.sh's `set -euo pipefail`, and the suite's final
+#       summary reports them with exit 1. The temp DB and its directory are
+#       discarded after each call, so cases never share state.
 #   - `snapshot_seeded <area> <case> <seed_fn> [stdin] -- <itr args...>`
 #       Same as `snapshot`, but first calls `<seed_fn> <db_path>` to populate
 #       the isolated DB with fixtures before running the asserted command.
@@ -262,10 +266,14 @@ _contract_assert() {
     echo "    command: itr $args_desc"
     echo "    exit:    $CONTRACT_EXIT"
     echo "    diff (expected vs actual, unified):"
+    # `|| true`: diff exits 1 on difference (expected here), and under the
+    # suite's `set -o pipefail` that status propagates through the sed pipeline
+    # — without the guard, errexit would kill the whole suite mid-diff, before
+    # fail() is reached and before the regen hint prints.
     diff -u \
         --label "expected: tests/snapshots/$area/$case.txt" \
         --label "actual:   itr $args_desc" \
-        "$snap_file" "$actual_file" | sed 's/^/    /'
+        "$snap_file" "$actual_file" | sed 's/^/    /' || true
     echo "    regen:   UPDATE_SNAPSHOTS=1 ./tests/integration.sh"
     echo "    ─────────────────────────────────────────────────────────"
     echo ""
@@ -299,7 +307,12 @@ snapshot() {
     if [ "${desc_args[0]:-}" = "--" ]; then
         desc_args=("${desc_args[@]:1}")
     fi
-    _contract_assert "$area" "$case" "${desc_args[@]}"
+    # Swallow the assert's non-zero status: contract cases run at top level in
+    # files sourced by integration.sh under `set -e`, so propagating 1 here
+    # would abort the entire suite at the first failing case. fail() has
+    # already folded the result into the suite's FAIL counter; the suite's
+    # final summary reports it and drives the exit code.
+    _contract_assert "$area" "$case" "${desc_args[@]}" || true
 }
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -321,5 +334,6 @@ snapshot_seeded() {
     if [ "${desc_args[0]:-}" = "--" ]; then
         desc_args=("${desc_args[@]:1}")
     fi
-    _contract_assert "$area" "$case" "${desc_args[@]}"
+    # See `snapshot` for why the assert status must not propagate under set -e.
+    _contract_assert "$area" "$case" "${desc_args[@]}" || true
 }

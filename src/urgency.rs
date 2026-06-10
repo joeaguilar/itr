@@ -13,7 +13,7 @@ use rusqlite::Connection;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::urgency::UrgencyConfig;
 /// let cfg = UrgencyConfig::default();
 /// assert!(cfg.priority_critical > cfg.priority_low);
@@ -63,16 +63,16 @@ impl UrgencyConfig {
     /// Build a config seeded with defaults, then overlay any per-key overrides
     /// found in the database's `config` table.
     ///
-    /// Unknown / unparseable keys are silently ignored — defaults stay in
-    /// place. This is the standard soft-fallback behavior for the urgency
-    /// system: misconfiguration degrades to defaults rather than failing the
-    /// command.
+    /// Unknown keys are ignored and unparseable values emit a `REVIEW:` note
+    /// on stderr — defaults stay in place either way. This is the standard
+    /// soft-fallback behavior for the urgency system: misconfiguration
+    /// degrades to defaults rather than failing the command.
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// use itr::urgency::UrgencyConfig;
-    /// # let conn: rusqlite::Connection = unimplemented!();
+    /// // given `conn`: an open rusqlite::Connection
     /// let cfg = UrgencyConfig::load(&conn);
     /// assert!(cfg.priority_critical >= 0.0);
     /// ```
@@ -104,8 +104,12 @@ impl UrgencyConfig {
 
     fn load_key(conn: &Connection, key: &str, target: &mut f64) {
         if let Ok(Some(val)) = db::config_get(conn, key) {
-            if let Ok(v) = val.parse::<f64>() {
-                *target = v;
+            match val.parse::<f64>() {
+                Ok(v) => *target = v,
+                Err(_) => eprintln!(
+                    "REVIEW: config value '{}' for '{}' is not numeric; urgency engine is using the default {}",
+                    val, key, target
+                ),
             }
         }
     }
@@ -118,7 +122,7 @@ impl UrgencyConfig {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// use itr::urgency::UrgencyConfig;
     /// let pairs = UrgencyConfig::defaults_map();
     /// assert!(pairs.iter().any(|(k, _)| *k == "urgency.priority.critical"));
@@ -143,6 +147,57 @@ impl UrgencyConfig {
             ("urgency.notes_count", d.notes_count),
         ]
     }
+
+    /// Return the known urgency config key closest to `key` by edit distance.
+    ///
+    /// Used to power "did you mean ...?" suggestions when a user sets an
+    /// unrecognized `urgency.*` key. The candidate list is derived from
+    /// [`UrgencyConfig::defaults_map`] so it cannot drift from the keys the
+    /// engine actually reads.
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// use itr::urgency::UrgencyConfig;
+    /// let hit = UrgencyConfig::closest_key("urgency.priority.critcal");
+    /// assert_eq!(hit, Some("urgency.priority.critical"));
+    /// ```
+    pub fn closest_key(key: &str) -> Option<&'static str> {
+        Self::defaults_map()
+            .iter()
+            .map(|(k, _)| (*k, levenshtein(key, k)))
+            .min_by_key(|(_, dist)| *dist)
+            .map(|(k, _)| k)
+    }
+}
+
+/// Classic two-row Levenshtein edit distance over bytes.
+///
+/// Hand-rolled to keep the dependency footprint at zero; config keys are
+/// short ASCII, so byte-wise comparison is exact enough for suggestions.
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a = a.as_bytes();
+    let b = b.as_bytes();
+    if a.is_empty() {
+        return b.len();
+    }
+    if b.is_empty() {
+        return a.len();
+    }
+
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut curr = vec![0usize; b.len() + 1];
+
+    for (i, &ca) in a.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = usize::from(ca != cb);
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+
+    prev[b.len()]
 }
 
 /// Thin wrapper around [`compute_urgency_with_breakdown`] that returns just
@@ -154,10 +209,9 @@ impl UrgencyConfig {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::urgency::{UrgencyConfig, compute_urgency};
-/// # let issue: itr::models::Issue = unimplemented!();
-/// # let conn: rusqlite::Connection = unimplemented!();
+/// // given `issue`: an Issue, and `conn`: an open rusqlite::Connection
 /// let cfg = UrgencyConfig::default();
 /// let score = compute_urgency(&issue, &cfg, &conn);
 /// assert!(score.is_finite());
@@ -186,10 +240,9 @@ pub fn compute_urgency(issue: &Issue, config: &UrgencyConfig, conn: &Connection)
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::urgency::{UrgencyConfig, compute_urgency_with_breakdown};
-/// # let issue: itr::models::Issue = unimplemented!();
-/// # let conn: rusqlite::Connection = unimplemented!();
+/// // given `issue`: an Issue, and `conn`: an open rusqlite::Connection
 /// let cfg = UrgencyConfig::default();
 /// let (score, breakdown) = compute_urgency_with_breakdown(&issue, &cfg, &conn);
 /// // Sum of (non-zero) components reconstructs the score, modulo float rounding.
@@ -282,9 +335,147 @@ pub fn compute_urgency_with_breakdown(
     let notes_factor = (notes as f64 / 6.0).min(1.0);
     let notes_val = config.notes_count * notes_factor;
     score += notes_val;
-    if notes_val > 0.0 {
+    if notes_val != 0.0 {
         components.push(("notes".to_string(), notes_val));
     }
 
     (score, UrgencyBreakdown { components })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_conn() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(db::get_schema_sql()).unwrap();
+        conn
+    }
+
+    fn add_issue(conn: &Connection, priority: &str, kind: &str) -> Issue {
+        db::insert_issue(
+            conn,
+            "test issue",
+            priority,
+            kind,
+            "",
+            &[],
+            &[],
+            &[],
+            "",
+            None,
+            "",
+        )
+        .unwrap()
+    }
+
+    fn add_notes(conn: &Connection, issue_id: i64, count: usize) {
+        for i in 0..count {
+            conn.execute(
+                "INSERT INTO notes (issue_id, content, agent) VALUES (?1, ?2, '')",
+                rusqlite::params![issue_id, format!("note {}", i)],
+            )
+            .unwrap();
+        }
+    }
+
+    fn component(breakdown: &UrgencyBreakdown, name: &str) -> Option<f64> {
+        breakdown
+            .components
+            .iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| *v)
+    }
+
+    // --- #184: negative notes component must appear in the breakdown ---
+
+    #[test]
+    fn negative_notes_coefficient_appears_in_breakdown() {
+        let conn = test_conn();
+        db::config_set(&conn, "urgency.notes_count", "-3").unwrap();
+        let issue = add_issue(&conn, "medium", "task");
+        add_notes(&conn, issue.id, 2);
+
+        let config = UrgencyConfig::load(&conn);
+        let (score, breakdown) = compute_urgency_with_breakdown(&issue, &config, &conn);
+
+        let notes = component(&breakdown, "notes")
+            .expect("negative notes component must be present in the breakdown");
+        assert!(
+            (notes - (-1.0)).abs() < 1e-9,
+            "expected -3 * (2/6) = -1.0, got {notes}"
+        );
+
+        let total: f64 = breakdown.components.iter().map(|(_, v)| v).sum();
+        assert!(
+            (total - score).abs() < 1e-9,
+            "components ({total}) must sum to the score ({score})"
+        );
+    }
+
+    #[test]
+    fn breakdown_components_sum_to_score_across_configs() {
+        let cases: &[&[(&str, &str)]] = &[
+            &[],
+            &[("urgency.notes_count", "-3")],
+            &[("urgency.notes_count", "0")],
+            &[("urgency.priority.high", "7.5"), ("urgency.kind.bug", "-1")],
+            &[
+                ("urgency.in_progress", "-4"),
+                ("urgency.has_acceptance", "2"),
+            ],
+        ];
+        for overrides in cases {
+            let conn = test_conn();
+            for (key, value) in *overrides {
+                db::config_set(&conn, key, value).unwrap();
+            }
+            let mut issue = add_issue(&conn, "high", "bug");
+            issue.status = "in-progress".to_string();
+            issue.acceptance = "it works".to_string();
+            add_notes(&conn, issue.id, 3);
+
+            let config = UrgencyConfig::load(&conn);
+            let (score, breakdown) = compute_urgency_with_breakdown(&issue, &config, &conn);
+            let total: f64 = breakdown.components.iter().map(|(_, v)| v).sum();
+            assert!(
+                (total - score).abs() < 1e-9,
+                "overrides {overrides:?}: components ({total}) must sum to score ({score})"
+            );
+        }
+    }
+
+    // --- #183: load keeps defaults when a stored value is not numeric ---
+
+    #[test]
+    fn load_falls_back_to_default_on_non_numeric_value() {
+        let conn = test_conn();
+        db::config_set(&conn, "urgency.priority.medium", "abc").unwrap();
+        let config = UrgencyConfig::load(&conn);
+        assert!(
+            (config.priority_medium - UrgencyConfig::default().priority_medium).abs() < 1e-9,
+            "non-numeric stored value must fall back to the default"
+        );
+    }
+
+    #[test]
+    fn closest_key_suggests_known_key_for_typo() {
+        assert_eq!(
+            UrgencyConfig::closest_key("urgency.priority.critcal"),
+            Some("urgency.priority.critical")
+        );
+        assert_eq!(
+            UrgencyConfig::closest_key("urgency.notes-count"),
+            Some("urgency.notes_count")
+        );
+    }
+
+    #[test]
+    fn levenshtein_basics() {
+        assert_eq!(levenshtein("", ""), 0);
+        assert_eq!(levenshtein("abc", ""), 3);
+        assert_eq!(levenshtein("", "abc"), 3);
+        assert_eq!(levenshtein("kitten", "sitting"), 3);
+        assert_eq!(levenshtein("same", "same"), 0);
+    }
 }

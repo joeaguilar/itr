@@ -104,7 +104,28 @@ jq_val() {
 # Setup
 # ─────────────────────────────────────────────
 WORKDIR=$(mktemp -d)
-trap 'rm -rf "$WORKDIR"' EXIT
+
+# Background UI server pids (set by the `--- ui ---` section, cleared again
+# after its own kill/wait). Tracked globally so the single EXIT trap below can
+# reap them even when `set -e` aborts the suite between server start and the
+# section's own kill — an orphaned server would otherwise outlive the suite,
+# keep its port bound, and poison the NEXT run. Bash traps OVERWRITE rather
+# than stack, so the UI cleanup is folded into the same handler as the WORKDIR
+# removal instead of registering a second `trap ... EXIT`.
+UI_PID=""
+UI_SQL_PID=""
+suite_cleanup() {
+    if [ -n "${UI_PID:-}" ]; then
+        kill "$UI_PID" 2>/dev/null || true
+        wait "$UI_PID" 2>/dev/null || true
+    fi
+    if [ -n "${UI_SQL_PID:-}" ]; then
+        kill "$UI_SQL_PID" 2>/dev/null || true
+        wait "$UI_SQL_PID" 2>/dev/null || true
+    fi
+    rm -rf "$WORKDIR"
+}
+trap suite_cleanup EXIT
 cd "$WORKDIR"
 
 echo "itr integration tests"
@@ -282,6 +303,65 @@ assert_contains "get compact has TITLE" "TITLE: Fix login bug" "$COMPACT"
 assert_contains "get compact has URGENCY BREAKDOWN" "URGENCY BREAKDOWN" "$COMPACT"
 
 assert_exit "get nonexistent exits 1" "1" $ITR get 999
+
+# ─────────────────────────────────────────────
+echo "--- get (multi-ID batch, #136) ---"
+# ─────────────────────────────────────────────
+
+# Happy path: comma-separated IDs return an array of full details in request order
+OUT=$($ITR get 1,2 -f json)
+assert_eq "multi-get returns 2 details" "2" "$(jq_val "$OUT" "len(d)")"
+assert_eq "multi-get preserves request order" "[1, 2]" "$(jq_val "$OUT" "[i['id'] for i in d]")"
+assert_eq "multi-get elements are full details" "True" "$(jq_val "$OUT" "all('urgency_breakdown' in i and 'notes' in i for i in d)")"
+
+# Repeated-argument form is equivalent to the comma form
+OUT=$($ITR get 2 1 -f json)
+assert_eq "multi-get repeated args preserve order" "[2, 1]" "$(jq_val "$OUT" "[i['id'] for i in d]")"
+
+# Compact batched output: one block per issue, blank-line separated
+COMPACT=$($ITR get 1,2)
+assert_contains "multi-get compact has block for id 1" "ID:1" "$COMPACT"
+assert_contains "multi-get compact has block for id 2" "ID:2" "$COMPACT"
+MG_BLOCKS=$(echo "$COMPACT" | grep -c "^ID:" || true)
+assert_eq "multi-get compact emits 2 record lines" "2" "$MG_BLOCKS"
+
+# Partial-missing: found issues still return, missing ID is a REVIEW note, exit 0
+MG_ERR="$WORKDIR/multi_get_err.txt"
+OUT=$($ITR get 1,999 -f json 2>"$MG_ERR")
+assert_eq "multi-get partial missing returns found issue" "[1]" "$(jq_val "$OUT" "[i['id'] for i in d]")"
+assert_contains "multi-get partial missing emits REVIEW note" "REVIEW" "$(cat "$MG_ERR")"
+assert_contains "multi-get partial missing names the missing id" "999" "$(cat "$MG_ERR")"
+assert_exit "multi-get partial missing exits 0" "0" $ITR get 1,999 -f json
+
+# All-missing: empty result ([] in JSON), one REVIEW note per ID, exit 0
+OUT=$($ITR get 998,999 -f json 2>"$MG_ERR")
+assert_eq "multi-get all missing returns empty array" "[]" "$OUT"
+MG_REVIEWS=$(grep -c "REVIEW" "$MG_ERR" || true)
+assert_eq "multi-get all missing emits one REVIEW per id" "2" "$MG_REVIEWS"
+assert_exit "multi-get all missing exits 0" "0" $ITR get 998,999
+
+# Duplicate IDs are de-duplicated (first-seen order)
+OUT=$($ITR get 1,1,2,1 -f json)
+assert_eq "multi-get dedups duplicate ids" "[1, 2]" "$(jq_val "$OUT" "[i['id'] for i in d]")"
+
+# Duplicates collapsing to a single unique ID keep the single-issue contract
+OUT=$($ITR get 1,1 -f json 2>/dev/null)
+assert_eq "multi-get collapsed to one id emits bare object" "1" "$(jq_val "$OUT" "d['id']")"
+
+# show mirrors the batched get contract
+OUT=$($ITR show 1,2 -f json)
+assert_eq "show multi-id batches like get" "[1, 2]" "$(jq_val "$OUT" "[i['id'] for i in d]")"
+
+# Very-large batch: one invocation returns the full working set
+MG_BIG_DIR=$(mktemp -d)
+ITR_DB_PATH="$MG_BIG_DIR/.itr.db" $ITR init >/dev/null
+python3 -c "import json; print(json.dumps([{'title': f'Bulk fetch {i}'} for i in range(1, 251)]))" \
+    | ITR_DB_PATH="$MG_BIG_DIR/.itr.db" $ITR batch add -f json >/dev/null
+MG_BIG_IDS=$(python3 -c "print(','.join(str(i) for i in range(1, 251)))")
+OUT=$(ITR_DB_PATH="$MG_BIG_DIR/.itr.db" $ITR get "$MG_BIG_IDS" -f json)
+assert_eq "multi-get 250-issue batch returns all" "250" "$(jq_val "$OUT" "len(d)")"
+assert_eq "multi-get 250-issue batch keeps order" "[1, 125, 250]" "$(jq_val "$OUT" "[d[0]['id'], d[124]['id'], d[249]['id']]")"
+rm -rf "$MG_BIG_DIR"
 
 # ─────────────────────────────────────────────
 echo "--- list ---"
@@ -635,9 +715,15 @@ assert_contains "schema has relations table" "CREATE TABLE IF NOT EXISTS relatio
 assert_contains "schema has event indexes" "idx_events_issue" "$OUT"
 assert_contains "schema has relation indexes" "idx_relations_source" "$OUT"
 
+# Pipe stdout to python's json.load via stdin (the jq_val pattern) so embedded
+# quotes in the schema SQL can't break the parse, and record a real failure if
+# the output is not valid JSON.
 OUT=$($ITR schema -f json)
-python3 -c "import json; json.loads('$OUT'.replace(\"'\", \"\"))" 2>/dev/null || true
-pass "schema json runs without crash"
+if echo "$OUT" | python3 -c "import sys,json; json.load(sys.stdin)" >/dev/null 2>&1; then
+    pass "schema -f json emits valid JSON"
+else
+    fail "schema -f json emits valid JSON" "stdout did not parse as JSON"
+fi
 
 # ─────────────────────────────────────────────
 echo "--- alias commands ---"
@@ -1121,6 +1207,18 @@ assert_contains "duplicate-of sets reason" "Duplicate of #1" "$(jq_val "$OUT" "d
 OUT=$(ITR_DB_PATH="$REL_DIR/.itr.db" $ITR unrelate 1 --from 2 -f json)
 REMOVED=$(jq_val "$OUT" "d['removed']")
 assert_eq "unrelate removes" "True" "$REMOVED"
+
+# Typed unrelate: --type removes only the named relation type
+ITR_DB_PATH="$REL_DIR/.itr.db" $ITR add "Issue D" -f json >/dev/null   # id 4
+ITR_DB_PATH="$REL_DIR/.itr.db" $ITR add "Issue E" -f json >/dev/null   # id 5
+ITR_DB_PATH="$REL_DIR/.itr.db" $ITR relate 4 --to 5 --relation-type related >/dev/null
+ITR_DB_PATH="$REL_DIR/.itr.db" $ITR relate 4 --to 5 --relation-type duplicate >/dev/null
+OUT=$(ITR_DB_PATH="$REL_DIR/.itr.db" $ITR unrelate 4 --from 5 --type related -f json)
+assert_eq "typed unrelate removes" "True" "$(jq_val "$OUT" "d['removed']")"
+assert_eq "typed unrelate removes only the requested type" "['related']" "$(jq_val "$OUT" "[r['relation_type'] for r in d['removed_relations']]")"
+OUT=$(ITR_DB_PATH="$REL_DIR/.itr.db" $ITR get 5 -f json)
+assert_eq "typed unrelate leaves other types intact" "['duplicate']" "$(jq_val "$OUT" "[r['relation_type'] for r in d.get('relations', [])]")"
+assert_exit "typed unrelate rejects unknown type" "1" env ITR_DB_PATH="$REL_DIR/.itr.db" $ITR unrelate 4 --from 5 --type bogus
 
 # Graph includes relation edges
 ITR_DB_PATH="$REL_DIR/.itr.db" $ITR relate 1 --to 2 --relation-type supersedes >/dev/null
@@ -1634,21 +1732,30 @@ UI_DIR=$(mktemp -d)
 $ITR init --db "$UI_DIR/.itr.db" > /dev/null
 $ITR --db "$UI_DIR/.itr.db" add "UI seed" -p high -k bug --tags "ui,seed" -a "visible through ui api" -f json > /dev/null
 
-UI_PORT=39217
+# Dynamic port: launch with --port 0 so the KERNEL assigns a free port via the
+# binary's own bind — no fixed-port collision with whatever else occupies it,
+# and no probe-then-bind race. The real port is parsed from the startup banner
+# (ui.rs flushes it BEFORE entering accept(), and both compact and json output
+# embed http://127.0.0.1:<port>/) — the same pattern tests/contracts/ui.sh uses.
 UI_OUT="$UI_DIR/ui.out"
 UI_ERR="$UI_DIR/ui.err"
-$ITR --db "$UI_DIR/.itr.db" ui --port "$UI_PORT" --no-open -f json > "$UI_OUT" 2> "$UI_ERR" &
+$ITR --db "$UI_DIR/.itr.db" ui --port 0 --no-open -f json > "$UI_OUT" 2> "$UI_ERR" &
 UI_PID=$!
 
-for _ in {1..30}; do
-    if [ -s "$UI_OUT" ]; then
+UI_PORT=""
+for _ in {1..50}; do
+    UI_PORT="$(sed -nE 's#.*http://127\.0\.0\.1:([0-9]+)/.*#\1#p' "$UI_OUT" 2>/dev/null | head -1)"
+    if [ -n "$UI_PORT" ]; then
+        break
+    fi
+    if ! kill -0 "$UI_PID" 2>/dev/null; then
         break
     fi
     sleep 0.1
 done
 
-if ! kill -0 "$UI_PID" 2>/dev/null; then
-    fail "ui: local server starts" "process exited: $(cat "$UI_ERR")"
+if [ -z "$UI_PORT" ] || ! kill -0 "$UI_PID" 2>/dev/null; then
+    fail "ui: local server starts" "no startup banner/port; stderr: $(cat "$UI_ERR" 2>/dev/null)"
 else
     TOKEN=$(python3 - "$UI_OUT" <<'PY'
 import json, sys, urllib.parse
@@ -1697,6 +1804,17 @@ assert denied["code"] == "DANGEROUS_SQL_DISABLED"
 listed = request("GET", "/api/issues?q=UI&all=true")
 assert listed["total"] >= 1
 
+# Batched detail fetch (#136): ids= switches to full IssueDetail records,
+# missing ids are reported instead of failing, duplicates fetched once.
+batched = request("GET", "/api/issues?ids=1,999,1")
+assert batched["total"] == 1
+assert batched["issues"][0]["id"] == 1
+assert "urgency_breakdown" in batched["issues"][0]
+assert batched["missing"] == [999]
+status, bad = request_raw("GET", "/api/issues?ids=abc")
+assert status == 400
+assert bad["code"] == "INVALID_VALUE"
+
 created = request("POST", "/api/issues", {
     "title": "Created through UI test",
     "priority": "medium",
@@ -1736,22 +1854,28 @@ fi
 
 kill "$UI_PID" >/dev/null 2>&1 || true
 wait "$UI_PID" 2>/dev/null || true
+UI_PID=""
 
-UI_SQL_PORT=39218
+# Same dynamic-port pattern as above for the --allow-dangerous server.
 UI_SQL_OUT="$UI_DIR/ui-sql.out"
 UI_SQL_ERR="$UI_DIR/ui-sql.err"
-$ITR --db "$UI_DIR/.itr.db" ui --port "$UI_SQL_PORT" --no-open --allow-dangerous -f json > "$UI_SQL_OUT" 2> "$UI_SQL_ERR" &
+$ITR --db "$UI_DIR/.itr.db" ui --port 0 --no-open --allow-dangerous -f json > "$UI_SQL_OUT" 2> "$UI_SQL_ERR" &
 UI_SQL_PID=$!
 
-for _ in {1..30}; do
-    if [ -s "$UI_SQL_OUT" ]; then
+UI_SQL_PORT=""
+for _ in {1..50}; do
+    UI_SQL_PORT="$(sed -nE 's#.*http://127\.0\.0\.1:([0-9]+)/.*#\1#p' "$UI_SQL_OUT" 2>/dev/null | head -1)"
+    if [ -n "$UI_SQL_PORT" ]; then
+        break
+    fi
+    if ! kill -0 "$UI_SQL_PID" 2>/dev/null; then
         break
     fi
     sleep 0.1
 done
 
-if ! kill -0 "$UI_SQL_PID" 2>/dev/null; then
-    fail "ui: dangerous SQL server starts" "process exited: $(cat "$UI_SQL_ERR")"
+if [ -z "$UI_SQL_PORT" ] || ! kill -0 "$UI_SQL_PID" 2>/dev/null; then
+    fail "ui: dangerous SQL server starts" "no startup banner/port; stderr: $(cat "$UI_SQL_ERR" 2>/dev/null)"
 else
     SQL_TOKEN=$(python3 - "$UI_SQL_OUT" <<'PY'
 import json, sys, urllib.parse
@@ -1813,6 +1937,7 @@ fi
 
 kill "$UI_SQL_PID" >/dev/null 2>&1 || true
 wait "$UI_SQL_PID" 2>/dev/null || true
+UI_SQL_PID=""
 rm -rf "$UI_DIR"
 
 # ─────────────────────────────────────────────

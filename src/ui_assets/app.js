@@ -112,9 +112,9 @@ function renderRows() {
       <td><input type="checkbox" ${state.selected.has(issue.id) ? "checked" : ""}></td>
       <td>#${issue.id}</td>
       <td>${issue.urgency.toFixed(1)}</td>
-      <td>${issue.status}</td>
-      <td>${issue.priority}</td>
-      <td>${issue.kind}</td>
+      <td>${escapeHtml(issue.status)}</td>
+      <td>${escapeHtml(issue.priority)}</td>
+      <td>${escapeHtml(issue.kind)}</td>
       <td class="title-cell">${escapeHtml(issue.title)}</td>
       <td>${(issue.tags || []).slice(0, 4).map((tag) => `<span class="pill">${escapeHtml(tag)}</span>`).join("")}</td>
       <td class="muted">${escapeHtml(issue.updated_at)}</td>
@@ -513,7 +513,8 @@ function escapeHtml(value) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 async function init() {

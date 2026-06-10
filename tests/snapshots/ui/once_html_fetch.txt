@@ -1,0 +1,7 @@
+$ itr ui --port <PORT> --no-open --once + 1 HTTP GET /assets/app.css
+--- exit ---
+0
+--- http status ---
+HTTP/1.1 200 OK
+--- content-type ---
+Content-Type: text/css; charset=utf-8

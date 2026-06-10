@@ -19,7 +19,7 @@ thread_local! {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::format::set_fields_filter;
 /// // Only emit `id` and `title` from now on, on this thread.
 /// set_fields_filter(vec!["id".into(), "title".into()]);
@@ -32,6 +32,19 @@ pub fn set_fields_filter(fields: Vec<String>) {
 
 fn get_fields_filter() -> Option<Vec<String>> {
     FIELDS_FILTER.with(|f| f.borrow().clone())
+}
+
+/// Emit a soft-fallback `REVIEW:` note when `--fields` was passed but this
+/// command/format combination has no field filtering, so the full output is
+/// emitted unchanged.
+///
+/// Silently swallowing the flag is the anti-pattern this guards against
+/// (issue #197): an agent passing `--fields` to save tokens must get a signal
+/// that the request was not applied.
+fn warn_fields_unsupported(what: &str) {
+    if FIELDS_FILTER.with(|f| f.borrow().is_some()) {
+        eprintln!("REVIEW: --fields is not supported for {what}; emitting unfiltered output");
+    }
 }
 
 /// Returns true if `name` should be included in output.
@@ -62,7 +75,7 @@ fn apply_fields_filter(json_str: &str) -> String {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::format::{println_json, set_fields_filter};
 /// set_fields_filter(vec!["id".into()]);
 /// println_json(r#"{"id":1,"title":"hello"}"#);
@@ -94,7 +107,7 @@ pub fn println_json(json_str: &str) {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::format::Format;
 /// assert_eq!(Format::from_str("json"), Some(Format::Json));
 /// assert_eq!(Format::from_str("garbage"), None);
@@ -110,19 +123,23 @@ pub enum Format {
 }
 
 impl Format {
-    /// Parse a `--format` argument value. Returns `None` for unknown inputs so
-    /// the CLI layer can produce a helpful error.
+    /// Parse a `--format` argument value. Matching is case-insensitive (and
+    /// trims surrounding whitespace) like every other enum-ish input in the
+    /// project (priority/kind/status in `normalize.rs`), so `-f JSON` works
+    /// (issue #192). Returns `None` for truly unknown inputs so the CLI layer
+    /// can produce a helpful error.
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// use itr::format::Format;
     /// assert_eq!(Format::from_str("compact"), Some(Format::Compact));
+    /// assert_eq!(Format::from_str("JSON"), Some(Format::Json));
     /// assert_eq!(Format::from_str("oneline"), Some(Format::Oneline));
     /// assert_eq!(Format::from_str(""), None);
     /// ```
     pub fn from_str(s: &str) -> Option<Format> {
-        match s {
+        match s.trim().to_lowercase().as_str() {
             "compact" => Some(Format::Compact),
             "json" => Some(Format::Json),
             "pretty" => Some(Format::Pretty),
@@ -136,7 +153,7 @@ impl Format {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// use itr::format::Format;
     /// assert!(Format::Json.is_json());
     /// assert!(!Format::Compact.is_json());
@@ -144,6 +161,72 @@ impl Format {
     pub fn is_json(self) -> bool {
         matches!(self, Format::Json)
     }
+}
+
+// --- Line-oriented value escaping ---
+//
+// Compact, oneline, and compact-event output are line-oriented contracts: one
+// logical field must never span more than one physical line, and double-quoted
+// `"…"` tokens must never contain an unescaped quote. These helpers define THE
+// project-wide encoding for free-text values embedded in parseable
+// line-oriented output (see docs/command-contracts.md, "Escaping In
+// Line-Oriented Output"). Reuse them for any new output instead of inventing
+// another scheme. Graphviz DOT has its own escape requirements — use
+// [`escape_dot_label`] there.
+
+/// Backslash-escape characters that would break line-oriented output:
+/// `\` → `\\`, newline → `\n`, carriage return → `\r`, tab → `\t`.
+///
+/// Guarantees a value occupies exactly one physical line and is exactly
+/// recoverable by reversing the escapes. Use for unquoted labeled values
+/// (`TITLE:`, `CONTEXT:`, …) and tab-separated fields.
+pub fn escape_line_value(s: &str) -> String {
+    escape_value(s, false)
+}
+
+/// [`escape_line_value`] plus `"` → `\"`, for values rendered inside
+/// double-quoted `"…"` tokens (oneline titles, `OLDEST_OPEN`/`NODE:`/
+/// `UNBLOCKED:` titles, event `OLD:"…"`/`NEW:"…"`, batch item strings).
+pub fn escape_quoted_value(s: &str) -> String {
+    escape_value(s, true)
+}
+
+fn escape_value(s: &str, escape_quotes: bool) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '"' if escape_quotes => out.push_str("\\\""),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Escape a string for embedding inside a Graphviz DOT double-quoted label:
+/// `\` → `\\`, `"` → `\"`, and literal newlines (LF, CR, or CRLF) become the
+/// DOT `\n` line-break escape, so emitted DOT always parses.
+fn escape_dot_label(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push_str("\\n");
+            }
+            '\n' => out.push_str("\\n"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 // --- Issue Detail ---
@@ -156,9 +239,9 @@ impl Format {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::format::{format_issue_detail, Format};
-/// # let detail: itr::models::IssueDetail = unimplemented!();
+/// // given `detail`: an itr::models::IssueDetail
 /// let json = format_issue_detail(&detail, Format::Json);
 /// assert!(json.starts_with('{'));
 /// ```
@@ -166,7 +249,43 @@ pub fn format_issue_detail(detail: &IssueDetail, fmt: Format) -> String {
     match fmt {
         Format::Json => apply_fields_filter(&serde_json::to_string(detail).unwrap_or_default()),
         Format::Compact | Format::Oneline => format_issue_detail_compact(detail),
-        Format::Pretty => format_issue_detail_pretty(detail),
+        Format::Pretty => {
+            warn_fields_unsupported("issue-detail pretty output");
+            format_issue_detail_pretty(detail)
+        }
+    }
+}
+
+/// Render a batch of issue details (`itr get 1,2,3`, #136) in the requested
+/// output mode.
+///
+/// - `Json` — an array of `IssueDetail` objects (respects `--fields`).
+/// - `Compact`/`Oneline` — the per-issue compact blocks from
+///   [`format_issue_detail`], separated by one blank line (the same
+///   separator as compact issue lists). Each block starts with its `ID:`
+///   record line and free text is escaped per the line-oriented contract, so
+///   the blank-line separator is unambiguous.
+/// - `Pretty` — the per-issue pretty blocks, separated by one blank line.
+///
+/// Callers with exactly one resolved ID must use [`format_issue_detail`]
+/// instead — the single-issue byte contract (a bare JSON object, no
+/// separator) is pinned by snapshots.
+pub fn format_issue_details(details: &[IssueDetail], fmt: Format) -> String {
+    match fmt {
+        Format::Json => apply_fields_filter(&serde_json::to_string(details).unwrap_or_default()),
+        Format::Compact | Format::Oneline => details
+            .iter()
+            .map(format_issue_detail_compact)
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+        Format::Pretty => {
+            warn_fields_unsupported("issue-detail pretty output");
+            details
+                .iter()
+                .map(format_issue_detail_pretty)
+                .collect::<Vec<_>>()
+                .join("\n\n")
+        }
     }
 }
 
@@ -216,25 +335,40 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
     }
 
     if on("tags") && !d.issue.tags.is_empty() {
-        lines.push(format!("TAGS:{}", d.issue.tags.join(",")));
+        lines.push(format!(
+            "TAGS:{}",
+            escape_line_value(&d.issue.tags.join(","))
+        ));
     }
     if on("files") && !d.issue.files.is_empty() {
-        lines.push(format!("FILES:{}", d.issue.files.join(",")));
+        lines.push(format!(
+            "FILES:{}",
+            escape_line_value(&d.issue.files.join(","))
+        ));
     }
     if on("skills") && !d.issue.skills.is_empty() {
-        lines.push(format!("SKILLS:{}", d.issue.skills.join(",")));
+        lines.push(format!(
+            "SKILLS:{}",
+            escape_line_value(&d.issue.skills.join(","))
+        ));
     }
     if on("assigned_to") && !d.issue.assigned_to.is_empty() {
-        lines.push(format!("ASSIGNED:{}", d.issue.assigned_to));
+        lines.push(format!(
+            "ASSIGNED:{}",
+            escape_line_value(&d.issue.assigned_to)
+        ));
     }
     if on("title") {
-        lines.push(format!("TITLE: {}", d.issue.title));
+        lines.push(format!("TITLE: {}", escape_line_value(&d.issue.title)));
     }
     if on("context") && !d.issue.context.is_empty() {
-        lines.push(format!("CONTEXT: {}", d.issue.context));
+        lines.push(format!("CONTEXT: {}", escape_line_value(&d.issue.context)));
     }
     if on("acceptance") && !d.issue.acceptance.is_empty() {
-        lines.push(format!("ACCEPTANCE: {}", d.issue.acceptance));
+        lines.push(format!(
+            "ACCEPTANCE: {}",
+            escape_line_value(&d.issue.acceptance)
+        ));
     }
     if on("parent_id") {
         if let Some(pid) = d.issue.parent_id {
@@ -242,7 +376,10 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
         }
     }
     if on("close_reason") && !d.issue.close_reason.is_empty() {
-        lines.push(format!("CLOSE_REASON: {}", d.issue.close_reason));
+        lines.push(format!(
+            "CLOSE_REASON: {}",
+            escape_line_value(&d.issue.close_reason)
+        ));
     }
     if on("created_at") {
         lines.push(format!("CREATED: {}", d.issue.created_at));
@@ -277,11 +414,13 @@ fn format_issue_detail_compact(d: &IssueDetail) -> String {
             let agent_str = if note.agent.is_empty() {
                 String::new()
             } else {
-                format!(" ({})", note.agent)
+                format!(" ({})", escape_line_value(&note.agent))
             };
             lines.push(format!(
                 "[{}]{} {}",
-                note.created_at, agent_str, note.content
+                note.created_at,
+                agent_str,
+                escape_line_value(&note.content)
             ));
         }
     }
@@ -376,7 +515,7 @@ fn format_issue_detail_pretty(d: &IssueDetail) -> String {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::format::{format_issue_list, Format};
 /// assert_eq!(format_issue_list(&[], Format::Pretty), "");
 /// assert_eq!(format_issue_list(&[], Format::Compact), "");
@@ -386,7 +525,10 @@ pub fn format_issue_list(issues: &[IssueSummary], fmt: Format) -> String {
         Format::Json => apply_fields_filter(&serde_json::to_string(issues).unwrap_or_default()),
         Format::Compact => format_issue_list_compact(issues),
         Format::Pretty => format_issue_list_pretty(issues),
-        Format::Oneline => format_issue_list_oneline(issues),
+        Format::Oneline => {
+            warn_fields_unsupported("list oneline output");
+            format_issue_list_oneline(issues)
+        }
     }
 }
 
@@ -394,14 +536,21 @@ fn format_issue_list_oneline(issues: &[IssueSummary]) -> String {
     issues
         .iter()
         .map(|i| {
+            // Escape free-text fields so each issue is exactly one physical
+            // line with a stable tab-separated field count (issue #175).
             let assignee = if i.assigned_to.is_empty() {
                 String::new()
             } else {
-                format!("\t{}", i.assigned_to)
+                format!("\t{}", escape_line_value(&i.assigned_to))
             };
             format!(
                 "{}\t{}\t{}\t{}\t\"{}\"{}",
-                i.id, i.status, i.priority, i.kind, i.title, assignee
+                i.id,
+                i.status,
+                i.priority,
+                i.kind,
+                escape_quoted_value(&i.title),
+                assignee
             )
         })
         .collect::<Vec<_>>()
@@ -442,22 +591,22 @@ fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
             }
             let mut lines = vec![first_parts.join(" ")];
             if on("tags") && !i.tags.is_empty() {
-                lines.push(format!("TAGS:{}", i.tags.join(",")));
+                lines.push(format!("TAGS:{}", escape_line_value(&i.tags.join(","))));
             }
             if on("files") && !i.files.is_empty() {
-                lines.push(format!("FILES:{}", i.files.join(",")));
+                lines.push(format!("FILES:{}", escape_line_value(&i.files.join(","))));
             }
             if on("skills") && !i.skills.is_empty() {
-                lines.push(format!("SKILLS:{}", i.skills.join(",")));
+                lines.push(format!("SKILLS:{}", escape_line_value(&i.skills.join(","))));
             }
             if on("assigned_to") && !i.assigned_to.is_empty() {
-                lines.push(format!("ASSIGNED:{}", i.assigned_to));
+                lines.push(format!("ASSIGNED:{}", escape_line_value(&i.assigned_to)));
             }
             if on("title") {
-                lines.push(format!("TITLE: {}", i.title));
+                lines.push(format!("TITLE: {}", escape_line_value(&i.title)));
             }
             if on("acceptance") && !i.acceptance.is_empty() {
-                lines.push(format!("ACCEPTANCE: {}", i.acceptance));
+                lines.push(format!("ACCEPTANCE: {}", escape_line_value(&i.acceptance)));
             }
             lines.retain(|l| !l.is_empty());
             lines.join("\n")
@@ -496,10 +645,8 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
         .map(|(_, h, w, right)| {
             if *w == 0 {
                 h.to_string()
-            } else if *right {
-                format!("{:>width$}", h, width = w)
             } else {
-                format!("{:<width$}", h, width = w)
+                pad_display(h, *w, *right)
             }
         })
         .collect();
@@ -532,10 +679,10 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
                 };
                 if *w == 0 {
                     val
-                } else if *right {
-                    format!("{:>width$}", val, width = w)
                 } else {
-                    format!("{:<width$}", val, width = w)
+                    // Display-width-aware padding so double-width (CJK) cells
+                    // keep the column separators aligned (issue #196).
+                    pad_display(&val, *w, *right)
                 }
             })
             .collect();
@@ -548,9 +695,13 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
 
 pub fn format_stats(stats: &Stats, fmt: Format) -> String {
     match fmt {
-        Format::Json => stats_to_deterministic_json(stats),
-        Format::Compact => format_stats_compact(stats),
-        Format::Pretty | Format::Oneline => format_stats_compact(stats), // same for now
+        Format::Json => apply_fields_filter(&stats_to_deterministic_json(stats)),
+        Format::Compact | Format::Pretty | Format::Oneline => {
+            // Compact/pretty/oneline share the labeled compact lines and have
+            // no field filtering (issue #197).
+            warn_fields_unsupported("stats non-JSON output");
+            format_stats_compact(stats)
+        }
     }
 }
 
@@ -562,10 +713,31 @@ pub fn format_stats(stats: &Stats, fmt: Format) -> String {
 /// snapshot tests flap (issue #139). This builds the JSON with a fixed
 /// top-level field order and **sorted** nested count-map keys (via `BTreeMap`),
 /// preserving the exact same JSON shape and values while removing the
-/// nondeterminism. See `docs/command-contracts.md` for the documented contract.
+/// nondeterminism. The nested `oldest_open` object's keys are likewise
+/// alphabetical (`days_old`, `id`, `title`) because it round-trips through
+/// `serde_json::to_value`. See `docs/command-contracts.md` for the documented
+/// contract.
 fn stats_to_deterministic_json(stats: &Stats) -> String {
     use serde_json::{Map, Value};
     use std::collections::BTreeMap;
+
+    // Exhaustive destructure — deliberately no `..` rest pattern (issue #200).
+    // This function replaced derived serialization to control the byte-level
+    // contract, so adding a field to `Stats` must be a compile error here
+    // until the JSON builder below includes it; otherwise the new field would
+    // silently vanish from `stats -f json`.
+    let Stats {
+        total,
+        by_status,
+        by_priority,
+        by_kind,
+        blocked,
+        ready,
+        avg_urgency,
+        by_skills,
+        by_assignee,
+        oldest_open,
+    } = stats;
 
     // Nested count maps: sort keys for a stable, deterministic order.
     let ordered_map = |m: &std::collections::HashMap<String, i64>| -> Value {
@@ -582,21 +754,18 @@ fn stats_to_deterministic_json(stats: &Stats) -> String {
     // stable alphabetical order regardless of insertion order. Combined with
     // the sorted nested maps above, the whole `Stats` object is deterministic.
     let mut obj = Map::new();
-    obj.insert("total".to_string(), Value::from(stats.total));
-    obj.insert("by_status".to_string(), ordered_map(&stats.by_status));
-    obj.insert("by_priority".to_string(), ordered_map(&stats.by_priority));
-    obj.insert("by_kind".to_string(), ordered_map(&stats.by_kind));
-    obj.insert("blocked".to_string(), Value::from(stats.blocked));
-    obj.insert("ready".to_string(), Value::from(stats.ready));
-    obj.insert(
-        "avg_urgency".to_string(),
-        round_urgency_value(stats.avg_urgency),
-    );
-    obj.insert("by_skills".to_string(), ordered_map(&stats.by_skills));
-    obj.insert("by_assignee".to_string(), ordered_map(&stats.by_assignee));
+    obj.insert("total".to_string(), Value::from(*total));
+    obj.insert("by_status".to_string(), ordered_map(by_status));
+    obj.insert("by_priority".to_string(), ordered_map(by_priority));
+    obj.insert("by_kind".to_string(), ordered_map(by_kind));
+    obj.insert("blocked".to_string(), Value::from(*blocked));
+    obj.insert("ready".to_string(), Value::from(*ready));
+    obj.insert("avg_urgency".to_string(), round_urgency_value(*avg_urgency));
+    obj.insert("by_skills".to_string(), ordered_map(by_skills));
+    obj.insert("by_assignee".to_string(), ordered_map(by_assignee));
     obj.insert(
         "oldest_open".to_string(),
-        serde_json::to_value(&stats.oldest_open).unwrap_or(Value::Null),
+        serde_json::to_value(oldest_open).unwrap_or(Value::Null),
     );
 
     Value::Object(obj).to_string()
@@ -633,20 +802,25 @@ fn format_stats_compact(stats: &Stats) -> String {
         skill_pairs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
         let parts: Vec<String> = skill_pairs
             .iter()
-            .map(|(k, v)| format!("{}={}", k, v))
+            .map(|(k, v)| format!("{}={}", escape_line_value(k), v))
             .collect();
         lines.push(format!("BY_SKILLS: {}", parts.join(" ")));
     }
     if !stats.by_assignee.is_empty() {
         let mut pairs: Vec<(&String, &i64)> = stats.by_assignee.iter().collect();
         pairs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-        let parts: Vec<String> = pairs.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+        let parts: Vec<String> = pairs
+            .iter()
+            .map(|(k, v)| format!("{}={}", escape_line_value(k), v))
+            .collect();
         lines.push(format!("BY_ASSIGNEE: {}", parts.join(" ")));
     }
     if let Some(ref oldest) = stats.oldest_open {
         lines.push(format!(
             "OLDEST_OPEN: ID:{} DAYS:{} \"{}\"",
-            oldest.id, oldest.days_old, oldest.title
+            oldest.id,
+            oldest.days_old,
+            escape_quoted_value(&oldest.title)
         ));
     }
     lines.join("\n")
@@ -662,7 +836,7 @@ fn format_stats_compact(stats: &Stats) -> String {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::format::{format_graph, Format};
 /// use itr::models::GraphOutput;
 /// let empty = GraphOutput { nodes: vec![], edges: vec![] };
@@ -670,9 +844,15 @@ fn format_stats_compact(stats: &Stats) -> String {
 /// ```
 pub fn format_graph(graph: &GraphOutput, fmt: Format) -> String {
     match fmt {
-        Format::Json => graph_to_deterministic_json(graph),
-        Format::Compact => format_graph_compact(graph),
-        Format::Pretty | Format::Oneline => format_graph_dot(graph),
+        Format::Json => apply_fields_filter(&graph_to_deterministic_json(graph)),
+        Format::Compact => {
+            warn_fields_unsupported("graph compact output");
+            format_graph_compact(graph)
+        }
+        Format::Pretty | Format::Oneline => {
+            warn_fields_unsupported("graph DOT output");
+            format_graph_dot(graph)
+        }
     }
 }
 
@@ -685,33 +865,43 @@ pub fn format_graph(graph: &GraphOutput, fmt: Format) -> String {
 /// urgency to [`URGENCY_JSON_DECIMALS`] decimal places at the serialization
 /// boundary — the ranking math is untouched, only the rendered precision is
 /// pinned. See `docs/command-contracts.md` for the documented contract.
+///
+/// The rounding happens on a clone of the struct so the serde-derived
+/// `Serialize` impl emits fields in declaration order (`nodes` before
+/// `edges`; node keys `id`, `title`, `status`, `urgency`, `is_blocked`).
+/// Round-tripping through `serde_json::Value` instead would re-sort every
+/// object key alphabetically (the default `Map` is a `BTreeMap`) — an
+/// undocumented whole-document reorder (issue #179).
 fn graph_to_deterministic_json(graph: &GraphOutput) -> String {
-    use serde_json::Value;
-
-    let mut value = serde_json::to_value(graph).unwrap_or(Value::Null);
-    if let Some(nodes) = value.get_mut("nodes").and_then(Value::as_array_mut) {
-        for node in nodes.iter_mut() {
-            if let Some(urg) = node.get("urgency").and_then(Value::as_f64) {
-                node["urgency"] = round_urgency_value(urg);
-            }
-        }
+    let mut rounded = graph.clone();
+    for node in &mut rounded.nodes {
+        node.urgency = round_urgency(node.urgency);
     }
-    value.to_string()
+    serde_json::to_string(&rounded).unwrap_or_default()
 }
 
 /// Number of decimal places urgency is rounded to in JSON output. Keeps
 /// parseable formats byte-stable without affecting urgency ranking.
 const URGENCY_JSON_DECIMALS: i32 = 4;
 
-/// Round an urgency `f64` to the JSON precision contract and return it as a
-/// JSON number `Value`. Integral results (e.g. `9.0`) serialize as `9.0`
-/// because the source value is always a float; callers that need it embedded in
-/// an object should insert the returned `Value` directly.
-fn round_urgency_value(urgency: f64) -> serde_json::Value {
+/// Round an urgency `f64` to the JSON precision contract. NaN/Inf (which
+/// `serde_json` cannot represent) fall back to `0.0`.
+fn round_urgency(urgency: f64) -> f64 {
     let factor = 10f64.powi(URGENCY_JSON_DECIMALS);
     let rounded = (urgency * factor).round() / factor;
-    // serde_json::Number::from_f64 is None only for NaN/Inf; fall back to 0.0.
-    serde_json::Number::from_f64(rounded)
+    if rounded.is_finite() {
+        rounded
+    } else {
+        0.0
+    }
+}
+
+/// [`round_urgency`] wrapped as a JSON number `Value`. Integral results (e.g.
+/// `9.0`) serialize as `9.0` because the source value is always a float;
+/// callers that need it embedded in an object should insert the returned
+/// `Value` directly.
+fn round_urgency_value(urgency: f64) -> serde_json::Value {
+    serde_json::Number::from_f64(round_urgency(urgency))
         .map_or_else(|| serde_json::Value::from(0.0), serde_json::Value::Number)
 }
 
@@ -721,7 +911,11 @@ fn format_graph_compact(graph: &GraphOutput) -> String {
         let blocked = if node.is_blocked { " [BLOCKED]" } else { "" };
         lines.push(format!(
             "NODE:{} STATUS:{} URGENCY:{:.1}{} \"{}\"",
-            node.id, node.status, node.urgency, blocked, node.title
+            node.id,
+            node.status,
+            node.urgency,
+            blocked,
+            escape_quoted_value(&node.title)
         ));
     }
     for edge in &graph.edges {
@@ -738,7 +932,9 @@ fn format_graph_dot(graph: &GraphOutput) -> String {
     lines.push("digraph itr {".to_string());
     lines.push("  rankdir=LR;".to_string());
     for node in &graph.nodes {
-        let title_short = truncate_with_ellipsis(&node.title, 30);
+        // Truncate first, then escape, so escape sequences are never cut in
+        // half by the truncation (issue #176).
+        let title_short = escape_dot_label(&truncate_with_ellipsis(&node.title, 30));
         let style = if node.is_blocked {
             " style=filled fillcolor=gray"
         } else {
@@ -756,21 +952,97 @@ fn format_graph_dot(graph: &GraphOutput) -> String {
     lines.join("\n")
 }
 
-// --- Title truncation helper ---
+// --- Display width, padding, and truncation helpers ---
 
-/// Truncate a string to fit within `max_len` bytes, appending "..." if truncated.
-/// Always slices on a valid UTF-8 char boundary.
-fn truncate_with_ellipsis(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
+/// Inclusive Unicode codepoint ranges rendered as two terminal columns.
+///
+/// This is a deliberate approximation of the East Asian Wide/Fullwidth
+/// property (issue #196): it covers the common CJK blocks (Hangul, CJK
+/// radicals/symbols, Hiragana/Katakana, CJK Unified Ideographs + extensions,
+/// Hangul Syllables, compatibility ideographs/forms, fullwidth forms) and
+/// defaults everything else — including combining marks and most emoji — to
+/// width 1. It is not exhaustive Unicode-correctness; it exists so pretty
+/// tables align for the overwhelmingly common double-width inputs without
+/// pulling in a new dependency.
+const DOUBLE_WIDTH_RANGES: &[(u32, u32)] = &[
+    (0x1100, 0x115F),   // Hangul Jamo (leading consonants)
+    (0x2E80, 0x303E),   // CJK Radicals .. CJK Symbols and Punctuation
+    (0x3041, 0x33FF),   // Hiragana, Katakana, Kanbun, CJK Compatibility
+    (0x3400, 0x4DBF),   // CJK Unified Ideographs Extension A
+    (0x4E00, 0x9FFF),   // CJK Unified Ideographs
+    (0xA000, 0xA4CF),   // Yi Syllables and Radicals
+    (0xAC00, 0xD7A3),   // Hangul Syllables
+    (0xF900, 0xFAFF),   // CJK Compatibility Ideographs
+    (0xFE30, 0xFE4F),   // CJK Compatibility Forms
+    (0xFF00, 0xFF60),   // Fullwidth Forms
+    (0xFFE0, 0xFFE6),   // Fullwidth Signs
+    (0x20000, 0x2FFFD), // CJK Unified Ideographs Extensions B-F
+    (0x30000, 0x3FFFD), // CJK Unified Ideographs Extension G
+];
+
+/// Approximate terminal display width of one char: 2 for the common
+/// double-width CJK/fullwidth blocks, 1 for everything else.
+fn char_display_width(c: char) -> usize {
+    let cp = c as u32;
+    if DOUBLE_WIDTH_RANGES
+        .iter()
+        .any(|&(lo, hi)| (lo..=hi).contains(&cp))
+    {
+        2
     } else {
-        let suffix_len = 3; // "..."
-        let mut end = max_len - suffix_len;
-        while !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}...", &s[..end])
+        1
     }
+}
+
+/// Approximate terminal display width of a string (sum of char widths).
+fn display_width(s: &str) -> usize {
+    s.chars().map(char_display_width).sum()
+}
+
+/// Pad `s` with spaces to `width` display columns (left- or right-aligned).
+/// Strings already at or beyond `width` are returned unchanged — identical to
+/// `format!("{:<width$}")` semantics, but counting display columns instead of
+/// chars so double-width (CJK) cells keep table separators aligned
+/// (issue #196). For pure-ASCII input the output is byte-identical to the
+/// `format!` width specifiers this replaced.
+fn pad_display(s: &str, width: usize, right_align: bool) -> String {
+    let w = display_width(s);
+    if w >= width {
+        return s.to_string();
+    }
+    let pad = " ".repeat(width - w);
+    if right_align {
+        format!("{pad}{s}")
+    } else {
+        format!("{s}{pad}")
+    }
+}
+
+/// Truncate a string to fit within `max_cols` display columns, appending
+/// "..." if truncated.
+///
+/// Width is measured with [`display_width`] (double-width-aware, issue #196),
+/// and truncation iterates chars so it can never split a UTF-8 sequence. A
+/// double-width char that would straddle the cut point is dropped entirely,
+/// so the result may come up one column short of `max_cols`. For pure-ASCII
+/// input this matches the old byte-based behavior exactly.
+fn truncate_with_ellipsis(s: &str, max_cols: usize) -> String {
+    if display_width(s) <= max_cols {
+        return s.to_string();
+    }
+    let budget = max_cols.saturating_sub(3); // room for "..."
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = char_display_width(c);
+        if used + w > budget {
+            break;
+        }
+        used += w;
+        out.push(c);
+    }
+    out.push_str("...");
+    out
 }
 
 // --- Search Results ---
@@ -779,26 +1051,44 @@ pub fn format_search_results(results: &[SearchResult], fmt: Format) -> String {
     match fmt {
         Format::Json => apply_fields_filter(&serde_json::to_string(results).unwrap_or_default()),
         Format::Compact => format_search_compact(results),
-        Format::Pretty | Format::Oneline => format_search_pretty(results),
+        Format::Pretty | Format::Oneline => {
+            warn_fields_unsupported("search pretty/oneline output");
+            format_search_pretty(results)
+        }
     }
 }
 
 fn format_search_compact(results: &[SearchResult]) -> String {
+    // Honor the --fields filter like the other compact formatters do
+    // (issue #197): with no filter set, every `on(...)` check is true and the
+    // output is byte-identical to the unfiltered contract.
+    let fields = get_fields_filter();
+    let on = |name: &str| field_enabled(fields.as_ref(), name);
     results
         .iter()
         .map(|r| {
-            let mut first = format!(
-                "ID:{} STATUS:{} PRIORITY:{} KIND:{} URGENCY:{:.1} MATCHED:{}",
-                r.id,
-                r.status,
-                r.priority,
-                r.kind,
-                r.urgency,
-                r.matched_fields.join(",")
-            );
-            if !r.blocked_by.is_empty() {
-                first.push_str(&format!(
-                    " BLOCKED_BY:{}",
+            let mut first_parts = Vec::new();
+            if on("id") {
+                first_parts.push(format!("ID:{}", r.id));
+            }
+            if on("status") {
+                first_parts.push(format!("STATUS:{}", r.status));
+            }
+            if on("priority") {
+                first_parts.push(format!("PRIORITY:{}", r.priority));
+            }
+            if on("kind") {
+                first_parts.push(format!("KIND:{}", r.kind));
+            }
+            if on("urgency") {
+                first_parts.push(format!("URGENCY:{:.1}", r.urgency));
+            }
+            if on("matched_fields") {
+                first_parts.push(format!("MATCHED:{}", r.matched_fields.join(",")));
+            }
+            if on("blocked_by") && !r.blocked_by.is_empty() {
+                first_parts.push(format!(
+                    "BLOCKED_BY:{}",
                     r.blocked_by
                         .iter()
                         .map(std::string::ToString::to_string)
@@ -806,28 +1096,37 @@ fn format_search_compact(results: &[SearchResult]) -> String {
                         .join(",")
                 ));
             }
-            let mut lines = vec![first];
-            if !r.tags.is_empty() {
-                lines.push(format!("TAGS:{}", r.tags.join(",")));
+            let mut lines = vec![first_parts.join(" ")];
+            if on("tags") && !r.tags.is_empty() {
+                lines.push(format!("TAGS:{}", escape_line_value(&r.tags.join(","))));
             }
-            if !r.files.is_empty() {
-                lines.push(format!("FILES:{}", r.files.join(",")));
+            if on("files") && !r.files.is_empty() {
+                lines.push(format!("FILES:{}", escape_line_value(&r.files.join(","))));
             }
-            if !r.skills.is_empty() {
-                lines.push(format!("SKILLS:{}", r.skills.join(",")));
+            if on("skills") && !r.skills.is_empty() {
+                lines.push(format!("SKILLS:{}", escape_line_value(&r.skills.join(","))));
             }
-            if !r.assigned_to.is_empty() {
-                lines.push(format!("ASSIGNED:{}", r.assigned_to));
+            if on("assigned_to") && !r.assigned_to.is_empty() {
+                lines.push(format!("ASSIGNED:{}", escape_line_value(&r.assigned_to)));
             }
-            lines.push(format!("TITLE: {}", r.title));
-            if !r.acceptance.is_empty() {
-                lines.push(format!("ACCEPTANCE: {}", r.acceptance));
+            if on("title") {
+                lines.push(format!("TITLE: {}", escape_line_value(&r.title)));
             }
-            if let Some(ref snippets) = r.context_snippets {
-                for (field, snippet) in snippets {
-                    lines.push(format!("SNIPPET[{}]: {}", field, snippet));
+            if on("acceptance") && !r.acceptance.is_empty() {
+                lines.push(format!("ACCEPTANCE: {}", escape_line_value(&r.acceptance)));
+            }
+            if on("context_snippets") {
+                if let Some(ref snippets) = r.context_snippets {
+                    for (field, snippet) in snippets {
+                        lines.push(format!(
+                            "SNIPPET[{}]: {}",
+                            field,
+                            escape_line_value(snippet)
+                        ));
+                    }
                 }
             }
+            lines.retain(|l| !l.is_empty());
             lines.join("\n")
         })
         .collect::<Vec<_>>()
@@ -840,8 +1139,13 @@ fn format_search_pretty(results: &[SearchResult]) -> String {
     }
     let mut lines = Vec::new();
     lines.push(format!(
-        " {:>3} | {:>5} | {:11} | {:8} | {:7} | {:40} | Matched",
-        "#", "Urg", "Status", "Pri", "Kind", "Title"
+        " {} | {} | {} | {} | {} | {} | Matched",
+        pad_display("#", 3, true),
+        pad_display("Urg", 5, true),
+        pad_display("Status", 11, false),
+        pad_display("Pri", 8, false),
+        pad_display("Kind", 7, false),
+        pad_display("Title", 40, false),
     ));
     lines.push(
         "-----|-------|-------------|----------|---------|------------------------------------------|--------"
@@ -850,9 +1154,17 @@ fn format_search_pretty(results: &[SearchResult]) -> String {
     for r in results {
         let title = truncate_with_ellipsis(&r.title, 40);
         let matched = r.matched_fields.join(",");
+        // Display-width-aware padding keeps separators aligned for
+        // double-width (CJK) cells (issue #196).
         lines.push(format!(
-            " {:>3} | {:>5.1} | {:11} | {:8} | {:7} | {:40} | {}",
-            r.id, r.urgency, r.status, r.priority, r.kind, title, matched
+            " {} | {} | {} | {} | {} | {} | {}",
+            pad_display(&r.id.to_string(), 3, true),
+            pad_display(&format!("{:.1}", r.urgency), 5, true),
+            pad_display(&r.status, 11, false),
+            pad_display(&r.priority, 8, false),
+            pad_display(&r.kind, 7, false),
+            pad_display(&title, 40, false),
+            matched
         ));
     }
     lines.join("\n")
@@ -862,9 +1174,15 @@ fn format_search_pretty(results: &[SearchResult]) -> String {
 
 pub fn format_events(events: &[Event], fmt: Format) -> String {
     match fmt {
-        Format::Json => serde_json::to_string(events).unwrap_or_default(),
-        Format::Compact => format_events_compact(events),
-        Format::Pretty | Format::Oneline => format_events_pretty(events),
+        Format::Json => apply_fields_filter(&serde_json::to_string(events).unwrap_or_default()),
+        Format::Compact => {
+            warn_fields_unsupported("log compact output");
+            format_events_compact(events)
+        }
+        Format::Pretty | Format::Oneline => {
+            warn_fields_unsupported("log pretty output");
+            format_events_pretty(events)
+        }
     }
 }
 
@@ -875,11 +1193,20 @@ fn format_events_compact(events: &[Event]) -> String {
             let agent_str = if e.agent.is_empty() {
                 String::new()
             } else {
-                format!(" AGENT:{}", e.agent)
+                format!(" AGENT:{}", escape_line_value(&e.agent))
             };
+            // OLD/NEW are free text (often multi-word, possibly containing
+            // literal ` NEW:` or quotes): double-quote them with internal
+            // escaping so a parser can recover the exact values (issue #177).
             format!(
-                "EVENT:{} ISSUE:{} FIELD:{} OLD:{} NEW:{}{} ({})",
-                e.id, e.issue_id, e.field, e.old_value, e.new_value, agent_str, e.created_at
+                "EVENT:{} ISSUE:{} FIELD:{} OLD:\"{}\" NEW:\"{}\"{} ({})",
+                e.id,
+                e.issue_id,
+                e.field,
+                escape_quoted_value(&e.old_value),
+                escape_quoted_value(&e.new_value),
+                agent_str,
+                e.created_at
             )
         })
         .collect::<Vec<_>>()
@@ -892,8 +1219,14 @@ fn format_events_pretty(events: &[Event]) -> String {
     }
     let mut lines = Vec::new();
     lines.push(format!(
-        " {:>4} | {:>5} | {:15} | {:20} | {:20} | {:15} | {}",
-        "ID", "Issue", "Field", "Old", "New", "Agent", "Time"
+        " {} | {} | {} | {} | {} | {} | {}",
+        pad_display("ID", 4, true),
+        pad_display("Issue", 5, true),
+        pad_display("Field", 15, false),
+        pad_display("Old", 20, false),
+        pad_display("New", 20, false),
+        pad_display("Agent", 15, false),
+        "Time"
     ));
     lines.push(
         "------|-------|-----------------|----------------------|----------------------|-----------------|--------------------"
@@ -903,9 +1236,17 @@ fn format_events_pretty(events: &[Event]) -> String {
         let old = truncate_with_ellipsis(&e.old_value, 20);
         let new = truncate_with_ellipsis(&e.new_value, 20);
         let agent = truncate_with_ellipsis(&e.agent, 15);
+        // Display-width-aware padding keeps separators aligned for
+        // double-width (CJK) cells (issue #196).
         lines.push(format!(
-            " {:>4} | {:>5} | {:15} | {:20} | {:20} | {:15} | {}",
-            e.id, e.issue_id, e.field, old, new, agent, e.created_at
+            " {} | {} | {} | {} | {} | {} | {}",
+            pad_display(&e.id.to_string(), 4, true),
+            pad_display(&e.issue_id.to_string(), 5, true),
+            pad_display(&e.field, 15, false),
+            pad_display(&old, 20, false),
+            pad_display(&new, 20, false),
+            pad_display(&agent, 15, false),
+            e.created_at
         ));
     }
     lines.join("\n")
@@ -950,6 +1291,25 @@ const VALID_FIELDS: &[&str] = &[
     "ok",
     "review",
     "dry_run",
+    // Stats fields (stats -f json top-level filtering, issue #197)
+    "by_status",
+    "by_priority",
+    "by_kind",
+    "blocked",
+    "ready",
+    "avg_urgency",
+    "by_skills",
+    "by_assignee",
+    "oldest_open",
+    // Graph fields (graph -f json top-level filtering, issue #197)
+    "nodes",
+    "edges",
+    // Event fields (log -f json filtering, issue #197)
+    "issue_id",
+    "field",
+    "old_value",
+    "new_value",
+    "agent",
 ];
 
 /// Parse a `--fields` argument like `id,title,urgency` into a normalized
@@ -961,7 +1321,7 @@ const VALID_FIELDS: &[&str] = &[
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::format::parse_fields;
 /// assert_eq!(parse_fields("id,title"), vec!["id", "title"]);
 /// assert_eq!(parse_fields(" id , , urgency "), vec!["id", "urgency"]);
@@ -984,7 +1344,7 @@ pub fn parse_fields(fields_str: &str) -> Vec<String> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::format::validate_fields;
 /// // No stderr output expected — all valid:
 /// validate_fields(&["id".into(), "title".into()]);
@@ -1046,7 +1406,7 @@ pub fn format_unblocked(issues: &[(i64, String)], fmt: Format) -> String {
         }
         _ => issues
             .iter()
-            .map(|(id, title)| format!("UNBLOCKED:{} \"{}\"", id, title))
+            .map(|(id, title)| format!("UNBLOCKED:{} \"{}\"", id, escape_quoted_value(title)))
             .collect::<Vec<_>>()
             .join("\n"),
     }
@@ -1057,7 +1417,10 @@ pub fn format_unblocked(issues: &[(i64, String)], fmt: Format) -> String {
 pub fn format_batch_result(result: &BatchResult, fmt: Format) -> String {
     match fmt {
         Format::Json => apply_fields_filter(&serde_json::to_string(result).unwrap_or_default()),
-        Format::Compact | Format::Pretty | Format::Oneline => format_batch_result_compact(result),
+        Format::Compact | Format::Pretty | Format::Oneline => {
+            warn_fields_unsupported("batch non-JSON output");
+            format_batch_result_compact(result)
+        }
     }
 }
 
@@ -1076,20 +1439,36 @@ fn format_batch_result_compact(result: &BatchResult) -> String {
             "ok" => {
                 lines.push(format!("  OK:{}", item.id));
                 for ub in &item.unblocked {
-                    lines.push(format!("  UNBLOCKED:{} \"{}\"", ub.id, ub.title));
+                    lines.push(format!(
+                        "  UNBLOCKED:{} \"{}\"",
+                        ub.id,
+                        escape_quoted_value(&ub.title)
+                    ));
                 }
                 for note in &item.notes {
-                    lines.push(format!("  NOTE:{} \"{}\"", item.id, note));
+                    lines.push(format!(
+                        "  NOTE:{} \"{}\"",
+                        item.id,
+                        escape_quoted_value(note)
+                    ));
                 }
             }
             "error" => {
                 let msg = item.error.as_deref().unwrap_or("unknown error");
-                lines.push(format!("  ERROR:{} \"{}\"", item.id, msg));
+                lines.push(format!(
+                    "  ERROR:{} \"{}\"",
+                    item.id,
+                    escape_quoted_value(msg)
+                ));
             }
             "review" => {
                 lines.push(format!("  REVIEW:{}", item.id));
                 for note in &item.notes {
-                    lines.push(format!("  NOTE:{} \"{}\"", item.id, note));
+                    lines.push(format!(
+                        "  NOTE:{} \"{}\"",
+                        item.id,
+                        escape_quoted_value(note)
+                    ));
                 }
             }
             _ => {
@@ -1103,7 +1482,28 @@ fn format_batch_result_compact(result: &BatchResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{GraphNode, GraphOutput, IssueSummary};
+    use crate::models::{
+        Event, GraphEdge, GraphNode, GraphOutput, Issue, IssueDetail, IssueSummary, OldestOpen,
+    };
+    use std::collections::HashMap;
+
+    /// RAII guard for tests that exercise the thread-local `--fields` filter:
+    /// installs the filter on construction and clears it on drop so no other
+    /// assertion on this thread observes a leftover filter.
+    struct FieldsFilterGuard;
+
+    impl FieldsFilterGuard {
+        fn set(fields: &[&str]) -> Self {
+            set_fields_filter(fields.iter().map(|s| (*s).to_string()).collect());
+            FieldsFilterGuard
+        }
+    }
+
+    impl Drop for FieldsFilterGuard {
+        fn drop(&mut self) {
+            FIELDS_FILTER.with(|f| *f.borrow_mut() = None);
+        }
+    }
 
     // --- truncate_with_ellipsis unit tests ---
 
@@ -1128,50 +1528,125 @@ mod tests {
 
     #[test]
     fn truncate_multibyte_em_dash_at_boundary() {
-        // em dash '—' is 3 bytes (U+2014). Place it so byte 37 lands inside it.
-        // 35 ASCII chars + '—' (bytes 35..38) + more text
+        // em dash '—' is 3 bytes (U+2014) but 1 display column. The cut point
+        // must never split a UTF-8 sequence.
         let s = format!("{}—this continues past the limit!!", "a".repeat(35));
         let result = truncate_with_ellipsis(&s, 40);
         assert!(result.ends_with("..."));
-        assert!(result.len() <= 40);
+        assert!(display_width(&result) <= 40);
     }
 
     #[test]
     fn truncate_multibyte_emoji_at_boundary() {
-        // '🚀' is 4 bytes. Place at the cut point.
+        // '🚀' is 4 bytes. Place near the cut point.
         let s = format!("{}🚀 and more stuff here!!", "a".repeat(35));
         let result = truncate_with_ellipsis(&s, 40);
         assert!(result.ends_with("..."));
-        assert!(result.len() <= 40);
+        assert!(display_width(&result) <= 40);
     }
 
     #[test]
     fn truncate_all_multibyte() {
-        // String of only 3-byte chars (em dashes): 20 chars = 60 bytes
-        let s = "—".repeat(20);
+        // String of only 3-byte chars (em dashes, 1 column each): 50 chars =
+        // 150 bytes but 50 display columns, so it truncates at the column
+        // budget, never mid-sequence.
+        let s = "—".repeat(50);
         let result = truncate_with_ellipsis(&s, 40);
         assert!(result.ends_with("..."));
-        assert!(result.len() <= 40);
+        assert!(display_width(&result) <= 40);
+        assert_eq!(result, format!("{}...", "—".repeat(37)));
         // Validates it's valid UTF-8 (would panic if not)
         let _ = result.chars().count();
     }
 
     #[test]
     fn truncate_two_byte_chars_at_boundary() {
-        // 'é' is 2 bytes (U+00E9)
+        // 'é' is 2 bytes (U+00E9) but 1 display column
         let s = format!("{}é more text after here!!", "a".repeat(36));
         let result = truncate_with_ellipsis(&s, 40);
         assert!(result.ends_with("..."));
-        assert!(result.len() <= 40);
+        assert!(display_width(&result) <= 40);
     }
 
     #[test]
     fn truncate_graph_dot_limit() {
-        // Graph DOT uses limit=30. em dash at byte 27 boundary.
+        // Graph DOT uses limit=30. em dash at the column-27 boundary.
         let s = format!("{}—continues on and on", "a".repeat(27));
         let result = truncate_with_ellipsis(&s, 30);
         assert!(result.ends_with("..."));
-        assert!(result.len() <= 30);
+        assert!(display_width(&result) <= 30);
+    }
+
+    // --- Format::from_str case-insensitivity (issue #192) ---
+
+    #[test]
+    fn format_from_str_is_case_insensitive() {
+        // Issue #192: every other enum-ish input (priority/kind/status) is
+        // case-folded before matching; `--format` must be too.
+        assert_eq!(Format::from_str("JSON"), Some(Format::Json));
+        assert_eq!(Format::from_str("Json"), Some(Format::Json));
+        assert_eq!(Format::from_str("COMPACT"), Some(Format::Compact));
+        assert_eq!(Format::from_str("Pretty"), Some(Format::Pretty));
+        assert_eq!(Format::from_str("OneLine"), Some(Format::Oneline));
+        assert_eq!(Format::from_str(" json "), Some(Format::Json));
+    }
+
+    #[test]
+    fn format_from_str_unknown_stays_none() {
+        // Truly unknown values keep the existing hard-error path in main.rs
+        // (the integration suite pins `-f bogus` → exit 1 with the
+        // enumerated valid-formats message).
+        assert_eq!(Format::from_str("bogus"), None);
+        assert_eq!(Format::from_str(""), None);
+        assert_eq!(Format::from_str("jsonl"), None);
+    }
+
+    // --- Display width approximation (issue #196) ---
+
+    #[test]
+    fn char_display_width_common_blocks() {
+        assert_eq!(char_display_width('漢'), 2); // CJK Unified Ideographs
+        assert_eq!(char_display_width('あ'), 2); // Hiragana
+        assert_eq!(char_display_width('カ'), 2); // Katakana
+        assert_eq!(char_display_width('한'), 2); // Hangul Syllables
+        assert_eq!(char_display_width('Ａ'), 2); // Fullwidth Latin
+        assert_eq!(char_display_width('。'), 2); // CJK punctuation
+        assert_eq!(char_display_width('a'), 1);
+        assert_eq!(char_display_width('é'), 1);
+        // Documented approximation: non-CJK multibyte defaults to width 1.
+        assert_eq!(char_display_width('—'), 1);
+    }
+
+    #[test]
+    fn display_width_sums_char_widths() {
+        assert_eq!(display_width("abc"), 3);
+        assert_eq!(display_width("漢字"), 4);
+        assert_eq!(display_width("a漢b"), 4);
+        assert_eq!(display_width(""), 0);
+    }
+
+    #[test]
+    fn pad_display_counts_columns_not_chars() {
+        // ASCII: byte-identical to the format! width specifiers it replaced.
+        assert_eq!(pad_display("ab", 5, false), "ab   ");
+        assert_eq!(pad_display("ab", 5, true), "   ab");
+        // Never truncates: already at/over width returns the input unchanged.
+        assert_eq!(pad_display("abcdef", 5, false), "abcdef");
+        // CJK: two ideographs occupy 4 columns, so only 1 pad space remains.
+        assert_eq!(pad_display("漢字", 5, false), "漢字 ");
+        assert_eq!(pad_display("漢字", 5, true), " 漢字");
+    }
+
+    #[test]
+    fn truncate_cjk_by_display_columns() {
+        // Issue #196: 30 ideographs are 60 display columns. With a 40-column
+        // budget, 18 ideographs (36 cols) + "..." (3 cols) fit; a 19th would
+        // overflow. Byte-based truncation used to cut CJK at ~1/3 the visible
+        // length of ASCII.
+        let s = "漢".repeat(30);
+        let out = truncate_with_ellipsis(&s, 40);
+        assert_eq!(out, format!("{}...", "漢".repeat(18)));
+        assert!(display_width(&out) <= 40);
     }
 
     // --- format_issue_list_pretty with multi-byte titles ---
@@ -1223,6 +1698,96 @@ mod tests {
         assert!(!result.contains("..."));
     }
 
+    // --- Pretty-table alignment with double-width (CJK) cells (issue #196) ---
+
+    /// Display-column positions of the `|` separators on a line.
+    fn pipe_display_cols(line: &str) -> Vec<usize> {
+        let mut cols = Vec::new();
+        let mut col = 0;
+        for c in line.chars() {
+            if c == '|' {
+                cols.push(col);
+            }
+            col += char_display_width(c);
+        }
+        cols
+    }
+
+    /// Assert every line of a rendered table puts its `|` separators at the
+    /// same display columns as the header line.
+    fn assert_table_aligned(table: &str) {
+        let lines: Vec<&str> = table.lines().collect();
+        assert!(lines.len() >= 3, "expected header + separator + rows");
+        let expected = pipe_display_cols(lines[0]);
+        assert!(
+            !expected.is_empty(),
+            "no separators in header: {}",
+            lines[0]
+        );
+        for line in &lines[1..] {
+            assert_eq!(
+                pipe_display_cols(line),
+                expected,
+                "separators misaligned on line: {line}\nfull table:\n{table}"
+            );
+        }
+    }
+
+    #[test]
+    fn pretty_list_aligns_cjk_and_ascii_rows() {
+        // Issue #196: one CJK title and one ASCII title must land their
+        // column separators at identical display columns.
+        let issues = vec![
+            make_summary("これは日本語のタイトルです"),
+            make_summary("Plain ASCII title"),
+        ];
+        let out = format_issue_list(&issues, Format::Pretty);
+        assert_eq!(out.lines().count(), 4); // header, separator, 2 rows
+        assert_table_aligned(&out);
+    }
+
+    #[test]
+    fn pretty_list_aligns_truncated_cjk_title() {
+        // A CJK title wider than the 40-column title cell truncates by
+        // display columns and still aligns with an over-long ASCII row.
+        let issues = vec![
+            make_summary(&"漢".repeat(30)),
+            make_summary(&"a".repeat(60)),
+        ];
+        let out = format_issue_list(&issues, Format::Pretty);
+        assert_table_aligned(&out);
+        assert!(out.contains(&format!("{}...", "漢".repeat(18))));
+    }
+
+    #[test]
+    fn pretty_search_aligns_cjk_and_ascii_rows() {
+        let results = vec![
+            make_search_result("日本語のタイトル検索"),
+            make_search_result("ASCII search title"),
+        ];
+        let out = format_search_results(&results, Format::Pretty);
+        assert_table_aligned(&out);
+    }
+
+    #[test]
+    fn pretty_events_align_cjk_and_ascii_rows() {
+        let mk = |old: &str, new: &str| Event {
+            id: 1,
+            issue_id: 2,
+            field: "title".to_string(),
+            old_value: old.to_string(),
+            new_value: new.to_string(),
+            agent: "agent".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let events = vec![
+            mk("古いタイトルです", "新しいタイトルです"),
+            mk("old ascii title", "new ascii title"),
+        ];
+        let out = format_events(&events, Format::Pretty);
+        assert_table_aligned(&out);
+    }
+
     #[test]
     fn graph_dot_with_em_dash_title_does_not_panic() {
         let graph = GraphOutput {
@@ -1238,5 +1803,582 @@ mod tests {
         let result = format_graph(&graph, Format::Pretty);
         assert!(result.contains("..."));
         assert!(result.contains("digraph"));
+    }
+
+    // --- Escaping: hostile control characters in free-text fields ---
+    // Issues #156/#175/#176/#177: line-oriented output must encode embedded
+    // newlines/tabs/quotes so one logical field never spans physical lines
+    // and quoted tokens stay parseable.
+
+    /// A record an attacker tries to forge via an embedded newline.
+    const FORGED: &str = "ID:777 STATUS:open PRIORITY:critical KIND:bug URGENCY:9.9";
+
+    #[test]
+    fn escape_helpers_encode_all_specials() {
+        // The project-wide line-value encoding: \, LF, CR, tab — and quotes
+        // only in the quoted variant.
+        assert_eq!(
+            escape_line_value("a\\b\nc\rd\te\"f"),
+            "a\\\\b\\nc\\rd\\te\"f"
+        );
+        assert_eq!(
+            escape_quoted_value("a\\b\nc\rd\te\"f"),
+            "a\\\\b\\nc\\rd\\te\\\"f"
+        );
+        assert_eq!(escape_line_value("plain title"), "plain title");
+    }
+
+    fn make_detail(title: &str, context: &str) -> IssueDetail {
+        IssueDetail {
+            issue: Issue {
+                id: 1,
+                title: title.to_string(),
+                status: "open".to_string(),
+                priority: "medium".to_string(),
+                kind: "task".to_string(),
+                context: context.to_string(),
+                files: vec![],
+                tags: vec![],
+                skills: vec![],
+                acceptance: String::new(),
+                parent_id: None,
+                assigned_to: String::new(),
+                close_reason: String::new(),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+                updated_at: "2026-01-01T00:00:00Z".to_string(),
+            },
+            urgency: 5.0,
+            blocked_by: vec![],
+            blocks: vec![],
+            is_blocked: false,
+            notes: vec![],
+            urgency_breakdown: None,
+            children: None,
+            relations: vec![],
+        }
+    }
+
+    #[test]
+    fn compact_list_newline_title_cannot_forge_record() {
+        // Issue #156: a title embedding a blank line plus a full record must
+        // not make `itr list` (compact) emit a fabricated record line.
+        let issues = vec![make_summary(&format!("Legit\n\n{}\nTITLE: fake", FORGED))];
+        let out = format_issue_list(&issues, Format::Compact);
+        assert!(
+            out.lines().all(|l| !l.starts_with("ID:777")),
+            "forged record leaked as its own line:\n{out}"
+        );
+        // Exactly one real record line.
+        assert_eq!(out.lines().filter(|l| l.starts_with("ID:")).count(), 1);
+        // The newline is visibly encoded on a single TITLE line; the forged
+        // text is still present but inert mid-line.
+        let title_line = out.lines().find(|l| l.starts_with("TITLE:")).unwrap();
+        assert!(title_line.contains("\\n"));
+        assert!(title_line.contains("ID:777"));
+    }
+
+    #[test]
+    fn compact_detail_newline_title_and_context_stay_single_line() {
+        // Issue #156: `itr get` compact must keep TITLE/CONTEXT on one
+        // physical line each, with no unlabeled continuation lines.
+        let detail = make_detail(
+            "Title line1\nline2",
+            &format!("ctx line1\n{}\nline3", FORGED),
+        );
+        let out = format_issue_detail(&detail, Format::Compact);
+        assert_eq!(out.lines().filter(|l| l.starts_with("TITLE:")).count(), 1);
+        assert_eq!(out.lines().filter(|l| l.starts_with("CONTEXT:")).count(), 1);
+        assert!(
+            out.lines().all(|l| !l.starts_with("ID:777")),
+            "forged record leaked as its own line:\n{out}"
+        );
+        let ctx_line = out.lines().find(|l| l.starts_with("CONTEXT:")).unwrap();
+        assert!(ctx_line.contains("ctx line1\\nID:777"));
+        // record line, TITLE, CONTEXT, CREATED, UPDATED — nothing spills over.
+        assert_eq!(out.lines().count(), 5, "unexpected line layout:\n{out}");
+    }
+
+    // --- Batched issue details (itr get 1,2,3 — issue #136) ---
+
+    #[test]
+    fn batched_details_json_is_array_of_issue_details() {
+        let details = vec![make_detail("first", ""), make_detail("second", "ctx")];
+        let out = format_issue_details(&details, Format::Json);
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        let arr = parsed.as_array().expect("top-level array");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["title"], "first");
+        assert_eq!(arr[1]["title"], "second");
+        // Full IssueDetail payload per element, not summaries.
+        assert!(arr[0].get("is_blocked").is_some());
+        assert!(arr[1].get("notes").is_some());
+    }
+
+    #[test]
+    fn batched_details_compact_blocks_match_single_formatter() {
+        // Each batched compact block must be byte-identical to the
+        // single-issue compact output, separated by exactly one blank line.
+        let a = make_detail("first", "");
+        let b = make_detail("second", "ctx");
+        let out = format_issue_details(&[a.clone(), b.clone()], Format::Compact);
+        let expected = format!(
+            "{}\n\n{}",
+            format_issue_detail(&a, Format::Compact),
+            format_issue_detail(&b, Format::Compact)
+        );
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn batched_details_empty_follows_empty_result_contract() {
+        assert_eq!(format_issue_details(&[], Format::Json), "[]");
+        assert_eq!(format_issue_details(&[], Format::Compact), "");
+    }
+
+    #[test]
+    fn batched_details_hostile_title_cannot_forge_block_separator() {
+        // A title embedding blank lines + a forged record must not create a
+        // phantom third block: escaping keeps each block's lines physical.
+        let evil = make_detail(&format!("evil\n\n{}", FORGED), "");
+        let out = format_issue_details(&[evil, make_detail("plain", "")], Format::Compact);
+        let blocks: Vec<&str> = out.split("\n\n").collect();
+        assert_eq!(blocks.len(), 2, "blank-line separator forged:\n{out}");
+        assert!(
+            out.lines().all(|l| !l.starts_with("ID:777")),
+            "forged record leaked as its own line:\n{out}"
+        );
+    }
+
+    #[test]
+    fn compact_graph_node_newline_title_stays_single_line() {
+        // Issue #156: graph compact NODE lines must not split on hostile titles.
+        let graph = GraphOutput {
+            nodes: vec![GraphNode {
+                id: 1,
+                title: format!(
+                    "evil\nNODE:99 STATUS:open URGENCY:9.9 \"forged\"\n{}",
+                    FORGED
+                ),
+                status: "open".to_string(),
+                urgency: 5.0,
+                is_blocked: false,
+            }],
+            edges: vec![],
+        };
+        let out = format_graph(&graph, Format::Compact);
+        assert_eq!(out.lines().count(), 1, "NODE line split:\n{out}");
+        assert!(out.starts_with("NODE:1 "));
+        assert!(out.contains("\\n"));
+    }
+
+    #[test]
+    fn compact_stats_oldest_open_newline_title_stays_single_line() {
+        // Issue #156: stats OLDEST_OPEN quoted title must stay on one line
+        // with internal quotes escaped.
+        let stats = Stats {
+            total: 1,
+            by_status: HashMap::default(),
+            by_priority: HashMap::default(),
+            by_kind: HashMap::default(),
+            blocked: 0,
+            ready: 1,
+            avg_urgency: 5.0,
+            by_skills: HashMap::default(),
+            by_assignee: HashMap::default(),
+            oldest_open: Some(crate::models::OldestOpen {
+                id: 1,
+                title: "old\ntitle \"q\"".to_string(),
+                days_old: 3,
+            }),
+        };
+        let out = format_stats(&stats, Format::Compact);
+        let oldest: Vec<&str> = out
+            .lines()
+            .filter(|l| l.starts_with("OLDEST_OPEN:"))
+            .collect();
+        assert_eq!(oldest.len(), 1);
+        assert!(
+            oldest[0].contains("old\\ntitle \\\"q\\\""),
+            "got: {}",
+            oldest[0]
+        );
+        // Nothing spilled past the (final) OLDEST_OPEN line.
+        assert!(out.lines().last().unwrap().starts_with("OLDEST_OPEN:"));
+    }
+
+    #[test]
+    fn unblocked_newline_title_stays_single_line() {
+        // Issue #156: UNBLOCKED notification lines must not split either.
+        let out = format_unblocked(&[(5, "a\nb \"q\"".to_string())], Format::Compact);
+        assert_eq!(out, "UNBLOCKED:5 \"a\\nb \\\"q\\\"\"");
+    }
+
+    #[test]
+    fn oneline_escapes_tab_newline_and_quote_in_titles() {
+        // Issue #175: oneline must emit exactly one physical line per issue
+        // with a stable tab-separated field count and escaped quoted titles.
+        let issues = vec![
+            make_summary("tab\there"),
+            make_summary("new\nline"),
+            make_summary("has \"quotes\" inside"),
+        ];
+        let out = format_issue_list(&issues, Format::Oneline);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 3, "one physical line per issue:\n{out}");
+        for line in &lines {
+            assert_eq!(line.split('\t').count(), 5, "field count drifted: {line}");
+            let title_field = line.split('\t').nth(4).unwrap();
+            assert!(title_field.starts_with('"') && title_field.ends_with('"'));
+            // No unescaped quote inside the quoted title.
+            let inner = &title_field[1..title_field.len() - 1];
+            let mut prev_backslash = false;
+            for c in inner.chars() {
+                if c == '"' {
+                    assert!(prev_backslash, "unescaped quote in: {line}");
+                }
+                prev_backslash = c == '\\' && !prev_backslash;
+            }
+        }
+        assert!(lines[0].contains("tab\\there"));
+        assert!(lines[1].contains("new\\nline"));
+        assert!(lines[2].contains("\\\"quotes\\\""));
+    }
+
+    #[test]
+    fn oneline_assignee_with_tab_keeps_field_count() {
+        // Issue #175: a hostile assignee must not add phantom fields.
+        let mut s = make_summary("plain");
+        s.assigned_to = "agent\tx".to_string();
+        let out = format_issue_list(&[s], Format::Oneline);
+        assert_eq!(out.lines().count(), 1);
+        assert_eq!(out.split('\t').count(), 6, "got: {out}");
+    }
+
+    #[test]
+    fn dot_escapes_quotes_backslashes_and_newlines_in_labels() {
+        // Issue #176: DOT node labels must escape quotes/backslashes/newlines
+        // so `graph -f pretty` is always valid Graphviz input.
+        let graph = GraphOutput {
+            nodes: vec![GraphNode {
+                id: 1,
+                title: "say \"hi\"\nb\\c".to_string(),
+                status: "open".to_string(),
+                urgency: 5.0,
+                is_blocked: false,
+            }],
+            edges: vec![],
+        };
+        let out = format_graph(&graph, Format::Pretty);
+        let node_line = out.lines().find(|l| l.contains("label=")).unwrap();
+        assert_eq!(
+            node_line,
+            "  1 [label=\"1: say \\\"hi\\\"\\nb\\\\c\" shape=box]"
+        );
+        // DOT syntax assertion: every physical line has balanced (even count
+        // of) unescaped quotes, so the quoted string never leaks.
+        for line in out.lines() {
+            let mut unescaped = 0;
+            let mut prev_backslash = false;
+            for c in line.chars() {
+                if c == '"' && !prev_backslash {
+                    unescaped += 1;
+                }
+                prev_backslash = c == '\\' && !prev_backslash;
+            }
+            assert_eq!(unescaped % 2, 0, "unbalanced quotes in DOT line: {line}");
+        }
+    }
+
+    /// Parse one escaped double-quoted value starting at `s` (just past the
+    /// opening quote). Returns the decoded value and the remainder after the
+    /// closing quote.
+    fn parse_quoted_at(s: &str) -> (String, &str) {
+        let mut out = String::new();
+        let mut iter = s.char_indices();
+        while let Some((i, c)) = iter.next() {
+            match c {
+                '\\' => {
+                    let (_, e) = iter.next().expect("dangling escape");
+                    out.push(match e {
+                        'n' => '\n',
+                        'r' => '\r',
+                        't' => '\t',
+                        '\\' => '\\',
+                        '"' => '"',
+                        other => panic!("unknown escape \\{other}"),
+                    });
+                }
+                '"' => return (out, &s[i + 1..]),
+                c => out.push(c),
+            }
+        }
+        panic!("unterminated quoted value");
+    }
+
+    /// Sequentially parse `OLD:"…" NEW:"…"` from a compact event line,
+    /// reversing the documented escaping.
+    fn parse_old_new(line: &str) -> (String, String) {
+        let start = line.find("OLD:\"").expect("OLD token present") + 5;
+        let (old, rest) = parse_quoted_at(&line[start..]);
+        let rest = rest.strip_prefix(" NEW:\"").expect("NEW token follows OLD");
+        let (new, _) = parse_quoted_at(rest);
+        (old, new)
+    }
+
+    // --- Deterministic JSON field order (issue #179) and Stats
+    // --- exhaustiveness (issue #200) ---
+
+    /// A `Stats` with every field populated (including `oldest_open`), so the
+    /// deterministic-JSON assertions cover the full field set.
+    fn make_stats_full() -> Stats {
+        let count_map = |k: &str| {
+            let mut m = HashMap::new();
+            m.insert(k.to_string(), 1i64);
+            m
+        };
+        Stats {
+            total: 1,
+            by_status: count_map("open"),
+            by_priority: count_map("high"),
+            by_kind: count_map("bug"),
+            blocked: 0,
+            ready: 1,
+            avg_urgency: 5.0,
+            by_skills: count_map("rust"),
+            by_assignee: count_map("agent-x"),
+            oldest_open: Some(OldestOpen {
+                id: 1,
+                title: "Old".to_string(),
+                days_old: 3,
+            }),
+        }
+    }
+
+    #[test]
+    fn graph_json_preserves_serde_struct_field_order() {
+        // Issue #179: graph -f json must keep serde-declared field order
+        // (`nodes` before `edges`; node keys id, title, status, urgency,
+        // is_blocked) while still rounding urgency to the 4-decimal contract.
+        // A round trip through serde_json::Value re-sorts every key
+        // alphabetically — that regression is what this pins against.
+        let graph = GraphOutput {
+            nodes: vec![GraphNode {
+                id: 1,
+                title: "A".to_string(),
+                status: "open".to_string(),
+                urgency: 9.000_192_129_629_63,
+                is_blocked: false,
+            }],
+            edges: vec![GraphEdge {
+                from: 1,
+                to: 2,
+                edge_type: "blocks".to_string(),
+            }],
+        };
+        let out = format_graph(&graph, Format::Json);
+        let expected = concat!(
+            "{\"nodes\":[{\"id\":1,\"title\":\"A\",\"status\":\"open\",",
+            "\"urgency\":9.0002,\"is_blocked\":false}],",
+            "\"edges\":[{\"from\":1,\"to\":2,\"type\":\"blocks\"}]}"
+        );
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn stats_json_deterministic_bytes() {
+        // Pins the documented stats -f json contract: alphabetical top-level
+        // keys, sorted nested count maps, and alphabetical `oldest_open` keys
+        // (days_old, id, title) — see docs/command-contracts.md.
+        let out = format_stats(&make_stats_full(), Format::Json);
+        let expected = concat!(
+            "{\"avg_urgency\":5.0,\"blocked\":0,\"by_assignee\":{\"agent-x\":1},",
+            "\"by_kind\":{\"bug\":1},\"by_priority\":{\"high\":1},",
+            "\"by_skills\":{\"rust\":1},\"by_status\":{\"open\":1},",
+            "\"oldest_open\":{\"days_old\":3,\"id\":1,\"title\":\"Old\"},",
+            "\"ready\":1,\"total\":1}"
+        );
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn stats_json_field_set_matches_serde_derived() {
+        // Issue #200: the hand-built deterministic stats JSON must expose
+        // exactly the same field set as the serde-derived serialization, so a
+        // new `Stats` field can never silently vanish from stats -f json.
+        // (The exhaustive destructure in stats_to_deterministic_json makes a
+        // new field a compile error; this asserts the runtime shape too.)
+        let stats = make_stats_full();
+        let det: serde_json::Value =
+            serde_json::from_str(&format_stats(&stats, Format::Json)).unwrap();
+        let derived = serde_json::to_value(&stats).unwrap();
+        let det_keys: Vec<&String> = det.as_object().unwrap().keys().collect();
+        let derived_keys: Vec<&String> = derived.as_object().unwrap().keys().collect();
+        // Both maps are BTreeMap-backed (alphabetical), so straight equality
+        // of the key lists is field-set equality.
+        assert_eq!(det_keys, derived_keys);
+    }
+
+    // --- --fields honesty (issue #197): stats/graph/log JSON filter, search
+    // --- compact filter ---
+
+    #[test]
+    fn stats_json_applies_fields_filter() {
+        // Issue #197: `itr stats -f json --fields total` must return only the
+        // requested field instead of silently emitting the full object.
+        let _guard = FieldsFilterGuard::set(&["total"]);
+        let out = format_stats(&make_stats_full(), Format::Json);
+        assert_eq!(out, "{\"total\":1}");
+    }
+
+    #[test]
+    fn graph_json_applies_fields_filter() {
+        let _guard = FieldsFilterGuard::set(&["edges"]);
+        let graph = GraphOutput {
+            nodes: vec![GraphNode {
+                id: 1,
+                title: "A".to_string(),
+                status: "open".to_string(),
+                urgency: 5.0,
+                is_blocked: false,
+            }],
+            edges: vec![GraphEdge {
+                from: 1,
+                to: 2,
+                edge_type: "blocks".to_string(),
+            }],
+        };
+        let out = format_graph(&graph, Format::Json);
+        assert_eq!(
+            out,
+            "{\"edges\":[{\"from\":1,\"to\":2,\"type\":\"blocks\"}]}"
+        );
+    }
+
+    #[test]
+    fn events_json_applies_fields_filter() {
+        let _guard = FieldsFilterGuard::set(&["id", "field"]);
+        let events = vec![Event {
+            id: 7,
+            issue_id: 2,
+            field: "status".to_string(),
+            old_value: "open".to_string(),
+            new_value: "done".to_string(),
+            agent: String::new(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        }];
+        let out = format_events(&events, Format::Json);
+        // Filtered objects re-serialize with alphabetical keys (documented).
+        assert_eq!(out, "[{\"field\":\"status\",\"id\":7}]");
+    }
+
+    fn make_search_result(title: &str) -> SearchResult {
+        SearchResult {
+            id: 3,
+            title: title.to_string(),
+            status: "open".to_string(),
+            priority: "medium".to_string(),
+            kind: "task".to_string(),
+            urgency: 5.0,
+            is_blocked: false,
+            blocked_by: vec![],
+            tags: vec!["t1".to_string()],
+            files: vec![],
+            skills: vec![],
+            acceptance: "acc".to_string(),
+            assigned_to: String::new(),
+            matched_fields: vec!["title".to_string()],
+            context_snippets: None,
+        }
+    }
+
+    #[test]
+    fn search_compact_honors_fields_filter() {
+        // Issue #197: search compact previously ignored the thread-local
+        // --fields filter entirely.
+        let _guard = FieldsFilterGuard::set(&["id", "title"]);
+        let out = format_search_results(&[make_search_result("Find me")], Format::Compact);
+        assert_eq!(out, "ID:3\nTITLE: Find me");
+    }
+
+    #[test]
+    fn search_compact_unfiltered_output_unchanged() {
+        // With no filter installed, the compact search contract is unchanged.
+        let out = format_search_results(&[make_search_result("Find me")], Format::Compact);
+        let expected = "ID:3 STATUS:open PRIORITY:medium KIND:task URGENCY:5.0 MATCHED:title\n\
+                        TAGS:t1\nTITLE: Find me\nACCEPTANCE: acc";
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn events_compact_old_new_roundtrip() {
+        // Issue #177: OLD/NEW must be unambiguously delimited so a parser
+        // recovers the exact values — including multi-word changes and values
+        // containing the literal token ' NEW:'.
+        let cases: Vec<(&str, &str)> = vec![
+            ("Fix the parser bug", "Fix the parser bug properly"),
+            ("before NEW:9 trick", "evil OLD:\"x\" NEW:y"),
+            ("x NEW:", "y"),
+            ("multi\nline\told", "quote\"and\\slash"),
+        ];
+        for (old, new) in cases {
+            let events = vec![Event {
+                id: 1,
+                issue_id: 2,
+                field: "title".to_string(),
+                old_value: old.to_string(),
+                new_value: new.to_string(),
+                agent: String::new(),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+            }];
+            let out = format_events(&events, Format::Compact);
+            assert_eq!(
+                out.lines().count(),
+                1,
+                "one physical line per event:\n{out}"
+            );
+            let (got_old, got_new) = parse_old_new(&out);
+            assert_eq!(got_old, old);
+            assert_eq!(got_new, new);
+        }
+    }
+
+    // --- agent-info --fields guidance accuracy (issue #178) ---
+
+    #[test]
+    fn agent_docs_valid_fields_line_matches_valid_fields() {
+        // Issue #178: every field name on the agent-info "Valid fields:" line
+        // must exist in VALID_FIELDS. The guide previously listed `created`,
+        // `updated`, and `parent`, which the filter warns about and ignores.
+        let line = crate::agent_docs::AGENT_DOCS
+            .lines()
+            .find(|l| l.starts_with("Valid fields:"))
+            .expect("agent-info documents the valid --fields names");
+        let list = line.strip_prefix("Valid fields:").unwrap();
+        for field in list.split(',') {
+            let field = field.trim().trim_end_matches('.');
+            assert!(
+                VALID_FIELDS.contains(&field),
+                "agent-info lists '{field}', which is not in VALID_FIELDS"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_docs_fields_guidance_reflects_expanded_support() {
+        // Issue #178: --fields is no longer "(JSON mode only)" — compact and
+        // pretty list output honor it, and stats/graph/log JSON gained
+        // top-level filtering (issue #197). The guide must not repeat the
+        // stale claim and must use the real column names.
+        let docs = crate::agent_docs::AGENT_DOCS;
+        assert!(
+            !docs.contains("JSON mode only"),
+            "stale --fields mode claim in agent-info"
+        );
+        for required in ["created_at", "updated_at", "parent_id"] {
+            assert!(
+                docs.contains(required),
+                "agent-info missing field name '{required}'"
+            );
+        }
     }
 }

@@ -35,6 +35,13 @@
 #     temp dir, built there, and the worktree is removed on exit. The user's
 #     working tree, index, and HEAD are never touched.
 #   - All temp dirs are mktemp -d and cleaned in an EXIT trap.
+#   - Both binaries are SNAPSHOTTED (copied to stable paths inside the temp
+#     workspace) before any command runs, and the matrix runs against the
+#     copies. A concurrent `cargo build --release` that swaps the original
+#     binary path mid-run therefore cannot skew the comparison (issue #203:
+#     this exact race made identical-binary runs report phantom diffs). When
+#     the two sides resolve to the same file, a single snapshot is shared so
+#     the comparison is identical by construction.
 #
 # SCOPING / SPEED
 #   Building an old ref is a full cargo release build and can be slow. This tool
@@ -120,6 +127,10 @@ if ! declare -F contract_normalize >/dev/null 2>&1; then
         sed -E \
             -e "s#${case_tmp}#<TMP>#g" \
             -e 's/[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z/<TS>/g' \
+            -e 's/("days_old": *)[0-9]+/\1<DAYS>/g' \
+            -e 's/DAYS:[0-9]+/DAYS:<DAYS>/g' \
+            -e 's/\(([0-9]+)d old\)/(<DAYS>d old)/g' \
+            -e 's/\(([0-9]+) days\)/(<DAYS> days)/g' \
             -e 's#/var/folders/[A-Za-z0-9_./+-]*#<TMP>#g' \
             -e 's#/tmp/tmp\.[A-Za-z0-9]+#<TMP>#g' \
             -e 's#/tmp/[A-Za-z0-9_.-]*tmp[A-Za-z0-9_.-]*#<TMP>#g' \
@@ -128,6 +139,27 @@ if ! declare -F contract_normalize >/dev/null 2>&1; then
             -e 's#(token=)[A-Za-z0-9._-]+#\1<TOKEN>#g' \
             -e 's#(X-ITR-Token: )[A-Za-z0-9._-]+#\1<TOKEN>#g' \
             -e 's#(itr )v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+-g[0-9a-f]+)?(\+[0-9a-f]+)?(-dirty)?#\1X.Y.Z#g'
+    }
+fi
+if ! declare -F contract_pin_created_at >/dev/null 2>&1; then
+    # Fallback: same behavior as _lib.sh::contract_pin_created_at. Pins an
+    # issue's created_at/updated_at to a fixed ancient instant so the urgency
+    # `age` component saturates to a constant instead of depending on the wall
+    # clock (issue #151). Degrades to a no-op if python3 is unavailable.
+    contract_pin_created_at() {
+        local db="$1" id="$2" iso="${3:-2000-01-01T00:00:00Z}"
+        command -v python3 >/dev/null 2>&1 || return 0
+        python3 -c '
+import sqlite3, sys
+db, issue_id, iso = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+conn = sqlite3.connect(db)
+conn.execute(
+    "UPDATE issues SET created_at = ?, updated_at = ? WHERE id = ?",
+    (iso, iso, issue_id),
+)
+conn.commit()
+conn.close()
+' "$db" "$id" "$iso"
     }
 fi
 
@@ -181,6 +213,13 @@ matrix_seed() {
         add_then_get)
             ITR_DB_PATH="$db" "$bin" add "Baseline fixture" -p high -k bug \
                 -c "context" -a "accept" >/dev/null 2>&1
+            # Pin created_at so the urgency `age` component is constant. The
+            # seed `add` and the asserted `get` are separate invocations; if
+            # one side's pair straddles an integer-second boundary and the
+            # other's does not, the unrounded urgency in `get -f json` differs
+            # (issue #151 drift class; flagged again as issue #203). Pinning to
+            # an ancient date saturates age identically on both sides.
+            contract_pin_created_at "$db" 1 >/dev/null 2>&1 || true
             ;;
         *) : ;;
     esac
@@ -458,9 +497,39 @@ else
     TARGET_BIN="$(build_current)"
 fi
 
-# Identity strings for the report header.
-BASELINE_ID="$("$BASELINE_BIN" --version 2>/dev/null | head -1) [$BASELINE_BIN]"
-TARGET_ID="$("$TARGET_BIN" --version 2>/dev/null | head -1) [$TARGET_BIN]"
+# ──────────────────────────────────────────────────────────────────────────
+# Snapshot both binaries to stable copies inside the temp workspace BEFORE
+# running anything. The two matrix passes happen at different times; without
+# this, a concurrent `cargo build --release` swapping (say) target/release/itr
+# between the passes silently changes one side of the comparison — observed as
+# "identical binaries differ" flakes in the smoke test (issue #203). When both
+# sides resolve to the same file, share a single snapshot so an identical-input
+# comparison is identical by construction.
+# ──────────────────────────────────────────────────────────────────────────
+snapshot_binary() {
+    # snapshot_binary <src> <dest>: copy <src> to <dest> and make it runnable.
+    local src="$1" dest="$2"
+    cp "$src" "$dest" 2>/dev/null || die 4 "failed to snapshot binary: $src"
+    chmod +x "$dest" 2>/dev/null || true
+}
+
+BIN_SNAP_DIR="$WORK/bin"
+mkdir -p "$BIN_SNAP_DIR"
+if [ "$BASELINE_BIN" -ef "$TARGET_BIN" ]; then
+    snapshot_binary "$BASELINE_BIN" "$BIN_SNAP_DIR/itr-shared"
+    BASELINE_RUN_BIN="$BIN_SNAP_DIR/itr-shared"
+    TARGET_RUN_BIN="$BIN_SNAP_DIR/itr-shared"
+else
+    snapshot_binary "$BASELINE_BIN" "$BIN_SNAP_DIR/itr-baseline"
+    snapshot_binary "$TARGET_BIN" "$BIN_SNAP_DIR/itr-target"
+    BASELINE_RUN_BIN="$BIN_SNAP_DIR/itr-baseline"
+    TARGET_RUN_BIN="$BIN_SNAP_DIR/itr-target"
+fi
+
+# Identity strings for the report header. Versions come from the snapshots
+# (what actually runs); the bracketed path documents the user-facing source.
+BASELINE_ID="$("$BASELINE_RUN_BIN" --version 2>/dev/null | head -1) [$BASELINE_BIN]"
+TARGET_ID="$("$TARGET_RUN_BIN" --version 2>/dev/null | head -1) [$TARGET_BIN]"
 
 # ──────────────────────────────────────────────────────────────────────────
 # Run the matrix against both and emit the report.
@@ -468,9 +537,9 @@ TARGET_ID="$("$TARGET_BIN" --version 2>/dev/null | head -1) [$TARGET_BIN]"
 BDIR="$WORK/baseline-out"
 TDIR="$WORK/target-out"
 echo "INFO: running command matrix against baseline..." >&2
-run_matrix "$BASELINE_BIN" "$BDIR"
+run_matrix "$BASELINE_RUN_BIN" "$BDIR"
 echo "INFO: running command matrix against target..." >&2
-run_matrix "$TARGET_BIN" "$TDIR"
+run_matrix "$TARGET_RUN_BIN" "$TDIR"
 
 if [ -n "$OUT_PATH" ]; then
     emit_report "$BDIR" "$TDIR" "$BASELINE_ID" "$TARGET_ID" "$BASELINE_REF" >"$OUT_PATH"

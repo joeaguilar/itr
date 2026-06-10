@@ -34,8 +34,10 @@ export ITR_DB_PATH=/path/to/.itr.db
 itr stats
 ```
 
-`ITR_DB_PATH` takes precedence over walk-up discovery. Use it carefully in
-scripts so you do not write to the wrong project database.
+`ITR_DB_PATH` takes precedence over `--db` and walk-up discovery (see
+[environment.md](environment.md#itr_db_path) for the full precedence rules,
+including the `itr init` inversion). Use it carefully in scripts so you do not
+write to the wrong project database.
 
 ## `itr` Is Not Found
 
@@ -81,6 +83,10 @@ For source install fallback from a cloned repo:
 ```bash
 ITR_FROM_SOURCE=1 ./install.sh
 ```
+
+`ITR_VERSION` pins a release tag, `ITR_INSTALL_DIR` overrides the install
+destination, and `ITR_FROM_SOURCE=1` forces a `cargo` build — see
+[environment.md](environment.md#install) for full installer variable behavior.
 
 On Windows:
 
@@ -168,7 +174,9 @@ Point at a source checkout:
 itr upgrade --source-dir /path/to/itr --no-pull
 ```
 
-Use `ITR_SOURCE_DIR` for scripts:
+Use `ITR_SOURCE_DIR` for scripts — see
+[environment.md](environment.md#itr_source_dir) for the full source-directory
+resolution order:
 
 ```bash
 ITR_SOURCE_DIR=/path/to/itr itr upgrade --no-pull
@@ -269,8 +277,8 @@ The prebuilt-binary update workflow:
 
 1. Detect the host target (e.g. `aarch64-apple-darwin`,
    `x86_64-unknown-linux-musl`).
-2. Resolve the release tag (`ITR_VERSION` if set, otherwise the latest
-   GitHub release).
+2. Resolve the release tag (pinnable via `ITR_VERSION` — see
+   [environment.md](environment.md#itr_version)).
 3. Download `itr-<tag>-<target>.tar.gz` and, when available, its `.sha256`
    companion. A checksum mismatch aborts the install.
 4. Extract the archive into a temp directory.
@@ -282,7 +290,8 @@ The prebuilt-binary update workflow:
 If the prebuilt download fails (for example, no GitHub Releases asset for the
 target, or no network), the script falls back to `cargo build --release`
 provided the working directory is a cloned `itr` repo and `cargo` is
-installed. To force the source path, set `ITR_FROM_SOURCE=1`.
+installed. To force the source path, set `ITR_FROM_SOURCE=1` (see
+[environment.md](environment.md#itr_from_source)).
 
 `install.sh --update` is the recommended way to move forward on a release
 boundary. `itr upgrade` is the in-tree alternative — it expects a source
@@ -292,18 +301,12 @@ when you installed from a release archive.
 
 ### `choose_install_dir` Precedence
 
-`install.sh` picks the install destination in this order:
-
-1. `ITR_INSTALL_DIR` if set (tilde-expanded). Always wins.
-2. The directory of an existing `itr` already on `PATH`, when one exists and
-   resolves to a real file. This is intentional so updates replace the binary
-   the shell actually runs and do not leave a stale copy ahead on `PATH`.
-3. `$HOME/.cargo/bin` if it is already on `PATH` and the directory exists
-   (Rust users).
-4. `$HOME/.local/bin` as the final default.
-
-The Windows installer (`install.ps1`) defaults to
-`%LOCALAPPDATA%\Programs\itr` and adds it to the user `PATH` if missing.
+`ITR_INSTALL_DIR` always wins when set; otherwise `install.sh` replaces an
+existing `itr` on `PATH` in place (so updates do not leave a stale copy ahead
+on `PATH`), then falls back to `~/.cargo/bin`, then `~/.local/bin`. The
+Windows installer (`install.ps1`) defaults to `%LOCALAPPDATA%\Programs\itr`
+and adds it to the user `PATH` if missing. See
+[environment.md](environment.md#itr_install_dir) for the full fallback chain.
 
 ## WAL Companion Files (`.itr.db-wal`, `.itr.db-shm`)
 

@@ -2,5 +2,5 @@ $ itr unrelate 1 --from 2
 --- exit ---
 0
 --- stdout ---
-RELATION:removed 1 -> 2
+RELATION:removed 1 -> 2 (related)
 --- stderr ---

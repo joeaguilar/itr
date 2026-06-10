@@ -2,6 +2,6 @@ $ itr undepend 2 --on 1 -f json
 --- exit ---
 0
 --- stdout ---
-{"action":"undepend","blocked_id":2,"blocker_id":1}
+{"action":"undepend","blocked_id":2,"blocker_id":1,"removed":true}
 [{"id":2,"title":"Another"}]
 --- stderr ---

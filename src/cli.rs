@@ -154,10 +154,11 @@ pub enum Commands {
         limit: Option<usize>,
     },
 
-    /// Get full detail for a single issue
+    /// Get full detail for one or more issues
     Get {
-        /// Issue ID
-        id: i64,
+        /// Issue ID(s) — repeat the argument or comma-separate (e.g. 1,2,3)
+        #[arg(value_name = "ID", required = true, num_args = 1..)]
+        ids: Vec<String>,
     },
 
     /// Update an issue
@@ -397,7 +398,7 @@ pub enum Commands {
         #[arg(long)]
         file: Option<String>,
 
-        /// Skip existing IDs instead of erroring
+        /// Skip issues whose IDs already exist (default: replace them)
         #[arg(long)]
         merge: bool,
     },
@@ -531,6 +532,10 @@ pub enum Commands {
         /// Target issue ID
         #[arg(long)]
         from: i64,
+
+        /// Only remove this relation type: duplicate|related|supersedes (default: all types)
+        #[arg(long, visible_alias = "type")]
+        relation_type: Option<String>,
     },
 
     /// Rebuild the full-text search index
@@ -574,10 +579,11 @@ pub enum Commands {
     #[command(visible_alias = "current")]
     Wip,
 
-    /// Show issues or get detail for a single issue
+    /// Show issues or get detail for one or more issues
     Show {
-        /// Issue ID (omit to list all non-terminal issues)
-        id: Option<i64>,
+        /// Issue ID(s) — repeat or comma-separate; omit to list all non-terminal issues
+        #[arg(value_name = "ID", num_args = 0..)]
+        ids: Vec<String>,
         /// Include all statuses (done, wontfix)
         #[arg(long)]
         all: bool,

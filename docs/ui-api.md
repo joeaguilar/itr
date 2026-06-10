@@ -216,6 +216,38 @@ Response:
 }
 ```
 
+#### Batched detail mode: `GET /api/issues?ids=1,2,3`
+
+Passing the `ids` query parameter (comma-separated integer issue ids)
+switches this route into a batched **detail** fetch: instead of filtered
+`IssueSummary` records it returns one full `IssueDetail` per requested id, in
+request order — the same objects `GET /api/issues/{id}` returns, in a single
+round trip. All other query parameters are ignored in this mode.
+
+- Duplicate ids are fetched once (first occurrence wins).
+- Ids that are valid integers but do not exist are reported in `missing`
+  instead of failing the batch; the response is still `200`.
+- A non-integer token in `ids` is a `400` with `INVALID_VALUE`, consistent
+  with path-segment id parsing on the per-issue routes.
+
+Response:
+
+```json
+{
+  "total": 2,
+  "issues": [
+    {
+      "$ref": "IssueDetail"
+    }
+  ],
+  "missing": [999]
+}
+```
+
+`total` counts the returned issues, not the requested ids. The plain list
+response above never contains a `missing` key, so callers can distinguish the
+two modes.
+
 ### `POST /api/sql`
 
 Token required. Requires `itr ui --allow-dangerous`.

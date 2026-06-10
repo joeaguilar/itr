@@ -54,5 +54,6 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock') }}
+      - run: cargo test
       - run: cargo build --release
       - run: ./tests/integration.sh

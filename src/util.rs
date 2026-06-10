@@ -6,7 +6,7 @@
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::util::parse_comma_list;
 /// assert_eq!(parse_comma_list("foo,bar,baz"), vec!["foo", "bar", "baz"]);
 /// assert_eq!(parse_comma_list("foo , bar"), vec!["foo", "bar"]);
@@ -28,7 +28,7 @@ pub fn parse_comma_list(s: &str) -> Vec<String> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::util::parse_comma_list_lower;
 /// assert_eq!(parse_comma_list_lower("Rust,SQL,Go"), vec!["rust", "sql", "go"]);
 /// assert_eq!(parse_comma_list_lower(" Rust , , SQL "), vec!["rust", "sql"]);
@@ -51,7 +51,7 @@ pub fn parse_comma_list_lower(s: &str) -> Vec<String> {
 ///
 /// Add a new tag, skip the dup, drop one we no longer want:
 ///
-/// ```ignore
+/// ```text
 /// use itr::util::apply_tags;
 /// let result = apply_tags(
 ///     vec!["rust".into(), "docs".into()],
@@ -63,7 +63,7 @@ pub fn parse_comma_list_lower(s: &str) -> Vec<String> {
 ///
 /// Removing a tag that isn't in the list is a silent no-op:
 ///
-/// ```ignore
+/// ```text
 /// use itr::util::apply_tags;
 /// let result = apply_tags(vec!["rust".into()], &[], &["missing".into()]);
 /// assert_eq!(result, vec!["rust"]);
@@ -86,7 +86,7 @@ pub fn apply_tags(mut current: Vec<String>, add: &[String], remove: &[String]) -
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// use itr::util::apply_skills;
 /// let result = apply_skills(
 ///     vec!["rust".into()],
@@ -119,14 +119,14 @@ pub fn apply_skills(mut current: Vec<String>, add: &[String], remove: &[String])
 /// A historical date is always in the past, so the result is strictly
 /// positive:
 ///
-/// ```ignore
+/// ```text
 /// use itr::util::days_since;
 /// assert!(days_since("2020-01-01T00:00:00Z") > 0.0);
 /// ```
 ///
 /// Malformed input degrades to zero days instead of panicking:
 ///
-/// ```ignore
+/// ```text
 /// use itr::util::days_since;
 /// assert_eq!(days_since("not-a-date"), 0.0);
 /// ```

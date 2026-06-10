@@ -1,0 +1,7 @@
+$ itr ui --port <PORT> --no-open --once
+--- exit ---
+0
+--- stdout ---
+UI: http://127.0.0.1:<PORT>/?token=<TOKEN>
+DB: <TMP>/.itr.db
+--- stderr ---

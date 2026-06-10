@@ -2,5 +2,5 @@ $ itr log 1
 --- exit ---
 0
 --- stdout ---
-EVENT:1 ISSUE:1 FIELD:status OLD:open NEW:in-progress (<TS>)
+EVENT:1 ISSUE:1 FIELD:status OLD:"open" NEW:"in-progress" (<TS>)
 --- stderr ---
