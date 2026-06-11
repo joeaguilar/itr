@@ -456,3 +456,64 @@ mod tests {
         }
     }
 }
+
+// Tests for the version-shaping logic that build.rs bakes into ITR_VERSION.
+// The function lives in src/version_shape.rs and is include!d both here and
+// in build.rs, so these tests cover the exact code the build script runs.
+// Test-only: in normal builds the binary never calls shape_version itself.
+#[cfg(test)]
+mod version_shape_tests {
+    include!("version_shape.rs");
+
+    #[test]
+    fn tag_describe_passes_through() {
+        assert_eq!(shape_version(Some("v2.10.0"), "0.1.0"), "v2.10.0");
+    }
+
+    #[test]
+    fn tag_describe_with_ahead_count_passes_through() {
+        assert_eq!(
+            shape_version(Some("v2.10.0-4-gf40ddd4"), "0.1.0"),
+            "v2.10.0-4-gf40ddd4"
+        );
+        assert_eq!(
+            shape_version(Some("v2.10.0-4-gf40ddd4-dirty"), "0.1.0"),
+            "v2.10.0-4-gf40ddd4-dirty"
+        );
+    }
+
+    // The CI regression (tagless shallow checkout): `git describe
+    // --tags --always --dirty` emits a bare hash, which must not become the
+    // whole version string — it has to stay semver-shaped.
+    #[test]
+    fn bare_hash_falls_back_to_pkg_version_plus_hash() {
+        assert_eq!(shape_version(Some("f40ddd4"), "0.1.0"), "0.1.0+f40ddd4");
+    }
+
+    #[test]
+    fn bare_hash_dirty_keeps_dirty_marker_in_metadata() {
+        assert_eq!(
+            shape_version(Some("f40ddd4-dirty"), "0.1.0"),
+            "0.1.0+f40ddd4-dirty"
+        );
+    }
+
+    #[test]
+    fn full_length_hash_is_still_a_hash() {
+        let full = "f40ddd4aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        assert_eq!(full.len(), 40);
+        assert_eq!(shape_version(Some(full), "0.1.0"), format!("0.1.0+{full}"));
+    }
+
+    #[test]
+    fn no_describe_output_falls_back_to_pkg_version() {
+        assert_eq!(shape_version(None, "0.1.0"), "0.1.0");
+    }
+
+    #[test]
+    fn short_hex_lookalike_tag_is_not_treated_as_hash() {
+        // 7+ hex chars is a hash; anything shorter (e.g. a hypothetical
+        // `abc123` tag) passes through.
+        assert_eq!(shape_version(Some("abc123"), "0.1.0"), "abc123");
+    }
+}
