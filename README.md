@@ -54,11 +54,19 @@ See [docs/environment.md](docs/environment.md) for the full list (including `ITR
 
 ### Windows
 
+Windows PowerShell 5.1:
+
 ```powershell
 iwr -useb https://raw.githubusercontent.com/joeaguilar/itr/main/install.ps1 | iex
 ```
 
-Installs `itr.exe` into `%LOCALAPPDATA%\Programs\itr` and adds that directory to your user PATH. Use `-Version`, `-InstallDir`, or `-Repo` parameters to override defaults.
+PowerShell 7+:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -Command "iwr -useb https://raw.githubusercontent.com/joeaguilar/itr/main/install.ps1 | iex"
+```
+
+The same installer supports Windows PowerShell 5.1 and PowerShell 7+. It installs `itr.exe` into `%LOCALAPPDATA%\Programs\itr` and adds that directory to your user PATH. Use `-Version`, `-InstallDir`, or `-Repo` parameters to override defaults.
 
 ### Manual download
 
