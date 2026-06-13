@@ -1724,6 +1724,36 @@ fi
 rm -rf "$ALIAS_DIR"
 
 # ─────────────────────────────────────────────
+# Unknown flags are rejected
+echo ""
+echo "--- Unknown flags are rejected ---"
+
+UNK_DIR=$(mktemp -d)
+$ITR init --db "$UNK_DIR/.itr.db" > /dev/null
+
+UNK_EXIT=0
+UNK_STDERR=$($ITR --db "$UNK_DIR/.itr.db" add "Unknown flag test" --urgency high -f json 2>&1 1>/dev/null) || UNK_EXIT=$?
+UNK_COUNT=$($ITR --db "$UNK_DIR/.itr.db" list -f json | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")
+if [ "$UNK_EXIT" -ne 0 ] && echo "$UNK_STDERR" | grep -q -- "--urgency" && [ "$UNK_COUNT" = "0" ]; then
+    pass "unknown-flag: add rejects unknown flag without mutation"
+else
+    fail "unknown-flag: add rejects unknown flag without mutation" "exit='$UNK_EXIT', count='$UNK_COUNT', stderr='$UNK_STDERR'"
+fi
+
+BULK_TYPO_ADD=$($ITR --db "$UNK_DIR/.itr.db" add "Bulk typo guard" --tags stale -f json)
+BULK_TYPO_ID=$(echo "$BULK_TYPO_ADD" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+BULK_TYPO_EXIT=0
+BULK_TYPO_STDERR=$($ITR --db "$UNK_DIR/.itr.db" bulk close --tag stale --dryrun -f json 2>&1 1>/dev/null) || BULK_TYPO_EXIT=$?
+BULK_TYPO_STATUS=$($ITR --db "$UNK_DIR/.itr.db" get "$BULK_TYPO_ID" -f json | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+if [ "$BULK_TYPO_EXIT" -ne 0 ] && echo "$BULK_TYPO_STDERR" | grep -q -- "--dryrun" && [ "$BULK_TYPO_STATUS" = "open" ]; then
+    pass "unknown-flag: bulk dry-run typo fails before mutation"
+else
+    fail "unknown-flag: bulk dry-run typo fails before mutation" "exit='$BULK_TYPO_EXIT', status='$BULK_TYPO_STATUS', stderr='$BULK_TYPO_STDERR'"
+fi
+
+rm -rf "$UNK_DIR"
+
+# ─────────────────────────────────────────────
 echo ""
 echo "--- ui ---"
 # ─────────────────────────────────────────────

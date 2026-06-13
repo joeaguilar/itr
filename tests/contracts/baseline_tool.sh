@@ -88,13 +88,14 @@ SCRATCH="$(mktemp -d)"
     git init -q
     git config user.email t@t.t
     git config user.name t
+    git config commit.gpgsign false
     # Mirror the tool into the scratch repo so REPO_ROOT resolves here.
     mkdir -p tests/tools tests/contracts
     cp "$TOOL" tests/tools/baseline-diff.sh
     cp "$CONTRACTS_REPO_ROOT/tests/contracts/_lib.sh" tests/contracts/_lib.sh
     echo "seed" >seed.txt
     git add -A >/dev/null 2>&1
-    git commit -qm init >/dev/null 2>&1
+    git commit --no-verify -qm "initial scratch baseline" >/dev/null 2>&1
     # Now dirty the tree.
     echo "dirty" >>seed.txt
 )
