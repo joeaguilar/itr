@@ -67,6 +67,78 @@ function Write-Ok      { param([string]$m) Write-Host "+ $m" -ForegroundColor Gr
 function Write-Warn    { param([string]$m) Write-Host "! $m" -ForegroundColor Yellow }
 function Write-Err     { param([string]$m) Write-Host "x $m" -ForegroundColor Red }
 
+function Get-ItrPowerShellRuntime {
+    $major = [int]$PSVersionTable.PSVersion.Major
+    $minor = [int]$PSVersionTable.PSVersion.Minor
+    if ($major -lt 5 -or ($major -eq 5 -and $minor -lt 1)) {
+        throw "PowerShell 5.1 or newer is required. Current version: $($PSVersionTable.PSVersion)"
+    }
+    if ($major -ge 7) {
+        return 'powershell-7'
+    }
+    return 'windows-powershell-5.1'
+}
+
+function Initialize-ItrPowerShellRuntime {
+    param([string]$Runtime)
+    if ($Runtime -eq 'windows-powershell-5.1') {
+        # Windows PowerShell 5.1 can default to older TLS settings on some hosts.
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    }
+}
+
+function Invoke-ItrWebRequestWindowsPowerShell51 {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [string]$OutFile,
+        [int]$MaximumRedirection = -1,
+        [switch]$AllowHttpErrorStatus
+    )
+    $params = @{
+        Uri = $Uri
+        UseBasicParsing = $true
+        ErrorAction = if ($AllowHttpErrorStatus) { 'SilentlyContinue' } else { 'Stop' }
+    }
+    if ($OutFile) { $params.OutFile = $OutFile }
+    if ($MaximumRedirection -ge 0) { $params.MaximumRedirection = $MaximumRedirection }
+    return Invoke-WebRequest @params
+}
+
+function Invoke-ItrWebRequestPowerShell7 {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [string]$OutFile,
+        [int]$MaximumRedirection = -1,
+        [switch]$AllowHttpErrorStatus
+    )
+    $params = @{
+        Uri = $Uri
+        ErrorAction = if ($AllowHttpErrorStatus) { 'SilentlyContinue' } else { 'Stop' }
+    }
+    if ($OutFile) { $params.OutFile = $OutFile }
+    if ($MaximumRedirection -ge 0) { $params.MaximumRedirection = $MaximumRedirection }
+    return Invoke-WebRequest @params
+}
+
+function Invoke-ItrWebRequest {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [string]$OutFile,
+        [int]$MaximumRedirection = -1,
+        [switch]$AllowHttpErrorStatus
+    )
+    $params = @{
+        Uri = $Uri
+        MaximumRedirection = $MaximumRedirection
+        AllowHttpErrorStatus = $AllowHttpErrorStatus
+    }
+    if ($OutFile) { $params.OutFile = $OutFile }
+    if ($script:ItrPowerShellRuntime -eq 'powershell-7') {
+        return Invoke-ItrWebRequestPowerShell7 @params
+    }
+    return Invoke-ItrWebRequestWindowsPowerShell51 @params
+}
+
 function Get-Target {
     $arch = $env:PROCESSOR_ARCHITECTURE
     if (-not $arch) { $arch = (Get-CimInstance Win32_Processor).Architecture }
@@ -83,12 +155,16 @@ function Resolve-LatestTag {
     param([string]$Repo)
     # Follow the /releases/latest redirect to avoid the API rate limit.
     $url = "https://github.com/$Repo/releases/latest"
-    $resp = Invoke-WebRequest -Uri $url -MaximumRedirection 0 -ErrorAction SilentlyContinue
+    $resp = Invoke-ItrWebRequest -Uri $url -MaximumRedirection 0 -AllowHttpErrorStatus
     $tag = $null
     if ($resp.StatusCode -ne 302 -and $resp.StatusCode -ne 301) {
         # PowerShell 7 may have followed the redirect; pull from the final URI.
-        if ($resp.BaseResponse.RequestMessage.RequestUri) {
-            $final = $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+        $requestUri = $null
+        if ($resp.BaseResponse -and ($resp.BaseResponse | Get-Member -Name RequestMessage -MemberType Property)) {
+            $requestUri = $resp.BaseResponse.RequestMessage.RequestUri
+        }
+        if ($requestUri) {
+            $final = $requestUri.AbsoluteUri
             $tag = ($final -split '/')[-1]
         } else {
             throw "Could not resolve latest release tag from $url"
@@ -195,6 +271,10 @@ if ($Action) {
 # ---- Main ------------------------------------------------------------------
 
 Write-Host ''
+$script:ItrPowerShellRuntime = Get-ItrPowerShellRuntime
+Initialize-ItrPowerShellRuntime -Runtime $script:ItrPowerShellRuntime
+Write-Info "PowerShell runtime: $script:ItrPowerShellRuntime ($($PSVersionTable.PSVersion))"
+
 if ($ActionMode -eq 'update') {
     Write-Info 'Updating itr — the zero-config issue tracker CLI'
 } else {
@@ -241,11 +321,11 @@ try {
     $sumPath = Join-Path $tmp "$assetBase.zip.sha256"
 
     Write-Info "Downloading $assetBase.zip"
-    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+    Invoke-ItrWebRequest -Uri $zipUrl -OutFile $zipPath
 
     $hasChecksum = $true
     try {
-        Invoke-WebRequest -Uri $sumUrl -OutFile $sumPath -UseBasicParsing -ErrorAction Stop
+        Invoke-ItrWebRequest -Uri $sumUrl -OutFile $sumPath
     } catch {
         $statusCode = $null
         if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
