@@ -1,7 +1,129 @@
 use crate::db;
 use crate::error::ItrError;
 use crate::format::Format;
+use crate::util;
 use rusqlite::Connection;
+
+/// Validate a `--type` value shared by the single-ID, multi-ID, and bulk paths.
+pub(crate) fn validate_relation_type(relation_type: &str) -> Result<(), ItrError> {
+    match relation_type {
+        "duplicate" | "related" | "supersedes" => Ok(()),
+        _ => Err(ItrError::InvalidValue {
+            field: "relation_type".to_string(),
+            value: relation_type.to_string(),
+            valid: "duplicate, related, supersedes".to_string(),
+        }),
+    }
+}
+
+/// `itr relate <ID>... --to N` — one or more source issue IDs, repeated,
+/// comma-separated, or inclusive `A-B` ranges.
+///
+/// - Exactly one unique ID: unchanged single-issue contract (hard `NOT_FOUND`
+///   on either side, hard `INVALID_VALUE` on a self-relation).
+/// - Multiple unique IDs: all relations are created in one transaction with
+///   per-ID soft fallback — a missing ID emits `REVIEW: id N not found;
+///   skipped`, and an ID equal to `--to` skips the self-relation. Exit 0 if
+///   at least one relation was processed, exit 1 if none were.
+pub fn run_relate_multi(
+    conn: &Connection,
+    id_tokens: &[String],
+    target_id: i64,
+    relation_type: &str,
+    fmt: Format,
+) -> Result<(), ItrError> {
+    validate_relation_type(relation_type)?;
+
+    let parsed = util::parse_id_tokens(id_tokens);
+    for note in &parsed.notes {
+        eprintln!("{}", note);
+    }
+    for token in &parsed.invalid {
+        eprintln!(
+            "REVIEW: ignoring non-integer issue ID '{}' — IDs may be repeated, comma-separated, or ranges (e.g. `itr relate 124-132 --to 53`)",
+            token
+        );
+    }
+    for id in &parsed.duplicates {
+        eprintln!(
+            "REVIEW: duplicate issue ID {} requested; relating it once",
+            id
+        );
+    }
+    if parsed.ids.is_empty() {
+        return Err(ItrError::InvalidValue {
+            field: "id".to_string(),
+            value: id_tokens.join(","),
+            valid:
+                "integer issue IDs, repeated, comma-separated, or ranges (e.g. `itr relate 124-132 --to 53`)"
+                    .to_string(),
+        });
+    }
+
+    if parsed.ids.len() == 1 {
+        return run_relate(conn, parsed.ids[0], target_id, relation_type, fmt);
+    }
+
+    // A missing --to target can never soft-recover: fail before touching
+    // anything, matching the single-ID behavior.
+    if !db::issue_exists(conn, target_id)? {
+        return Err(ItrError::NotFound(target_id));
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    let mut links: Vec<(i64, bool)> = Vec::new();
+    for &id in &parsed.ids {
+        if id == target_id {
+            eprintln!(
+                "REVIEW: id {} equals the --to target; self-relation skipped",
+                id
+            );
+            continue;
+        }
+        match db::add_relation(&tx, id, target_id, relation_type) {
+            Ok(created) => links.push((id, created)),
+            Err(ItrError::NotFound(_)) => {
+                eprintln!("REVIEW: id {} not found; skipped", id);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    if links.is_empty() {
+        return Err(ItrError::InvalidValue {
+            field: "id".to_string(),
+            value: id_tokens.join(","),
+            valid: "at least one existing issue ID distinct from --to".to_string(),
+        });
+    }
+    tx.commit()?;
+
+    match fmt {
+        Format::Json => {
+            let arr: Vec<serde_json::Value> = links
+                .iter()
+                .map(|(id, created)| {
+                    serde_json::json!({
+                        "source_id": id,
+                        "target_id": target_id,
+                        "relation_type": relation_type,
+                        "created": created,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::Value::Array(arr));
+        }
+        _ => {
+            for (id, created) in &links {
+                let verb = if *created { "created" } else { "exists" };
+                println!(
+                    "RELATION:{} {} -> {} ({})",
+                    verb, id, target_id, relation_type
+                );
+            }
+        }
+    }
+    Ok(())
+}
 
 pub fn run_relate(
     conn: &Connection,
@@ -10,17 +132,7 @@ pub fn run_relate(
     relation_type: &str,
     fmt: Format,
 ) -> Result<(), ItrError> {
-    // Validate relation type
-    match relation_type {
-        "duplicate" | "related" | "supersedes" => {}
-        _ => {
-            return Err(ItrError::InvalidValue {
-                field: "relation_type".to_string(),
-                value: relation_type.to_string(),
-                valid: "duplicate, related, supersedes".to_string(),
-            });
-        }
-    }
+    validate_relation_type(relation_type)?;
 
     let created = db::add_relation(conn, source_id, target_id, relation_type)?;
 
@@ -65,16 +177,7 @@ pub fn run_unrelate(
     // leaving other typed links between the pair intact. `None` keeps the
     // historical behavior of removing every type.
     if let Some(rt) = relation_type {
-        match rt {
-            "duplicate" | "related" | "supersedes" => {}
-            _ => {
-                return Err(ItrError::InvalidValue {
-                    field: "relation_type".to_string(),
-                    value: rt.to_string(),
-                    valid: "duplicate, related, supersedes".to_string(),
-                });
-            }
-        }
+        validate_relation_type(rt)?;
     }
 
     // Direction-aware: the pair is matched however it was stored, and every
@@ -177,6 +280,81 @@ mod tests {
             db::get_relations(&conn, a).expect("relations").is_empty(),
             "untyped unrelate keeps the historical remove-everything behavior"
         );
+    }
+
+    // --- spec P1: multi-ID relate ---
+
+    #[test]
+    fn relate_multi_links_every_source_to_target() {
+        let conn = db::open_test_db();
+        let target = seed(&conn, "target");
+        let a = seed(&conn, "a");
+        let b = seed(&conn, "b");
+        let c = seed(&conn, "c");
+
+        run_relate_multi(
+            &conn,
+            &[format!("{}-{}", a, c)],
+            target,
+            "related",
+            Format::Compact,
+        )
+        .expect("multi relate");
+
+        for id in [a, b, c] {
+            let rels = db::get_relations(&conn, id).expect("relations");
+            assert!(
+                rels.iter()
+                    .any(|r| r.source_id == id && r.target_id == target),
+                "issue {id} must be related to the target"
+            );
+        }
+    }
+
+    #[test]
+    fn relate_multi_skips_self_and_missing() {
+        let conn = db::open_test_db();
+        let target = seed(&conn, "target");
+        let a = seed(&conn, "a");
+
+        run_relate_multi(
+            &conn,
+            &[a.to_string(), target.to_string(), "999".to_string()],
+            target,
+            "related",
+            Format::Compact,
+        )
+        .expect("soft fallback");
+
+        let rels = db::get_relations(&conn, target).expect("relations");
+        assert_eq!(rels.len(), 1, "only a->target; no self-relation");
+        assert_eq!(rels[0].source_id, a);
+    }
+
+    #[test]
+    fn relate_multi_missing_target_is_hard_error() {
+        let conn = db::open_test_db();
+        let a = seed(&conn, "a");
+        let b = seed(&conn, "b");
+        let err = run_relate_multi(
+            &conn,
+            &[format!("{},{}", a, b)],
+            999,
+            "related",
+            Format::Compact,
+        )
+        .unwrap_err();
+        assert!(matches!(err, ItrError::NotFound(999)));
+    }
+
+    #[test]
+    fn relate_multi_single_id_keeps_single_contract() {
+        let conn = db::open_test_db();
+        let a = seed(&conn, "a");
+        // Self-relation through the single path stays a hard INVALID_VALUE.
+        let err =
+            run_relate_multi(&conn, &[a.to_string()], a, "related", Format::Compact).unwrap_err();
+        assert!(matches!(err, ItrError::InvalidValue { .. }));
     }
 
     #[test]

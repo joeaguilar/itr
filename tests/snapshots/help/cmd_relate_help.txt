@@ -2,12 +2,12 @@ $ itr relate --help
 --- exit ---
 0
 --- stdout ---
-Create a relation between two issues
+Create a relation between issues
 
-Usage: itr relate [OPTIONS] --to <TO> <ID>
+Usage: itr relate [OPTIONS] --to <TO> <ID>...
 
 Arguments:
-  <ID>  Source issue ID
+  <ID>...  Source issue ID(s) — repeat, comma-separate, or use ranges (e.g. 124-132)
 
 Options:
       --to <TO>                        Target issue ID
@@ -15,6 +15,6 @@ Options:
   -f, --format <FORMAT>                Output format: compact|json|pretty|oneline [default: compact]
       --db <DB>                        Override database path (skips walk-up search)
   -q, --quiet                          Suppress non-essential output
-      --fields <FIELDS>                Comma-separated list of fields to include in JSON output
+      --fields <FIELDS>                Comma-separated list of fields to include in output (all formats; oneline/pretty/compact honor the requested order)
   -h, --help                           Print help
 --- stderr ---

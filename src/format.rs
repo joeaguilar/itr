@@ -525,14 +525,57 @@ pub fn format_issue_list(issues: &[IssueSummary], fmt: Format) -> String {
         Format::Json => apply_fields_filter(&serde_json::to_string(issues).unwrap_or_default()),
         Format::Compact => format_issue_list_compact(issues),
         Format::Pretty => format_issue_list_pretty(issues),
-        Format::Oneline => {
-            warn_fields_unsupported("list oneline output");
-            format_issue_list_oneline(issues)
-        }
+        Format::Oneline => format_issue_list_oneline(issues),
+    }
+}
+
+/// One issue-summary field rendered as a single oneline/TSV cell. List-valued
+/// fields join with `,`; free text is escaped per the line-oriented contract
+/// (issue #175). Unknown field names render as an empty cell so the column
+/// count stays stable for scripts (the unknown name was already warned about
+/// by `validate_fields`).
+fn oneline_field_value(i: &IssueSummary, field: &str) -> String {
+    match field {
+        "id" => i.id.to_string(),
+        "status" => i.status.clone(),
+        "priority" => i.priority.clone(),
+        "kind" => i.kind.clone(),
+        "urgency" => format!("{:.1}", i.urgency),
+        "is_blocked" => i.is_blocked.to_string(),
+        "blocked_by" => i
+            .blocked_by
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(","),
+        "tags" => escape_line_value(&i.tags.join(",")),
+        "files" => escape_line_value(&i.files.join(",")),
+        "skills" => escape_line_value(&i.skills.join(",")),
+        "title" => escape_line_value(&i.title),
+        "acceptance" => escape_line_value(&i.acceptance),
+        "assigned_to" => escape_line_value(&i.assigned_to),
+        "created_at" => i.created_at.clone(),
+        "updated_at" => i.updated_at.clone(),
+        _ => String::new(),
     }
 }
 
 fn format_issue_list_oneline(issues: &[IssueSummary]) -> String {
+    // With --fields: the selected fields, tab-separated, in the requested
+    // order — one issue per line, script-ready (spec P4).
+    if let Some(fields) = get_fields_filter() {
+        return issues
+            .iter()
+            .map(|i| {
+                fields
+                    .iter()
+                    .map(|f| oneline_field_value(i, f))
+                    .collect::<Vec<_>>()
+                    .join("\t")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
     issues
         .iter()
         .map(|i| {
@@ -557,56 +600,82 @@ fn format_issue_list_oneline(issues: &[IssueSummary]) -> String {
         .join("\n")
 }
 
+/// Field names rendered on the first record line of a compact list block,
+/// in default order. The remaining printable fields each get their own line.
+const COMPACT_FIRST_LINE_FIELDS: &[&str] =
+    &["id", "status", "priority", "kind", "urgency", "blocked_by"];
+const COMPACT_LINE_FIELDS: &[&str] = &[
+    "tags",
+    "files",
+    "skills",
+    "assigned_to",
+    "title",
+    "acceptance",
+];
+
 fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
     let fields = get_fields_filter();
-    let on = |name: &str| field_enabled(fields.as_ref(), name);
+    // With --fields, honor the requested order within each structural tier
+    // (record line vs per-field lines); without it, keep the default order.
+    let first_line_fields: Vec<&str> = match fields {
+        Some(ref fs) => fs
+            .iter()
+            .map(String::as_str)
+            .filter(|f| COMPACT_FIRST_LINE_FIELDS.contains(f))
+            .collect(),
+        None => COMPACT_FIRST_LINE_FIELDS.to_vec(),
+    };
+    let line_fields: Vec<&str> = match fields {
+        Some(ref fs) => fs
+            .iter()
+            .map(String::as_str)
+            .filter(|f| COMPACT_LINE_FIELDS.contains(f))
+            .collect(),
+        None => COMPACT_LINE_FIELDS.to_vec(),
+    };
     issues
         .iter()
         .map(|i| {
             let mut first_parts = Vec::new();
-            if on("id") {
-                first_parts.push(format!("ID:{}", i.id));
-            }
-            if on("status") {
-                first_parts.push(format!("STATUS:{}", i.status));
-            }
-            if on("priority") {
-                first_parts.push(format!("PRIORITY:{}", i.priority));
-            }
-            if on("kind") {
-                first_parts.push(format!("KIND:{}", i.kind));
-            }
-            if on("urgency") {
-                first_parts.push(format!("URGENCY:{:.1}", i.urgency));
-            }
-            if on("blocked_by") && !i.blocked_by.is_empty() {
-                first_parts.push(format!(
-                    "BLOCKED_BY:{}",
-                    i.blocked_by
-                        .iter()
-                        .map(std::string::ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(",")
-                ));
+            for field in &first_line_fields {
+                match *field {
+                    "id" => first_parts.push(format!("ID:{}", i.id)),
+                    "status" => first_parts.push(format!("STATUS:{}", i.status)),
+                    "priority" => first_parts.push(format!("PRIORITY:{}", i.priority)),
+                    "kind" => first_parts.push(format!("KIND:{}", i.kind)),
+                    "urgency" => first_parts.push(format!("URGENCY:{:.1}", i.urgency)),
+                    "blocked_by" if !i.blocked_by.is_empty() => first_parts.push(format!(
+                        "BLOCKED_BY:{}",
+                        i.blocked_by
+                            .iter()
+                            .map(std::string::ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )),
+                    _ => {}
+                }
             }
             let mut lines = vec![first_parts.join(" ")];
-            if on("tags") && !i.tags.is_empty() {
-                lines.push(format!("TAGS:{}", escape_line_value(&i.tags.join(","))));
-            }
-            if on("files") && !i.files.is_empty() {
-                lines.push(format!("FILES:{}", escape_line_value(&i.files.join(","))));
-            }
-            if on("skills") && !i.skills.is_empty() {
-                lines.push(format!("SKILLS:{}", escape_line_value(&i.skills.join(","))));
-            }
-            if on("assigned_to") && !i.assigned_to.is_empty() {
-                lines.push(format!("ASSIGNED:{}", escape_line_value(&i.assigned_to)));
-            }
-            if on("title") {
-                lines.push(format!("TITLE: {}", escape_line_value(&i.title)));
-            }
-            if on("acceptance") && !i.acceptance.is_empty() {
-                lines.push(format!("ACCEPTANCE: {}", escape_line_value(&i.acceptance)));
+            for field in &line_fields {
+                match *field {
+                    "tags" if !i.tags.is_empty() => {
+                        lines.push(format!("TAGS:{}", escape_line_value(&i.tags.join(","))));
+                    }
+                    "files" if !i.files.is_empty() => {
+                        lines.push(format!("FILES:{}", escape_line_value(&i.files.join(","))));
+                    }
+                    "skills" if !i.skills.is_empty() => {
+                        lines.push(format!("SKILLS:{}", escape_line_value(&i.skills.join(","))));
+                    }
+                    "assigned_to" if !i.assigned_to.is_empty() => {
+                        lines.push(format!("ASSIGNED:{}", escape_line_value(&i.assigned_to)));
+                    }
+                    "title" => lines.push(format!("TITLE: {}", escape_line_value(&i.title))),
+                    "acceptance" if !i.acceptance.is_empty() => {
+                        lines.push(format!("ACCEPTANCE: {}", escape_line_value(&i.acceptance)));
+                    }
+                    _ => {}
+                }
             }
             lines.retain(|l| !l.is_empty());
             lines.join("\n")
@@ -615,35 +684,70 @@ fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
         .join("\n\n")
 }
 
+/// Every column the pretty list table can render:
+/// `(field_name, header, width, right_align)`. The final selected column is
+/// always rendered unpadded, so `width` only applies to non-final positions.
+const PRETTY_LIST_COLS: &[(&str, &str, usize, bool)] = &[
+    ("id", "#", 3, true),
+    ("urgency", "Urg", 5, true),
+    ("status", "Status", 11, false),
+    ("priority", "Pri", 8, false),
+    ("kind", "Kind", 7, false),
+    ("assigned_to", "Assignee", 10, false),
+    ("title", "Title", 40, false),
+    ("blocked_by", "Blocked", 8, false),
+    ("is_blocked", "Blk", 5, false),
+    ("tags", "Tags", 16, false),
+    ("files", "Files", 20, false),
+    ("skills", "Skills", 12, false),
+    ("acceptance", "Acceptance", 30, false),
+    ("created_at", "Created", 20, false),
+    ("updated_at", "Updated", 20, false),
+];
+
+/// Columns shown when no `--fields` filter is set — the historical fixed set.
+const PRETTY_LIST_DEFAULT_FIELDS: &[&str] = &[
+    "id",
+    "urgency",
+    "status",
+    "priority",
+    "kind",
+    "assigned_to",
+    "title",
+    "blocked_by",
+];
+
 fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
     if issues.is_empty() {
         return String::new();
     }
     let fields = get_fields_filter();
-    let on = |name: &str| field_enabled(fields.as_ref(), name);
 
-    // (field_name, header, width, right_align)
-    // width=0 → last column, no padding
-    let all_cols: &[(&str, &str, usize, bool)] = &[
-        ("id", "#", 3, true),
-        ("urgency", "Urg", 5, true),
-        ("status", "Status", 11, false),
-        ("priority", "Pri", 8, false),
-        ("kind", "Kind", 7, false),
-        ("assigned_to", "Assignee", 10, false),
-        ("title", "Title", 40, false),
-        ("blocked_by", "Blocked", 0, false),
-    ];
-    let cols: Vec<&(&str, &str, usize, bool)> =
-        all_cols.iter().filter(|(f, _, _, _)| on(f)).collect();
+    // With --fields, build the column set in the requested order (unknown
+    // names were already warned about and are skipped here); without it,
+    // keep the historical default columns.
+    let selected: Vec<&str> = match fields {
+        Some(ref fs) => fs
+            .iter()
+            .map(String::as_str)
+            .filter(|f| PRETTY_LIST_COLS.iter().any(|(name, ..)| name == f))
+            .collect(),
+        None => PRETTY_LIST_DEFAULT_FIELDS.to_vec(),
+    };
+    let cols: Vec<&(&str, &str, usize, bool)> = selected
+        .iter()
+        .filter_map(|f| PRETTY_LIST_COLS.iter().find(|(name, ..)| name == f))
+        .collect();
     if cols.is_empty() {
         return String::new();
     }
 
+    let last = cols.len() - 1;
     let header_parts: Vec<String> = cols
         .iter()
-        .map(|(_, h, w, right)| {
-            if *w == 0 {
+        .enumerate()
+        .map(|(idx, (_, h, w, right))| {
+            if idx == last {
                 h.to_string()
             } else {
                 pad_display(h, *w, *right)
@@ -660,7 +764,8 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
     for i in issues {
         let cell_parts: Vec<String> = cols
             .iter()
-            .map(|(f, _, w, right)| {
+            .enumerate()
+            .map(|(idx, (f, _, w, right))| {
                 let val = match *f {
                     "id" => format!("{}", i.id),
                     "urgency" => format!("{:.1}", i.urgency),
@@ -675,9 +780,16 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
                         .map(std::string::ToString::to_string)
                         .collect::<Vec<_>>()
                         .join(", "),
+                    "is_blocked" => i.is_blocked.to_string(),
+                    "tags" => truncate_with_ellipsis(&i.tags.join(","), 16),
+                    "files" => truncate_with_ellipsis(&i.files.join(","), 20),
+                    "skills" => truncate_with_ellipsis(&i.skills.join(","), 12),
+                    "acceptance" => truncate_with_ellipsis(&i.acceptance, 30),
+                    "created_at" => i.created_at.clone(),
+                    "updated_at" => i.updated_at.clone(),
                     _ => String::new(),
                 };
-                if *w == 0 {
+                if idx == last {
                     val
                 } else {
                     // Display-width-aware padding so double-width (CJK) cells
@@ -710,13 +822,12 @@ pub fn format_stats(stats: &Stats, fmt: Format) -> String {
 /// The `Stats` struct stores its count buckets in `HashMap`s, whose iteration
 /// order is randomized per process — serializing it directly produces
 /// byte-different output for semantically identical data, which makes byte-level
-/// snapshot tests flap (issue #139). This builds the JSON with a fixed
-/// top-level field order and **sorted** nested count-map keys (via `BTreeMap`),
-/// preserving the exact same JSON shape and values while removing the
-/// nondeterminism. The nested `oldest_open` object's keys are likewise
-/// alphabetical (`days_old`, `id`, `title`) because it round-trips through
-/// `serde_json::to_value`. See `docs/command-contracts.md` for the documented
-/// contract.
+/// snapshot tests flap (issue #139). This builds the JSON with alphabetical
+/// top-level keys and **sorted** nested count-map keys, preserving the exact
+/// same JSON shape and values while removing the nondeterminism. The nested
+/// `oldest_open` object's keys are likewise sorted alphabetically
+/// (`days_old`, `id`, `title`). See `docs/command-contracts.md` for the
+/// documented contract.
 fn stats_to_deterministic_json(stats: &Stats) -> String {
     use serde_json::{Map, Value};
     use std::collections::BTreeMap;
@@ -749,24 +860,33 @@ fn stats_to_deterministic_json(stats: &Stats) -> String {
         Value::Object(obj)
     };
 
-    // Top-level object. `serde_json::Map` (without the `preserve_order`
-    // feature) is backed by a `BTreeMap`, so the top-level keys serialize in a
-    // stable alphabetical order regardless of insertion order. Combined with
+    // Top-level object. `serde_json::Map` is insertion-ordered now that the
+    // `preserve_order` feature is enabled (needed so --fields can honor the
+    // requested field order), so the documented alphabetical contract is kept
+    // by inserting the keys in alphabetical order explicitly. Combined with
     // the sorted nested maps above, the whole `Stats` object is deterministic.
+    let oldest_open_value = {
+        // Round-trip through Value, then sort the object keys (days_old, id,
+        // title) to keep the documented alphabetical nested contract.
+        let v = serde_json::to_value(oldest_open).unwrap_or(Value::Null);
+        if let Value::Object(map) = v {
+            let sorted: BTreeMap<String, Value> = map.into_iter().collect();
+            Value::Object(sorted.into_iter().collect())
+        } else {
+            v
+        }
+    };
     let mut obj = Map::new();
-    obj.insert("total".to_string(), Value::from(*total));
-    obj.insert("by_status".to_string(), ordered_map(by_status));
-    obj.insert("by_priority".to_string(), ordered_map(by_priority));
-    obj.insert("by_kind".to_string(), ordered_map(by_kind));
-    obj.insert("blocked".to_string(), Value::from(*blocked));
-    obj.insert("ready".to_string(), Value::from(*ready));
     obj.insert("avg_urgency".to_string(), round_urgency_value(*avg_urgency));
-    obj.insert("by_skills".to_string(), ordered_map(by_skills));
+    obj.insert("blocked".to_string(), Value::from(*blocked));
     obj.insert("by_assignee".to_string(), ordered_map(by_assignee));
-    obj.insert(
-        "oldest_open".to_string(),
-        serde_json::to_value(oldest_open).unwrap_or(Value::Null),
-    );
+    obj.insert("by_kind".to_string(), ordered_map(by_kind));
+    obj.insert("by_priority".to_string(), ordered_map(by_priority));
+    obj.insert("by_skills".to_string(), ordered_map(by_skills));
+    obj.insert("by_status".to_string(), ordered_map(by_status));
+    obj.insert("oldest_open".to_string(), oldest_open_value);
+    obj.insert("ready".to_string(), Value::from(*ready));
+    obj.insert("total".to_string(), Value::from(*total));
 
     Value::Object(obj).to_string()
 }
@@ -1376,11 +1496,16 @@ pub fn filter_json_fields(value: serde_json::Value, fields: &[String]) -> serde_
 }
 
 fn filter_json_object(value: serde_json::Value, fields: &[String]) -> serde_json::Value {
-    if let serde_json::Value::Object(map) = value {
-        let filtered: serde_json::Map<String, serde_json::Value> = map
-            .into_iter()
-            .filter(|(k, _)| fields.iter().any(|f| f == k))
-            .collect();
+    if let serde_json::Value::Object(mut map) = value {
+        // Rebuild in the requested --fields order (spec P4: all formats honor
+        // order). Requires serde_json's preserve_order feature, otherwise the
+        // Map would re-sort keys alphabetically.
+        let mut filtered = serde_json::Map::new();
+        for f in fields {
+            if let Some(v) = map.remove(f) {
+                filtered.insert(f.clone(), v);
+            }
+        }
         serde_json::Value::Object(filtered)
     } else {
         value
@@ -1427,12 +1552,17 @@ pub fn format_batch_result(result: &BatchResult, fmt: Format) -> String {
 fn format_batch_result_compact(result: &BatchResult) -> String {
     let mut lines = Vec::new();
     lines.push(format!(
-        "{}: {} items ({} ok, {} error, {} review)",
+        "{}: {} items ({} ok, {} error, {} review){}",
         result.action.to_uppercase(),
         result.summary.total,
         result.summary.ok,
         result.summary.error,
         result.summary.review,
+        if result.dry_run {
+            " (dry-run — nothing written)"
+        } else {
+            ""
+        },
     ));
     for item in &result.results {
         match item.outcome.as_str() {
@@ -1701,6 +1831,120 @@ mod tests {
     // --- Pretty-table alignment with double-width (CJK) cells (issue #196) ---
 
     /// Display-column positions of the `|` separators on a line.
+    // --- spec P4: --fields on oneline and pretty list output ---
+
+    #[test]
+    fn oneline_list_fields_are_tab_separated_in_requested_order() {
+        let _guard = FieldsFilterGuard::set(&["id", "status", "title"]);
+        let mut summary = make_summary("Fix the thing");
+        summary.id = 7;
+        summary.status = "open".to_string();
+        let out = format_issue_list(&[summary], Format::Oneline);
+        assert_eq!(out, "7\topen\tFix the thing");
+    }
+
+    #[test]
+    fn oneline_list_fields_join_list_values_with_commas() {
+        let _guard = FieldsFilterGuard::set(&["id", "tags", "blocked_by"]);
+        let mut summary = make_summary("t");
+        summary.id = 3;
+        summary.tags = vec!["a".to_string(), "b".to_string()];
+        summary.blocked_by = vec![1, 2];
+        let out = format_issue_list(&[summary], Format::Oneline);
+        assert_eq!(out, "3\ta,b\t1,2");
+    }
+
+    #[test]
+    fn oneline_list_fields_unknown_name_is_empty_cell() {
+        // Soft fallback: the unknown name was warned about at parse time;
+        // the column count stays stable for scripts.
+        let _guard = FieldsFilterGuard::set(&["id", "bogus", "status"]);
+        let mut summary = make_summary("t");
+        summary.id = 4;
+        summary.status = "open".to_string();
+        let out = format_issue_list(&[summary], Format::Oneline);
+        assert_eq!(out, "4\t\topen");
+    }
+
+    #[test]
+    fn oneline_list_fields_escape_free_text() {
+        let _guard = FieldsFilterGuard::set(&["id", "title"]);
+        let mut summary = make_summary("multi\nline\ttitle");
+        summary.id = 5;
+        let out = format_issue_list(&[summary], Format::Oneline);
+        assert_eq!(out, "5\tmulti\\nline\\ttitle");
+    }
+
+    #[test]
+    fn oneline_list_default_shape_unchanged_without_fields() {
+        let mut summary = make_summary("Plain");
+        summary.id = 9;
+        summary.status = "open".to_string();
+        summary.priority = "medium".to_string();
+        summary.kind = "task".to_string();
+        let out = format_issue_list(&[summary], Format::Oneline);
+        assert_eq!(out, "9\topen\tmedium\ttask\t\"Plain\"");
+    }
+
+    #[test]
+    fn pretty_list_fields_build_columns_in_requested_order() {
+        let _guard = FieldsFilterGuard::set(&["status", "id", "title"]);
+        let mut summary = make_summary("Ordered");
+        summary.id = 2;
+        summary.status = "open".to_string();
+        let out = format_issue_list(&[summary], Format::Pretty);
+        let header = out.lines().next().unwrap();
+        let cols: Vec<&str> = header.split('|').map(str::trim).collect();
+        assert_eq!(cols, vec!["Status", "#", "Title"]);
+        assert!(out.lines().nth(2).unwrap().contains("Ordered"));
+    }
+
+    #[test]
+    fn pretty_list_fields_support_extra_columns() {
+        let _guard = FieldsFilterGuard::set(&["id", "tags", "created_at"]);
+        let mut summary = make_summary("Extra");
+        summary.id = 2;
+        summary.tags = vec!["sprint-9".to_string()];
+        summary.created_at = "2026-07-02T00:00:00Z".to_string();
+        let out = format_issue_list(&[summary], Format::Pretty);
+        let header = out.lines().next().unwrap();
+        let cols: Vec<&str> = header.split('|').map(str::trim).collect();
+        assert_eq!(cols, vec!["#", "Tags", "Created"]);
+        let row = out.lines().nth(2).unwrap();
+        assert!(row.contains("sprint-9"));
+        assert!(row.contains("2026-07-02T00:00:00Z"));
+    }
+
+    #[test]
+    fn pretty_list_default_columns_unchanged_without_fields() {
+        let out = format_issue_list(&[make_summary("Default")], Format::Pretty);
+        let header = out.lines().next().unwrap();
+        let cols: Vec<&str> = header.split('|').map(str::trim).collect();
+        assert_eq!(
+            cols,
+            vec!["#", "Urg", "Status", "Pri", "Kind", "Assignee", "Title", "Blocked"]
+        );
+    }
+
+    #[test]
+    fn compact_list_fields_honor_requested_order_within_record_line() {
+        let _guard = FieldsFilterGuard::set(&["status", "id"]);
+        let mut summary = make_summary("t");
+        summary.id = 6;
+        summary.status = "open".to_string();
+        let out = format_issue_list(&[summary], Format::Compact);
+        assert_eq!(out, "STATUS:open ID:6");
+    }
+
+    #[test]
+    fn json_list_fields_honor_requested_order() {
+        let _guard = FieldsFilterGuard::set(&["title", "id"]);
+        let mut summary = make_summary("Ord");
+        summary.id = 8;
+        let out = format_issue_list(&[summary], Format::Json);
+        assert_eq!(out, "[{\"title\":\"Ord\",\"id\":8}]");
+    }
+
     fn pipe_display_cols(line: &str) -> Vec<usize> {
         let mut cols = Vec::new();
         let mut col = 0;
@@ -2211,10 +2455,12 @@ mod tests {
         let det: serde_json::Value =
             serde_json::from_str(&format_stats(&stats, Format::Json)).unwrap();
         let derived = serde_json::to_value(&stats).unwrap();
-        let det_keys: Vec<&String> = det.as_object().unwrap().keys().collect();
-        let derived_keys: Vec<&String> = derived.as_object().unwrap().keys().collect();
-        // Both maps are BTreeMap-backed (alphabetical), so straight equality
-        // of the key lists is field-set equality.
+        let mut det_keys: Vec<&String> = det.as_object().unwrap().keys().collect();
+        let mut derived_keys: Vec<&String> = derived.as_object().unwrap().keys().collect();
+        // Maps are insertion-ordered (preserve_order), so sort both key lists
+        // before comparing — this is a field-*set* equality check.
+        det_keys.sort();
+        derived_keys.sort();
         assert_eq!(det_keys, derived_keys);
     }
 
@@ -2267,8 +2513,8 @@ mod tests {
             created_at: "2026-01-01T00:00:00Z".to_string(),
         }];
         let out = format_events(&events, Format::Json);
-        // Filtered objects re-serialize with alphabetical keys (documented).
-        assert_eq!(out, "[{\"field\":\"status\",\"id\":7}]");
+        // Filtered objects re-serialize in the requested --fields order.
+        assert_eq!(out, "[{\"id\":7,\"field\":\"status\"}]");
     }
 
     fn make_search_result(title: &str) -> SearchResult {

@@ -12,8 +12,8 @@ Commands:
   list         List issues with filtering
   get          Get full detail for one or more issues
   update       Update an issue
-  close        Close an issue (shorthand for update --status done)
-  note         Append a note to an issue
+  close        Close one or more issues (shorthand for update --status done)
+  note         Append a note to one or more issues
   note-delete  Delete a note by ID
   note-update  Update a note's content
   depend       Add a dependency (issue becomes blocked by --on) [aliases: deps]
@@ -34,11 +34,11 @@ Commands:
   skill        Emit or install the Claude Code skill that teaches agents to use itr
   schema       Dump the current database schema
   upgrade      Rebuild and reinstall itr from source
-  claim        Claim the highest-urgency unblocked issue (shorthand for next --claim) [aliases: start]
+  claim        Claim the highest-urgency unblocked issue (shorthand for next --claim). Claiming is deliberately one-at-a-time: multi-ID syntax is not supported here [aliases: start]
   assign       Assign an issue to an agent
   unassign     Unassign an issue
   log          View event history (audit log)
-  relate       Create a relation between two issues
+  relate       Create a relation between issues
   unrelate     Remove a relation between two issues
   reindex      Rebuild the full-text search index
   search       Search issues by text across all fields
@@ -50,7 +50,7 @@ Options:
   -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
       --db <DB>          Override database path (skips walk-up search)
   -q, --quiet            Suppress non-essential output
-      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+      --fields <FIELDS>  Comma-separated list of fields to include in output (all formats; oneline/pretty/compact honor the requested order)
   -h, --help             Print help
   -V, --version          Print version
 --- stderr ---

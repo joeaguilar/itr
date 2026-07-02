@@ -40,7 +40,7 @@ If `ITR_AGENT` is unset in the environment, default to `claude` by prefixing the
 
 ## Bulk filing
 
-When the user dumps a list ("file these five things…"), use `itr batch add` with a JSON array on stdin — one round-trip instead of N. Schema mirrors `itr add` flags; `parent` and `parent_id` are both accepted for the parent epic. See `itr agent-info` for exact field names.
+When the user dumps a list ("file these five things…"), use `itr batch add` with a JSON array on stdin — one round-trip instead of N. Schema mirrors `itr add` flags; `parent` and `parent_id` are both accepted for the parent epic. To validate a payload before writing anything, run `itr batch add --dry-run < payload.json` — same per-item verdicts (including resolved priority/kind defaults), nothing created. See `itr agent-info` for exact field names.
 
 ## Workflow
 

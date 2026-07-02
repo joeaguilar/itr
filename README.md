@@ -224,10 +224,10 @@ Every variant of the CLI is grouped below. Subcommands of `batch`, `bulk`,
 | `itr init` | Create `.itr.db` in the current directory (`--agents-md` appends instructions to `AGENTS.md`) |
 | `itr add <TITLE>` | Create a new issue (alias: `itr create`) |
 | `itr list` | List issues (default: open/in-progress, unblocked, by urgency) |
-| `itr get <ID>` | Full detail for one issue |
+| `itr get <ID>...` | Full detail for one or more issues (`1 2 3`, `1,2,3`, or ranges `5-8`) |
 | `itr update <ID>` | Modify issue fields |
-| `itr close <ID> [REASON]` | Close an issue as done (`--wontfix`, `--duplicate-of <ID>`) |
-| `itr show` | All non-terminal issues; `itr show <ID>` aliases `itr get` |
+| `itr close <ID>... [REASON]` | Close one or more issues as done (`12,14,17`, ranges `5-8`; `--reason`, `--wontfix`, `--duplicate-of <ID>`) |
+| `itr show` | All non-terminal issues; `itr show <ID>...` aliases `itr get` |
 | `itr wip` / `itr current` | Show in-progress issues (shorthand for `list -s in-progress`) |
 | `itr ui` | Start a localhost browser UI for issue editing |
 
@@ -235,7 +235,7 @@ Every variant of the CLI is grouped below. Subcommands of `batch`, `bulk`,
 
 | Command | Description |
 |---------|-------------|
-| `itr note <ID> <TEXT>` | Append a timestamped note to an issue |
+| `itr note <ID>... <TEXT>` | Append a timestamped note to one or more issues (`55 56 57`, `1,2,3`, or ranges `5-8`) |
 | `itr note-update <NOTE_ID> <TEXT>` | Replace a note's content |
 | `itr note-delete <NOTE_ID>` | Delete a note by ID |
 
@@ -243,9 +243,9 @@ Every variant of the CLI is grouped below. Subcommands of `batch`, `bulk`,
 
 | Command | Description |
 |---------|-------------|
-| `itr depend <ID> --on <ID>` | Mark an issue as blocked by another (alias: `itr deps`) |
+| `itr depend <ID>... --on <ID>` | Mark one or more issues as blocked by another (alias: `itr deps`; multi-ID and ranges) |
 | `itr undepend <ID> --on <ID>` | Remove a dependency |
-| `itr relate <ID> --to <ID> --type related\|duplicate\|supersedes` | Create a relation between two issues |
+| `itr relate <ID>... --to <ID> --type related\|duplicate\|supersedes` | Relate one or more issues to a target (e.g. `itr relate 124-132 --to 53`) |
 | `itr unrelate <ID> --from <ID>` | Remove a relation between two issues |
 | `itr graph` | Output the dependency graph (JSON or DOT format) |
 
@@ -255,7 +255,7 @@ Every variant of the CLI is grouped below. Subcommands of `batch`, `bulk`,
 |---------|-------------|
 | `itr next` | Single highest-urgency unblocked open issue |
 | `itr next --claim` | Same, but atomically sets it to in-progress |
-| `itr claim` / `itr start` | Alias for `itr next --claim` (accepts optional explicit `<ID>`) |
+| `itr claim` / `itr start` | Alias for `itr next --claim` (accepts optional explicit `<ID>`; deliberately single-ID — claiming is one-at-a-time) |
 | `itr ready` | All unblocked non-terminal issues, sorted by urgency |
 | `itr assign <ID> <AGENT>` | Assign an issue to an agent |
 | `itr unassign <ID>` | Clear an issue's assignee |
@@ -265,17 +265,24 @@ Every variant of the CLI is grouped below. Subcommands of `batch`, `bulk`,
 
 ### Bulk Operations
 
-`batch` reads a JSON array on stdin so each item carries its own changes;
-`bulk` applies the same change to every issue matching CLI filters.
+Which one do I want? **`batch`** reads a JSON array on stdin so each item
+carries its own changes (explicit list, per-item values); **`bulk`** applies
+the same change to every issue matching CLI filters (filter-based, one shared
+value). For an explicit list of IDs with one shared change, the mutating
+verbs themselves also take multiple IDs — `itr close 12,14,17 "reason"`,
+`itr relate 124-132 --to 53` — no loop or JSON needed.
 
 | Command | Description |
 |---------|-------------|
-| `itr batch add` | Bulk-create issues from JSON array on stdin (alias: `itr batch create`) |
+| `itr batch add` | Bulk-create issues from JSON array on stdin (alias: `itr batch create`; `--dry-run` validates without writing) |
 | `itr batch close` | Bulk-close issues from JSON array on stdin (per-issue reasons; `--dry-run`) |
 | `itr batch update` | Bulk-update issues from JSON array on stdin (per-issue changes; `--dry-run`) |
-| `itr batch note` | Bulk-add notes from JSON array `[{id, text, agent?}]` on stdin |
+| `itr batch note` | Bulk-add notes from JSON array `[{id, text, agent?}]` on stdin (`--dry-run`) |
 | `itr bulk close` | Close every issue matching `--status/--priority/--kind/--tag/--skill/--assigned-to` (`--reason`, `--wontfix`, `--dry-run`) |
 | `itr bulk update` | Update fields (`--set-status`, `--set-priority`, `--add-tag`) on every issue matching filters (`--dry-run`) |
+| `itr bulk relate` | Relate every issue matching filters to `--to <ID>` (`--type`, `--dry-run`; self-edges skipped) |
+| `itr bulk depend` | Block every issue matching filters on `--on <ID>` (`--dry-run`; self-edges skipped, cycles hard-error) |
+| `itr bulk note` | Append the same note to every issue matching filters (`--agent`, `--dry-run`) |
 
 ### Project Management
 
@@ -334,7 +341,7 @@ These flags are accepted by every subcommand.
 |------|-------------|
 | `-f, --format <FORMAT>` | Output format: `compact` (default), `json`, `pretty`, `oneline` |
 | `--db <PATH>` | Override database path (skips the walk-up search). Lower precedence than `ITR_DB_PATH` for everything except `itr init`, where the CLI flag wins |
-| `--fields <LIST>` | Comma-separated list of fields to include in JSON output (e.g. `--fields id,title,urgency`). Soft-fallback on typos: unknown field names emit a `REVIEW:` note on stderr and are simply omitted from the output |
+| `--fields <LIST>` | Comma-separated list of fields to include in output — all four formats (e.g. `--fields id,title,urgency`). Output honors the requested order: `oneline` emits the selected fields as tab-separated columns (script-ready TSV), `pretty` builds its table columns from the list, and JSON re-serializes the surviving keys in the given order. Soft-fallback on typos: unknown field names emit a `REVIEW:` note on stderr and are simply omitted from the output |
 | `-q, --quiet` | Suppress non-essential output |
 
 Valid `--fields` names (mirrors the serialized JSON shape; unknown entries are
@@ -405,7 +412,11 @@ cat <<'EOF' | itr batch add
 EOF
 ```
 
-`@0` refers to the first issue in the batch, `@1` to the second, etc. The entire batch is transactional — if any issue fails validation, none are created.
+`@0` refers to the first issue in the batch, `@1` to the second, etc. The batch runs in one transaction with per-item soft fallback: a malformed item becomes a per-item `error` result while the valid items are still created, and recoverable problems (unknown keys, unrecognized priority/kind, missing parent or `blocked_by` target) create the issue anyway with a `REVIEW:` note and the `_needs_review` tag. Validate a payload without writing anything using `--dry-run` — it runs the exact same parse/validate path and reports the same per-item verdicts, including the resolved priority/kind defaults:
+
+```bash
+itr batch add --dry-run < sprint1-stories.json   # per-item verdicts, nothing written
+```
 
 ## Urgency Scoring
 

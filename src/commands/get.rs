@@ -4,53 +4,8 @@ use crate::error::{self, ItrError};
 use crate::format::{self, Format};
 use crate::models::{IssueDetail, IssueSummary, ListFilter};
 use crate::urgency::{self, UrgencyConfig};
+use crate::util;
 use rusqlite::Connection;
-
-/// Outcome of parsing the raw positional ID arguments for `get`/`show`.
-///
-/// IDs may be repeated arguments, comma-separated lists, or a mix
-/// (`itr get 1 2,3`). Parsing is a pure function so the soft-fallback
-/// reporting (REVIEW notes for duplicates and non-integer tokens) stays in
-/// [`run`] and the splitting/dedup logic is unit-testable.
-struct ParsedIds {
-    /// Unique IDs in first-seen request order.
-    ids: Vec<i64>,
-    /// IDs requested more than once (unique, first-seen order).
-    duplicates: Vec<i64>,
-    /// Tokens that did not parse as integers.
-    invalid: Vec<String>,
-}
-
-fn parse_id_args(args: &[String]) -> ParsedIds {
-    let mut ids = Vec::new();
-    let mut duplicates = Vec::new();
-    let mut invalid = Vec::new();
-    for arg in args {
-        for token in arg.split(',') {
-            let token = token.trim();
-            if token.is_empty() {
-                continue;
-            }
-            match token.parse::<i64>() {
-                Ok(id) => {
-                    if ids.contains(&id) {
-                        if !duplicates.contains(&id) {
-                            duplicates.push(id);
-                        }
-                    } else {
-                        ids.push(id);
-                    }
-                }
-                Err(_) => invalid.push(token.to_string()),
-            }
-        }
-    }
-    ParsedIds {
-        ids,
-        duplicates,
-        invalid,
-    }
-}
 
 /// Fetch the full [`IssueDetail`] for one issue: urgency breakdown, blockers,
 /// notes, relations, and (for epics) child summaries. This is the single
@@ -122,8 +77,8 @@ fn collect_details(
     Ok((details, missing))
 }
 
-/// `itr get <ID>...` / `itr show <ID>...` — one or more issue IDs, repeated
-/// or comma-separated (#136).
+/// `itr get <ID>...` / `itr show <ID>...` — one or more issue IDs, repeated,
+/// comma-separated, or inclusive `A-B` ranges (#136).
 ///
 /// - Exactly one unique ID: byte-identical to the historical single-issue
 ///   contract, including the hard `NOT_FOUND` error for a missing issue.
@@ -131,14 +86,17 @@ fn collect_details(
 ///   blank-line-separated per-issue blocks in compact/oneline/pretty).
 ///   Missing IDs emit a `REVIEW:` note each and the found issues are still
 ///   returned with exit 0; all-missing prints the standard empty result.
-/// - Duplicate IDs are fetched once; non-integer tokens are skipped — both
+/// - Duplicate IDs are fetched once; unparseable tokens are skipped — both
 ///   with `REVIEW:` notes. A request with no parseable ID at all is a hard
 ///   `INVALID_VALUE`.
 pub fn run(conn: &Connection, id_args: &[String], fmt: Format) -> Result<(), ItrError> {
-    let parsed = parse_id_args(id_args);
+    let parsed = util::parse_id_tokens(id_args);
+    for note in &parsed.notes {
+        eprintln!("{}", note);
+    }
     for token in &parsed.invalid {
         eprintln!(
-            "REVIEW: ignoring non-integer issue ID '{}' — IDs may be repeated or comma-separated (e.g. `itr get 1,2,3`)",
+            "REVIEW: ignoring non-integer issue ID '{}' — IDs may be repeated, comma-separated, or ranges (e.g. `itr get 1,2,5-8`)",
             token
         );
     }
@@ -153,8 +111,9 @@ pub fn run(conn: &Connection, id_args: &[String], fmt: Format) -> Result<(), Itr
         return Err(ItrError::InvalidValue {
             field: "id".to_string(),
             value: id_args.join(","),
-            valid: "integer issue IDs, repeated or comma-separated (e.g. `itr get 1,2,3`)"
-                .to_string(),
+            valid:
+                "integer issue IDs, repeated, comma-separated, or ranges (e.g. `itr get 1,2,5-8`)"
+                    .to_string(),
         });
     }
 
@@ -186,36 +145,8 @@ mod tests {
         list.iter().map(|s| (*s).to_string()).collect()
     }
 
-    #[test]
-    fn parse_id_args_accepts_comma_and_repeated_forms() {
-        let parsed = parse_id_args(&args(&["1,2", "3", "4,5"]));
-        assert_eq!(parsed.ids, vec![1, 2, 3, 4, 5]);
-        assert!(parsed.duplicates.is_empty());
-        assert!(parsed.invalid.is_empty());
-    }
-
-    #[test]
-    fn parse_id_args_dedups_and_reports_duplicates_once() {
-        let parsed = parse_id_args(&args(&["1,1,2", "1", "2"]));
-        assert_eq!(parsed.ids, vec![1, 2], "first-seen order, no repeats");
-        assert_eq!(parsed.duplicates, vec![1, 2]);
-        assert!(parsed.invalid.is_empty());
-    }
-
-    #[test]
-    fn parse_id_args_collects_invalid_tokens_and_keeps_valid_ones() {
-        let parsed = parse_id_args(&args(&["1,abc", "x", "2"]));
-        assert_eq!(parsed.ids, vec![1, 2]);
-        assert_eq!(parsed.invalid, vec!["abc".to_string(), "x".to_string()]);
-    }
-
-    #[test]
-    fn parse_id_args_skips_empty_tokens() {
-        // Trailing/doubled commas and whitespace are noise, not errors.
-        let parsed = parse_id_args(&args(&["1,,2,", " 3 "]));
-        assert_eq!(parsed.ids, vec![1, 2, 3]);
-        assert!(parsed.invalid.is_empty());
-    }
+    // ID-token parsing (comma lists, ranges, duplicates) is unit-tested in
+    // `util::tests` — the parser is shared with the multi-ID mutating verbs.
 
     fn seed(conn: &rusqlite::Connection, title: &str) -> i64 {
         db::insert_issue(

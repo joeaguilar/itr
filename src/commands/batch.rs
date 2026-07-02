@@ -133,14 +133,19 @@ fn ensure_needs_review_tag(conn: &Connection, id: i64) -> Result<(), ItrError> {
     Ok(())
 }
 
-pub fn run_add(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
+pub fn run_add(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), ItrError> {
     let input = read_stdin()?;
-    let batch_result = run_add_core(conn, &input)?;
+    let batch_result = run_add_core(conn, &input, dry_run)?;
     println!("{}", format::format_batch_result(&batch_result, fmt));
     Ok(())
 }
 
-fn run_add_core(conn: &Connection, input: &str) -> Result<BatchResult, ItrError> {
+/// Core of `batch add`. With `dry_run`, the exact same parse/validate/insert
+/// path runs inside the transaction and the transaction is rolled back
+/// instead of committed — per-item verdicts (including resolved priority/kind
+/// defaults and `@N` dependency resolution) match the real run while nothing
+/// is written.
+fn run_add_core(conn: &Connection, input: &str, dry_run: bool) -> Result<BatchResult, ItrError> {
     let values: Vec<serde_json::Value> = serde_json::from_str(input)?;
 
     // Parse each item individually; a malformed item is reported as a
@@ -278,16 +283,15 @@ fn run_add_core(conn: &Connection, input: &str) -> Result<BatchResult, ItrError>
         }
     }
 
-    tx.commit()?;
-
-    // Build results with issue details
-    let config = UrgencyConfig::load(conn);
+    // Build results with issue details from the transaction state, so the
+    // dry-run path reports exactly what a committed run would have created.
+    let config = UrgencyConfig::load(&tx);
     let mut results: Vec<BatchItemResult> = Vec::with_capacity(parsed.len());
     for (idx, entry) in parsed.iter().enumerate() {
         match (entry, created[idx]) {
             (Ok((_, review_notes)), Some(id)) => {
-                let issue = db::get_issue(conn, id)?;
-                let detail = build_issue_detail(conn, issue, &config)?;
+                let issue = db::get_issue(&tx, id)?;
+                let detail = build_issue_detail(&tx, issue, &config)?;
 
                 let outcome = if review_notes.is_empty() {
                     "ok"
@@ -318,12 +322,16 @@ fn run_add_core(conn: &Connection, input: &str) -> Result<BatchResult, ItrError>
         }
     }
 
+    if !dry_run {
+        tx.commit()?;
+    }
+
     let summary = build_summary(&results);
     Ok(BatchResult {
         action: "batch_add".to_string(),
         results,
         summary,
-        dry_run: false,
+        dry_run,
     })
 }
 
@@ -610,15 +618,17 @@ fn run_update_core(conn: &Connection, input: &str, dry_run: bool) -> Result<Batc
     })
 }
 
-pub fn run_note(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
+pub fn run_note(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), ItrError> {
     let input = read_stdin()?;
-    let batch_result = run_note_core(conn, &input)?;
+    let batch_result = run_note_core(conn, &input, dry_run)?;
     println!("{}", format::format_batch_result(&batch_result, fmt));
     Ok(())
 }
 
-fn run_note_core(conn: &Connection, input: &str) -> Result<BatchResult, ItrError> {
+fn run_note_core(conn: &Connection, input: &str, dry_run: bool) -> Result<BatchResult, ItrError> {
     let items = parse_each::<BatchNoteInput>(input)?;
+
+    let tx = conn.unchecked_transaction()?;
 
     let mut results: Vec<BatchItemResult> = Vec::with_capacity(items.len());
 
@@ -638,7 +648,7 @@ fn run_note_core(conn: &Connection, input: &str) -> Result<BatchResult, ItrError
             item.agent.clone()
         };
 
-        match db::add_note(conn, item.id, &item.text, &agent) {
+        match db::add_note(&tx, item.id, &item.text, &agent) {
             Ok(note) => {
                 results.push(BatchItemResult {
                     id: item.id,
@@ -663,12 +673,16 @@ fn run_note_core(conn: &Connection, input: &str) -> Result<BatchResult, ItrError
         }
     }
 
+    if !dry_run {
+        tx.commit()?;
+    }
+
     let summary = build_summary(&results);
     Ok(BatchResult {
         action: "batch_note".to_string(),
         results,
         summary,
-        dry_run: false,
+        dry_run,
     })
 }
 
@@ -730,7 +744,7 @@ mod tests {
         let conn = open_test_db();
         let epic = seed(&conn, "Epic");
         let input = format!(r#"[{{"title":"child","parent":{epic}}}]"#);
-        let result = run_add_core(&conn, &input).unwrap();
+        let result = run_add_core(&conn, &input, false).unwrap();
         assert_eq!(result.results[0].outcome, "ok");
         let child = db::get_issue(&conn, result.results[0].id).unwrap();
         assert_eq!(
@@ -745,7 +759,7 @@ mod tests {
         let conn = open_test_db();
         let epic = seed(&conn, "Epic");
         let input = format!(r#"[{{"title":"child","parent_id":{epic}}}]"#);
-        let result = run_add_core(&conn, &input).unwrap();
+        let result = run_add_core(&conn, &input, false).unwrap();
         let child = db::get_issue(&conn, result.results[0].id).unwrap();
         assert_eq!(child.parent_id, Some(epic));
     }
@@ -753,7 +767,7 @@ mod tests {
     #[test]
     fn add_unknown_field_emits_review_note() {
         let conn = open_test_db();
-        let result = run_add_core(&conn, r#"[{"title":"x","parnt_id":7}]"#).unwrap();
+        let result = run_add_core(&conn, r#"[{"title":"x","parnt_id":7}]"#, false).unwrap();
         assert_eq!(result.results[0].outcome, "review");
         assert!(
             result.results[0].notes[0].contains("parnt_id"),
@@ -769,7 +783,8 @@ mod tests {
     #[test]
     fn add_missing_parent_creates_parentless_with_review() {
         let conn = open_test_db();
-        let result = run_add_core(&conn, r#"[{"title":"orphan","parent_id":9999}]"#).unwrap();
+        let result =
+            run_add_core(&conn, r#"[{"title":"orphan","parent_id":9999}]"#, false).unwrap();
         assert_eq!(result.summary.total, 1);
         assert_eq!(result.results[0].outcome, "review");
         let issue = db::get_issue(&conn, result.results[0].id).unwrap();
@@ -791,6 +806,7 @@ mod tests {
         let result = run_add_core(
             &conn,
             r#"[{"title":"good"},{"title":42},{"title":"also good"}]"#,
+            false,
         )
         .unwrap();
         assert_eq!(result.summary.total, 3);
@@ -806,7 +822,8 @@ mod tests {
     #[test]
     fn add_unresolvable_blocked_by_skips_edge_with_review() {
         let conn = open_test_db();
-        let result = run_add_core(&conn, r#"[{"title":"a","blocked_by":[999,"junk"]}]"#).unwrap();
+        let result =
+            run_add_core(&conn, r#"[{"title":"a","blocked_by":[999,"junk"]}]"#, false).unwrap();
         assert_eq!(result.results[0].outcome, "review");
         let id = result.results[0].id;
         assert_eq!(db::get_blockers(&conn, id).unwrap(), Vec::<i64>::new());
@@ -820,7 +837,7 @@ mod tests {
     #[test]
     fn add_at_ref_out_of_range_skips_edge_with_review() {
         let conn = open_test_db();
-        let result = run_add_core(&conn, r#"[{"title":"a","blocked_by":["@5"]}]"#).unwrap();
+        let result = run_add_core(&conn, r#"[{"title":"a","blocked_by":["@5"]}]"#, false).unwrap();
         assert_eq!(result.results[0].outcome, "review");
         let id = result.results[0].id;
         assert_eq!(db::get_blockers(&conn, id).unwrap(), Vec::<i64>::new());
@@ -830,8 +847,12 @@ mod tests {
     #[test]
     fn add_at_ref_to_failed_item_skips_edge_with_review() {
         let conn = open_test_db();
-        let result =
-            run_add_core(&conn, r#"[{"title":1},{"title":"b","blocked_by":["@0"]}]"#).unwrap();
+        let result = run_add_core(
+            &conn,
+            r#"[{"title":1},{"title":"b","blocked_by":["@0"]}]"#,
+            false,
+        )
+        .unwrap();
         assert_eq!(result.results[0].outcome, "error");
         assert_eq!(result.results[1].outcome, "review");
         let id = result.results[1].id;
@@ -844,7 +865,7 @@ mod tests {
         let conn = open_test_db();
         let pre = seed(&conn, "Pre-existing");
         let input = format!(r#"[{{"title":"a"}},{{"title":"b","blocked_by":["@0","{pre}"]}}]"#);
-        let result = run_add_core(&conn, &input).unwrap();
+        let result = run_add_core(&conn, &input, false).unwrap();
         assert_eq!(result.results[1].outcome, "ok");
         let mut blockers = db::get_blockers(&conn, result.results[1].id).unwrap();
         blockers.sort_unstable();
@@ -856,8 +877,12 @@ mod tests {
         // Guard for the batch_bulk snapshots: valid items keep the exact
         // ok-outcome envelope (no notes, no errors, embedded issue).
         let conn = open_test_db();
-        let result =
-            run_add_core(&conn, r#"[{"title":"A","priority":"high"},{"title":"B"}]"#).unwrap();
+        let result = run_add_core(
+            &conn,
+            r#"[{"title":"A","priority":"high"},{"title":"B"}]"#,
+            false,
+        )
+        .unwrap();
         assert_eq!(result.action, "batch_add");
         assert!(!result.dry_run);
         assert_eq!(result.summary.total, 2);
@@ -870,6 +895,89 @@ mod tests {
             assert!(item.notes.is_empty());
             assert!(item.issue.is_some());
         }
+    }
+
+    // --- spec P3: batch add / note --dry-run ---
+
+    fn issue_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM issues", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    /// Golden payload for the dry-run contract: one malformed item, one
+    /// unknown key, and one `@N` batch reference (spec acceptance #3).
+    const DRY_RUN_GOLDEN: &str = r#"[
+        {"title":"Story: pan gesture on chart","priority":"urgent","file":"src/chart.rs"},
+        {"title":42},
+        {"title":"Story: tick labels","blocked_by":["@0"]}
+    ]"#;
+
+    #[test]
+    fn add_dry_run_writes_nothing() {
+        let conn = open_test_db();
+        let result = run_add_core(&conn, DRY_RUN_GOLDEN, true).unwrap();
+        assert!(result.dry_run);
+        assert_eq!(issue_count(&conn), 0, "dry-run must not create issues");
+        let event_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(event_count, 0, "dry-run must not record events");
+    }
+
+    #[test]
+    fn add_dry_run_verdicts_match_real_run() {
+        // The same payload must produce identical per-item outcomes and notes
+        // whether or not the writes are committed (same code path, spec P3).
+        let dry_conn = open_test_db();
+        let dry = run_add_core(&dry_conn, DRY_RUN_GOLDEN, true).unwrap();
+        let real_conn = open_test_db();
+        let real = run_add_core(&real_conn, DRY_RUN_GOLDEN, false).unwrap();
+
+        assert_eq!(dry.summary.total, real.summary.total);
+        assert_eq!(dry.summary.ok, real.summary.ok);
+        assert_eq!(dry.summary.review, real.summary.review);
+        assert_eq!(dry.summary.error, real.summary.error);
+        for (d, r) in dry.results.iter().zip(real.results.iter()) {
+            assert_eq!(d.outcome, r.outcome);
+            assert_eq!(d.notes, r.notes);
+        }
+        assert_eq!(issue_count(&dry_conn), 0);
+        assert_eq!(issue_count(&real_conn), 2);
+    }
+
+    #[test]
+    fn add_dry_run_reports_resolved_defaults() {
+        // Authors must see the resolved priority/kind they'll actually get.
+        let conn = open_test_db();
+        let result = run_add_core(
+            &conn,
+            r#"[{"title":"x","priority":"bogus","kind":"story"}]"#,
+            true,
+        )
+        .unwrap();
+        assert_eq!(result.results[0].outcome, "review");
+        let issue = &result.results[0].issue.as_ref().unwrap().issue;
+        assert_eq!(issue.priority, "medium", "resolved default is visible");
+        assert!(
+            result.results[0].notes.iter().any(|n| n.contains("bogus")),
+            "note names the unrecognized value"
+        );
+        assert_eq!(issue_count(&conn), 0);
+    }
+
+    #[test]
+    fn note_dry_run_writes_nothing_but_reports_ok() {
+        let conn = open_test_db();
+        let id = seed(&conn, "target");
+        let input = format!(r#"[{{"id":{id},"text":"planned"}},{{"id":999,"text":"nope"}}]"#);
+        let result = run_note_core(&conn, &input, true).unwrap();
+        assert!(result.dry_run);
+        assert_eq!(result.summary.ok, 1);
+        assert_eq!(result.summary.error, 1);
+        assert!(
+            note_contents(&conn, id).is_empty(),
+            "dry-run must not write notes"
+        );
     }
 
     // --- #164: close/update/note per-item shape errors ---
@@ -903,7 +1011,7 @@ mod tests {
         let conn = open_test_db();
         let id = seed(&conn, "to note");
         let input = format!(r#"[{{"id":{id},"text":"hi"}},{{"text":"no id"}}]"#);
-        let result = run_note_core(&conn, &input).unwrap();
+        let result = run_note_core(&conn, &input, false).unwrap();
         assert_eq!(result.summary.ok, 1);
         assert_eq!(result.summary.error, 1);
         assert_eq!(result.results[1].outcome, "error");

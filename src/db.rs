@@ -684,6 +684,16 @@ pub fn add_dependency(
         "INSERT INTO dependencies (blocker_id, blocked_id) VALUES (?1, ?2)",
         params![blocker_id, blocked_id],
     )?;
+    // Dependency edges are mutations like any other: record an audit event
+    // on the blocked issue so `itr log` shows who blocked it and when (#35
+    // lesson — every mutation path records its own event).
+    record_event(
+        conn,
+        blocked_id,
+        "dependency_added",
+        "",
+        &blocker_id.to_string(),
+    )?;
     Ok(true)
 }
 
@@ -705,6 +715,15 @@ pub fn remove_dependency(
         "DELETE FROM dependencies WHERE blocker_id = ?1 AND blocked_id = ?2",
         params![blocker_id, blocked_id],
     )?;
+    if deleted > 0 {
+        record_event(
+            conn,
+            blocked_id,
+            "dependency_removed",
+            &blocker_id.to_string(),
+            "",
+        )?;
+    }
     Ok(deleted > 0)
 }
 
@@ -826,6 +845,9 @@ pub fn add_note(
         params![issue_id, content, agent],
     )?;
     let id = conn.last_insert_rowid();
+    // Mirror note_deleted/note_updated: adding a note is an audited mutation
+    // too, so multi-ID and bulk note operations show up in `itr log`.
+    record_event(conn, issue_id, "note_added", "", content)?;
     conn.query_row(
         "SELECT id, issue_id, content, agent, created_at FROM notes WHERE id = ?1",
         params![id],

@@ -27,7 +27,7 @@ itr close <ID> "reason"        # Close when done
 - `itr search "<query>"` — Search across all fields (title, context, acceptance, tags, files, skills, notes). Uses FTS5 when available, falls back to case-insensitive substring matching. Multi-word queries: each term must match somewhere (AND logic, any field)
 - `itr list` — List issues with filtering (--status, --priority, --kind, --tag, --skill, --assigned-to)
 - `itr get <ID>` — Full detail for a single issue
-- `itr get <ID>,<ID>,...` (or repeated IDs) — Batched detail for several issues in one call: JSON is an array of detail objects; compact is blank-line-separated per-issue blocks. Missing IDs become REVIEW notes on stderr (found issues still return, exit 0); duplicates are fetched once
+- `itr get <ID>,<ID>,...` (repeated IDs, comma lists, or ranges like `5-8`) — Batched detail for several issues in one call: JSON is an array of detail objects; compact is blank-line-separated per-issue blocks. Missing IDs become REVIEW notes on stderr (found issues still return, exit 0); duplicates are fetched once
 - `itr show` — Alias: no args = list, with ID(s) = get
 - `itr stats` — Project health summary
 - `itr graph` — Dependency graph (DOT format in pretty mode)
@@ -35,26 +35,32 @@ itr close <ID> "reason"        # Close when done
 **CRUD:**
 - `itr add "<title>"` — Create issue (-p priority, -k kind, -c context/--body, --tags, --skills, --files, -a acceptance, --blocked-by, --parent, --assigned-to). Also accepts `--title` as a flag alias for the positional title.
 - `itr update <ID>` — Update fields (--status, --priority, --title, --context, --add-tag, --remove-tag, --add-skill, --remove-skill, --add-file, --remove-file)
-- `itr close <ID> ["reason"]` — Close (--wontfix, --duplicate-of)
+- `itr close <ID>... ["reason"]` — Close (--reason, --wontfix, --duplicate-of). Takes multiple IDs: `itr close 12,14,17 "fixed in a1b2c3d"` or `itr close 5-8` — never loop `itr close` over a list
 
 **Notes & Audit:**
-- `itr note <ID> "text"` — Append timestamped note (--agent for attribution)
-- `itr log [ID]` — View event history (--limit, --since)
+- `itr note <ID>... "text"` — Append timestamped note (--agent for attribution). Takes multiple IDs: `itr note 55 56 57 "verified end-to-end"`
+- `itr log [ID]` — View event history (--limit, --since). Every mutation is audited, including notes, dependency edges, relations, and all multi-ID/bulk forms
 
 **Dependencies & Relations:**
-- `itr depend <ID> --on <ID>` — Add blocker
+- `itr depend <ID>... --on <ID>` — Add blocker(s): `itr depend 5-8 --on 200` blocks all of 5..8 on 200
 - `itr undepend <ID> --on <ID>` — Remove blocker
-- `itr relate <ID> --to <ID> --type duplicate|related|supersedes` — Create relation
+- `itr relate <ID>... --to <ID> --type duplicate|related|supersedes` — Create relation(s): `itr relate 124-132 --to 53 --type related`
 - `itr unrelate <ID> --from <ID>` — Remove relation
 
+**Multi-ID syntax** (close/note/relate/depend, plus get/show): IDs may be repeated (`1 2 3`), comma-separated (`1,2,3`), or inclusive ranges (`5-8`), in any mix. All writes run in one transaction; a missing ID is skipped with a `REVIEW:` note and the rest proceed (exit 0 if at least one succeeded). `claim` is deliberately single-ID. NEVER write `for id in ...; do itr <verb> "$id"; done` — one command does it.
+
 **Bulk Operations:**
-- `itr batch add` (alias: `batch create`) — Bulk-create from JSON array on stdin. Item fields mirror the `add` flags; `parent` and `parent_id` are both accepted; `blocked_by` takes integer IDs, "N" strings, or "@N" intra-batch references. Malformed items and unresolvable parents/blockers soft-fall per item instead of failing the batch
-- `itr batch close` — Bulk-close from JSON array on stdin (per-issue reasons, soft fallback)
-- `itr batch update` — Bulk-update from JSON array on stdin (per-issue changes, soft fallback)
+- `itr batch add` (alias: `batch create`) — Bulk-create from JSON array on stdin. Item fields mirror the `add` flags; `parent` and `parent_id` are both accepted; `blocked_by` takes integer IDs, "N" strings, or "@N" intra-batch references. Malformed items and unresolvable parents/blockers soft-fall per item instead of failing the batch. `--dry-run` validates the payload and prints the same per-item verdicts (including resolved priority/kind defaults) without writing anything
+- `itr batch close` — Bulk-close from JSON array on stdin (per-issue reasons, soft fallback, --dry-run)
+- `itr batch update` — Bulk-update from JSON array on stdin (per-issue changes, soft fallback, --dry-run)
+- `itr batch note` — Bulk-note from JSON array `[{id, text, agent?}]` on stdin (--dry-run)
 - `itr bulk close` — Close all matching filters (--reason, --wontfix, --status, --priority, --kind, --tag, --skill, --assigned-to, --dry-run)
 - `itr bulk update` — Update matching issues (--set-status, --set-priority, --add-tag, --dry-run)
+- `itr bulk relate` — Relate all matching filters to a target: `itr bulk relate --kind bug --status open --to 53 --type related` (--dry-run; self-edges skipped)
+- `itr bulk depend` — Block all matching filters on an issue: `itr bulk depend --tag sprint-9 --on 200 --dry-run` (self-edges skipped; cycles hard-error)
+- `itr bulk note` — Same note on all matching filters: `itr bulk note "wave 2 verified" --assigned-to blitz-3 --agent scrum` (--dry-run)
 
-Prefer `batch close`/`batch update` when you need per-issue control. Prefer `bulk close`/`bulk update` when a single filter covers all targets.
+Which one do I want? `bulk <verb>` when a filter describes the targets; `itr <verb> 1,2,5-8` (multi-ID) when you have an explicit ID list with one shared change; `batch <verb>` (JSON stdin) when each item needs its own values. Never a shell loop.
 
 **Assignment:**
 - `itr assign <ID> <agent>` — Assign issue to agent
@@ -108,10 +114,12 @@ Refuses to overwrite an existing `SKILL.md` without `--force` (soft fallback: em
 Use `--fields` to select only the fields you need:
 ```
 itr list -f json --fields id,title,urgency,status
+itr list -f oneline --fields id,status,title      # TSV, chosen columns in order — script-ready, no jq/python needed
+itr list -f pretty --fields id,status,blocked_by,title  # aligned table, chosen columns
 itr ready -f json --fields id,title,priority
 itr stats -f json --fields total,by_status
 ```
-`--fields` filters JSON output for issue/list/search/batch commands, plus top-level keys for `stats`, `graph`, and `log` JSON. It also filters issue/list/search compact output and list pretty output. Command/format combinations with no field filtering (e.g. oneline, DOT graphs, non-JSON stats/log/batch) emit a `REVIEW:` note to stderr and print unfiltered output.
+`--fields` works on all four formats for issue lists and honors the requested order: oneline emits tab-separated columns (list values join with ","), pretty builds its table from the list, JSON re-serializes keys in the given order. It also filters JSON output for issue/search/batch commands plus top-level keys for `stats`, `graph`, and `log` JSON. The few combinations with no field filtering (issue-detail pretty, search pretty/oneline, DOT graphs, non-JSON stats/log/batch) emit a `REVIEW:` note to stderr and print unfiltered output.
 Valid fields: id, title, status, priority, kind, created_at, updated_at, context, files, tags, skills, acceptance, parent_id, assigned_to, close_reason, urgency, blocked_by, blocks, notes, relations.
 Stats/graph/log JSON also accept their own top-level keys (e.g. total, by_status, nodes, edges, issue_id, field).
 

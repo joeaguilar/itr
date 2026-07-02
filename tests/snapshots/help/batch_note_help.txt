@@ -7,9 +7,10 @@ Bulk-add notes from JSON array on stdin [{id, text, agent?}]
 Usage: itr batch note [OPTIONS]
 
 Options:
+      --dry-run          Preview without applying changes
   -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
       --db <DB>          Override database path (skips walk-up search)
   -q, --quiet            Suppress non-essential output
-      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+      --fields <FIELDS>  Comma-separated list of fields to include in output (all formats; oneline/pretty/compact honor the requested order)
   -h, --help             Print help
 --- stderr ---

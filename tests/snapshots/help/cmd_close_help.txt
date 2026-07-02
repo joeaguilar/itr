@@ -2,20 +2,20 @@ $ itr close --help
 --- exit ---
 0
 --- stdout ---
-Close an issue (shorthand for update --status done)
+Close one or more issues (shorthand for update --status done)
 
-Usage: itr close [OPTIONS] <ID> [REASON]
+Usage: itr close [OPTIONS] <ID... [REASON]>...
 
 Arguments:
-  <ID>      Issue ID
-  [REASON]  Close reason
+  <ID... [REASON]>...  Issue ID(s) — repeat, comma-separate, or use ranges (e.g. 12,14 or 5-8) — optionally followed by a close reason. The first non-ID token starts the reason; use --reason for a purely numeric reason
 
 Options:
+      --reason <REASON_FLAG>         Close reason (unambiguous flag form of the positional reason)
       --wontfix                      Close as wontfix instead of done
       --duplicate-of <DUPLICATE_OF>  Close as duplicate of another issue (creates relation + closes)
   -f, --format <FORMAT>              Output format: compact|json|pretty|oneline [default: compact]
       --db <DB>                      Override database path (skips walk-up search)
   -q, --quiet                        Suppress non-essential output
-      --fields <FIELDS>              Comma-separated list of fields to include in JSON output
+      --fields <FIELDS>              Comma-separated list of fields to include in output (all formats; oneline/pretty/compact honor the requested order)
   -h, --help                         Print help
 --- stderr ---

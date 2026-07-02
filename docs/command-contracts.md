@@ -25,12 +25,15 @@ All commands accept the global parser flags from `src/cli.rs`:
 - `--fields`: comma-separated field selector. It is stable for issue, list,
   search, and batch JSON outputs; for `stats`, `graph`, and `log` JSON outputs
   (top-level key filtering, issue #197); and for issue/list/search compact and
-  list pretty outputs where the formatter supports field checks. A
+  list pretty/oneline outputs. On issue-list output the requested order is
+  honored: oneline emits the selected fields tab-separated in the given order
+  (list values join with `,`), pretty builds its columns from the given order,
+  and compact orders fields within its record-line/labeled-line structure. A
   command/format combination with no field filtering (issue-detail pretty,
-  list oneline, search pretty/oneline, and the non-JSON modes of `stats`,
-  `graph`, `log`, and `batch`) emits a `REVIEW:` note to stderr and prints the
-  unfiltered output instead of silently swallowing the flag. When the filter
-  is applied to JSON output, the surviving keys re-serialize in alphabetical
+  search pretty/oneline, and the non-JSON modes of `stats`, `graph`, `log`,
+  and `batch`) emits a `REVIEW:` note to stderr and prints the unfiltered
+  output instead of silently swallowing the flag. When the filter is applied
+  to JSON output, the surviving keys re-serialize in the requested `--fields`
   order (see **JSON Determinism And Snapshotting**).
 - `-q, --quiet`: accepted globally for compatibility. Do not rely on it to
   change parseable stdout in current command contracts.
@@ -132,6 +135,17 @@ These are the per-command surfaces of the project-wide pattern documented in
   tokens are skipped with a `REVIEW:` note. A request with no parseable ID at
   all is a hard `INVALID_VALUE`. A single-ID request keeps the hard
   `NOT_FOUND` contract.
+- Multi-ID mutating verbs (`close`, `note`, `relate`, `depend`) accept the
+  same ID grammar as `get`/`show` — repeated arguments, comma lists, and
+  inclusive `A-B` ranges — and run all writes in one transaction with per-ID
+  soft fallback: a missing ID emits `REVIEW: id <N> not found; skipped` and
+  the rest proceed; exit 0 if at least one ID succeeded, exit 1 if none did.
+  An ID equal to `--to`/`--on` skips the self-edge with a `REVIEW:` note.
+  A reversed range (`9-5`) recovers by swapping the bounds with a `REVIEW:`
+  note; a range wider than 1000 IDs is rejected as an invalid token. Single-ID
+  invocations keep the historical hard-error contracts. Dependency cycles
+  remain hard errors and roll the whole invocation back. `claim` deliberately
+  stays single-ID.
 - Unknown `--fields` names emit `REVIEW:` to stderr and are ignored if absent
   from the output shape.
 - `--fields` on a command/format combination that has no field filtering emits
@@ -216,10 +230,11 @@ Commands: `add`, `create`, `get`, `show <ID>`, `update`, `close`, `next`,
 - JSON is an `IssueDetail`: issue fields flattened with `urgency`,
   `blocked_by`, `blocks`, `is_blocked`, `notes`, optional
   `urgency_breakdown`, optional `children`, and optional `relations`. Close and
-  terminal updates may add `unblocked`. Note that `close` and `update` emit
-  the detail object with keys re-sorted alphabetically (see **JSON
-  Determinism And Snapshotting**); the other detail commands preserve serde
-  struct field order.
+  terminal updates may add `unblocked`. `close` and `update` round-trip the
+  detail through `serde_json::Value` to append `unblocked`; with the
+  `preserve_order` serde_json feature this keeps serde struct field order with
+  `unblocked` appended last (see **JSON Determinism And Snapshotting**).
+  Multi-ID `close` emits a JSON array of these objects.
 - Compact starts with `ID:<id> STATUS:<status> PRIORITY:<priority> KIND:<kind>
   URGENCY:<score>` and optional dependency tokens, followed by stable labeled
   lines such as `TAGS:`, `FILES:`, `SKILLS:`, `ASSIGNED:`, `TITLE:`,
@@ -247,11 +262,20 @@ Commands: `list`, `ready`, `wip`, `current`, `show` without ID.
 
 - JSON is an array of `IssueSummary`.
 - Compact is one issue block per item, separated by a blank line.
-- Pretty is a table with selected columns. Empty pretty output is empty.
+- Pretty is a table with selected columns. Without `--fields` the columns are
+  the historical default set (`#`, `Urg`, `Status`, `Pri`, `Kind`, `Assignee`,
+  `Title`, `Blocked`); with `--fields` the columns are built from the
+  requested names in the requested order (extra columns such as `tags`,
+  `files`, `skills`, `created_at`, `updated_at`, `acceptance`, `is_blocked`
+  become available). Empty pretty output is empty.
 - Oneline is one tab-separated row per issue:
   `id status priority kind "title"` plus optional `assigned_to`. Titles and
   assignees are escaped per **Escaping In Line-Oriented Output**, so embedded
-  tabs, newlines, and quotes never change the row or field count.
+  tabs, newlines, and quotes never change the row or field count. With
+  `--fields`, the row is instead the selected fields tab-separated in the
+  requested order — list values join with `,`, free text is escaped, and an
+  unknown field name renders as an empty cell so the column count stays
+  stable.
 
 ### Search Results
 
@@ -346,18 +370,36 @@ Commands: `batch add`, `batch create`, `batch close`, `batch update`,
 - `batch add` accepts `parent` as an alias of `parent_id` in item payloads
   (#150). Unrecognized item keys mark the item `review` with a `REVIEW:` note
   naming them; they are never silently dropped.
+- All four batch verbs support `--dry-run`. `batch add --dry-run` and
+  `batch note --dry-run` run the exact same parse/validate/insert path inside
+  a transaction that is rolled back instead of committed: per-item verdicts
+  (including resolved priority/kind defaults and `@N` dependency resolution)
+  match the real run byte-for-byte in outcome/notes while nothing is written —
+  no issues, no notes, no audit events.
 - Compact, pretty, and oneline share the compact envelope:
   `<ACTION>: <n> items (<ok> ok, <error> error, <review> review)` followed by
   per-item lines.
 
 ### Bulk Results
 
-Commands: `bulk close`, `bulk update`.
+Commands: `bulk close`, `bulk update`, `bulk relate`, `bulk depend`,
+`bulk note`.
 
-- JSON is a `BulkResult`: `action`, `count`, `ids`, optional `unblocked`, and
-  `dry_run`.
+- `bulk close`/`bulk update` JSON is a `BulkResult`: `action`, `count`, `ids`,
+  optional `unblocked`, and `dry_run`.
 - Compact, pretty, and oneline share `<ACTION>: <n> issues [ids]` with
   optional `(dry-run)` and `UNBLOCKED:` lines.
+- `bulk relate`/`bulk depend`/`bulk note` take the same filter grammar
+  (`--status`, `--priority`, `--kind`, `--tag`, `--skill`, `--assigned-to`;
+  at least one required) and support `--dry-run` on all three. JSON is an
+  ad-hoc envelope (`action`, `count`, `ids`, `dry_run`, plus `to`/
+  `relation_type` or `on`); line output prints the planned/applied
+  `RELATION:`/`DEPEND:`/`NOTE:` lines followed by the `BULK_*` summary line.
+  A matched issue equal to `--to`/`--on` is skipped with a `REVIEW:` note.
+  Validation is the single-verb code path run inside a transaction — a
+  `--dry-run` rolls it back instead of committing, so dependency cycles fail
+  identically in both modes and a dry run writes nothing (no rows, no audit
+  events).
 - An unrecognized `--set-status` or `--set-priority` value soft-falls: every
   matched issue keeps its current value for that field, a
   `REVIEW: <field> '<value>' not recognized; kept each issue's current
@@ -423,14 +465,16 @@ structurally:
 | `stats -f json` | `avg_urgency` | Float rounded to 4 decimal places. |
 | `graph -f json` | all object keys | Serde struct field order preserved: `nodes` before `edges`; node keys `id`, `title`, `status`, `urgency`, `is_blocked`; edge keys `from`, `to`, `type` (issue #179). |
 | `graph -f json` | each node `urgency` | Float rounded to 4 decimal places. |
-| `close -f json`, `update -f json` | whole detail object | Keys re-sorted alphabetically (the detail is augmented with `unblocked` through a `serde_json::Value` round trip). |
+| `close -f json`, `update -f json` | whole detail object | Serde struct field order preserved; `unblocked` (when present) is appended last (the detail is augmented through a `serde_json::Value` round trip with `preserve_order`). |
 
 All other struct-serialized JSON output preserves its serde-derived struct
 field order, which is already deterministic. Two further deterministic
 exceptions: the small ad-hoc objects under **Other JSON Objects** (`init`,
 `depend`, `config`, `relate`, `doctor`, …) are built with `serde_json::json!`
-and serialize with alphabetical keys; and applying `--fields` to any JSON
-output re-serializes the surviving keys in alphabetical order. List/array
+and serialize in the key order written in the macro (insertion order, via the
+`preserve_order` serde_json feature); and applying `--fields` to any JSON
+output re-serializes the surviving keys in the requested `--fields` order.
+List/array
 element order follows the underlying query sort and is deterministic for a
 fixed database state. A regression test (`tests/integration.sh`,
 "deterministic JSON contracts") seeds two freshly created temp databases
@@ -539,22 +583,25 @@ reporting.
 | `init` | Creates or opens the target `.itr.db`; `--agents-md` idempotently appends agent guidance. | Init object or `INIT: <path>`. |
 | `add`, `create` | Positional title or `--stdin-json`; stores priority, kind, context, files, tags, skills, acceptance, blockers, parent, assignee. | Issue detail. |
 | `list` | Filters issue summaries by status, priority, kind, tags, skills, blocked state, parent, assignee; sorts and limits. Default includes open and in-progress issues, including blocked. | Issue list. |
-| `get` | Requires one or more issue IDs (repeated or comma-separated). | Single ID: issue detail or not-found error. Multiple IDs: batched issue details; missing IDs are stderr `REVIEW:` notes, exit 0. |
+| `get` | Requires one or more issue IDs (repeated, comma-separated, or `A-B` ranges). | Single ID: issue detail or not-found error. Multiple IDs: batched issue details; missing IDs are stderr `REVIEW:` notes, exit 0. |
 | `update` | Requires issue ID; replaces fields, appends/removes tags/files/skills, sets parent and assignee. | Issue detail, plus `unblocked` when terminal status unblocks work. |
-| `close` | Requires issue ID; optional reason, `--wontfix`, or `--duplicate-of`. | Issue detail; duplicate close also creates a duplicate relation. |
-| `note` | Requires issue ID and text; `--agent` overrides `ITR_AGENT`. | Note. |
+| `close` | One or more issue IDs (repeated, comma-separated, or ranges); optional trailing reason, `--reason`, `--wontfix`, or `--duplicate-of`. | Single ID: issue detail; duplicate close also creates a duplicate relation. Multiple IDs: batched details in one transaction; missing IDs are stderr `REVIEW:` notes. |
+| `note` | One or more issue IDs (repeated, comma-separated, or ranges) followed by the note text; `--agent` overrides `ITR_AGENT`. | Note, or one note per issue (JSON array / `NOTE:` lines) for multi-ID. |
 | `note-delete` | Requires note ID. | Deleted note. |
 | `note-update` | Requires note ID and new text. | Updated note. |
-| `depend`, `deps` | Requires blocked issue ID and `--on <blocker_id>`; detects cycles. | Depend object or `DEPEND: <blocked> blocked by <blocker>`. |
+| `depend`, `deps` | One or more blocked issue IDs (repeated, comma-separated, or ranges) and `--on <blocker_id>`; detects cycles. | Depend object(s) or `DEPEND: <blocked> blocked by <blocker>` per edge. |
 | `undepend` | Requires blocked issue ID and `--on <blocker_id>`. | Undepend object or `UNDEPEND: ...`, with optional unblocked notification. |
 | `next` | Selects highest-urgency open, unblocked issue; can filter by skill or assignee; `--claim` sets in-progress and may assign agent. | Issue detail or empty result. |
 | `ready` | Lists unblocked non-terminal issues; can filter by status, skill, assignee, and limit. | Issue list or empty result. |
-| `batch add`, `batch create` | Reads JSON array of add objects from stdin; supports `blocked_by` integer IDs and `@N` intra-batch references; accepts `parent` as an alias of `parent_id`. | Batch result with issue details; transactional creation; malformed items become per-item errors. |
+| `batch add`, `batch create` | Reads JSON array of add objects from stdin; supports `blocked_by` integer IDs and `@N` intra-batch references; accepts `parent` as an alias of `parent_id`; `--dry-run` validates and previews without writing. | Batch result with issue details; transactional creation; malformed items become per-item errors. |
 | `batch close` | Reads JSON array `{id, reason?, wontfix?}`; `--dry-run` previews. | Batch result with per-item outcomes and unblocked items. |
 | `batch update` | Reads JSON array of update objects; `--dry-run` previews. | Batch result with per-item outcomes and unblocked items. |
-| `batch note` | Reads JSON array `{id, text, agent?}`; item agent overrides `ITR_AGENT`. | Batch result. |
+| `batch note` | Reads JSON array `{id, text, agent?}`; item agent overrides `ITR_AGENT`; `--dry-run` previews. | Batch result. |
 | `bulk close` | Requires at least one filter; closes all matches; `--dry-run` previews. | Bulk result. |
 | `bulk update` | Requires at least one filter; applies shared status/priority/tag changes to all matches; `--dry-run` previews. | Bulk result. |
+| `bulk relate` | Requires at least one filter and `--to <target_id>`; optional `--type`; `--dry-run` previews. Self-edges skipped with `REVIEW:`. | `RELATION:` lines plus `BULK_RELATE` summary, or JSON envelope. |
+| `bulk depend` | Requires at least one filter and `--on <blocker_id>`; `--dry-run` previews; cycles are hard errors that roll everything back. Self-edges skipped with `REVIEW:`. | `DEPEND:` lines plus `BULK_DEPEND` summary, or JSON envelope. |
+| `bulk note` | Requires at least one filter and note text; `--agent` overrides `ITR_AGENT`; `--dry-run` previews. | `NOTE:` lines plus `BULK_NOTE` summary, or JSON envelope. |
 | `graph` | Emits dependency and relation graph; `--all` includes terminal issues. | Graph output. |
 | `stats` | Reads all issues and current urgency config. | Stats output. |
 | `summary` | Reads project counts, ready work, in-progress work, and recent events. | Summary output. |
@@ -576,7 +623,7 @@ reporting.
 | `assign` | Requires issue ID and agent. | Issue detail with `assigned_to` set. |
 | `unassign` | Requires issue ID. | Issue detail with `assigned_to` cleared. |
 | `log` | Lists audit events globally or for one issue; supports limit, since, and agent filter. | Event list or empty result. |
-| `relate` | Requires source ID, `--to <target_id>`, and relation type `duplicate`, `related`, or `supersedes`. | Relation object or `RELATION:created|exists ...`. |
+| `relate` | One or more source IDs (repeated, comma-separated, or ranges), `--to <target_id>`, and relation type `duplicate`, `related`, or `supersedes`. | Relation object(s) or `RELATION:created|exists ...` per source. |
 | `unrelate` | Requires source ID and `--from <target_id>`; optional `--type` (alias of `--relation-type`) limits removal to one relation type (`duplicate`, `related`, or `supersedes`), default removes every type between the pair. | Unrelate object or `RELATION:removed|not_found ...`. |
 | `reindex` | Rebuilds FTS index. | Reindex object or `REINDEX: Rebuilt FTS index for <n> issues`. |
 | `search` | Query terms use AND semantics across indexed/searchable fields; supports filters and limit. | Search results or empty result. |

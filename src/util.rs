@@ -143,9 +143,287 @@ pub fn days_since(iso_date: &str) -> f64 {
     }
 }
 
+/// Largest span an `A-B` range token may expand to. A typo like `1-999999`
+/// should soft-fail with a REVIEW note instead of allocating a million IDs.
+const MAX_RANGE_SPAN: i64 = 1000;
+
+/// Outcome of parsing positional issue-ID arguments shared by `get`/`show`
+/// and the multi-ID mutating verbs (`close`, `note`, `relate`, `depend`).
+///
+/// IDs may be repeated arguments, comma-separated lists, inclusive `A-B`
+/// ranges, or a mix (`itr get 1 2,3 5-8`). Parsing is a pure function so the
+/// soft-fallback reporting (REVIEW notes for duplicates, non-integer tokens,
+/// and malformed ranges) stays in the command handlers and the splitting
+/// logic is unit-testable.
+#[derive(Debug, Default)]
+pub struct ParsedIds {
+    /// Unique IDs in first-seen request order.
+    pub ids: Vec<i64>,
+    /// Explicitly repeated IDs (unique, first-seen order). IDs covered more
+    /// than once via overlapping ranges are deduplicated silently.
+    pub duplicates: Vec<i64>,
+    /// Tokens that did not parse as an integer or an `A-B` range.
+    pub invalid: Vec<String>,
+    /// Soft-fallback REVIEW messages about recovered range tokens
+    /// (reversed bounds), ready to print to stderr.
+    pub notes: Vec<String>,
+}
+
+/// Parse one `A-B` token into inclusive integer bounds. Returns `None` when
+/// either side is not a plain non-negative integer (so `-5` or `x-3` fall
+/// through to the invalid-token path).
+fn parse_range_token(token: &str) -> Option<(i64, i64)> {
+    let (a, b) = token.split_once('-')?;
+    let a = a.trim().parse::<i64>().ok()?;
+    let b = b.trim().parse::<i64>().ok()?;
+    Some((a, b))
+}
+
+/// Parse positional ID arguments: repeated args, comma-separated lists, and
+/// inclusive `A-B` ranges, in any mix. Duplicated single IDs are recorded in
+/// `duplicates`; range-expanded IDs deduplicate silently. A reversed range
+/// (`9-5`) is recovered by swapping the bounds with a REVIEW note; a range
+/// wider than [`MAX_RANGE_SPAN`] is rejected as invalid.
+///
+/// # Examples
+///
+/// ```text
+/// use itr::util::parse_id_tokens;
+/// let parsed = parse_id_tokens(&["1,2".into(), "5-7".into()]);
+/// assert_eq!(parsed.ids, vec![1, 2, 5, 6, 7]);
+/// ```
+pub fn parse_id_tokens(args: &[String]) -> ParsedIds {
+    let mut parsed = ParsedIds::default();
+    let push_id = |parsed: &mut ParsedIds, id: i64, from_range: bool| {
+        if parsed.ids.contains(&id) {
+            if !from_range && !parsed.duplicates.contains(&id) {
+                parsed.duplicates.push(id);
+            }
+        } else {
+            parsed.ids.push(id);
+        }
+    };
+    for arg in args {
+        for token in arg.split(',') {
+            let token = token.trim();
+            if token.is_empty() {
+                continue;
+            }
+            if let Ok(id) = token.parse::<i64>() {
+                push_id(&mut parsed, id, false);
+                continue;
+            }
+            if let Some((a, b)) = parse_range_token(token) {
+                let (lo, hi) = if a <= b {
+                    (a, b)
+                } else {
+                    parsed.notes.push(format!(
+                        "REVIEW: range '{}' is reversed; interpreting as {}-{}",
+                        token, b, a
+                    ));
+                    (b, a)
+                };
+                if hi - lo >= MAX_RANGE_SPAN {
+                    parsed.notes.push(format!(
+                        "REVIEW: range '{}' spans more than {} IDs; skipped — narrow the range",
+                        token, MAX_RANGE_SPAN
+                    ));
+                    parsed.invalid.push(token.to_string());
+                    continue;
+                }
+                for id in lo..=hi {
+                    push_id(&mut parsed, id, true);
+                }
+                continue;
+            }
+            parsed.invalid.push(token.to_string());
+        }
+    }
+    parsed
+}
+
+/// Returns true when `token` is ID-shaped: a plain integer, an `A-B` range,
+/// or a comma-separated list of those. Used to split the leading ID list from
+/// trailing free text in `close`/`note` positional arguments.
+pub fn is_id_token(token: &str) -> bool {
+    let mut saw_piece = false;
+    for piece in token.split(',') {
+        let piece = piece.trim();
+        if piece.is_empty() {
+            continue;
+        }
+        if piece.parse::<i64>().is_err() && parse_range_token(piece).is_none() {
+            return false;
+        }
+        saw_piece = true;
+    }
+    saw_piece
+}
+
+/// Split positional arguments into a leading run of ID-shaped tokens and the
+/// trailing free text (close reason, note body). The first non-ID token
+/// starts the text; any following tokens are joined with single spaces.
+///
+/// A numeric-only text argument after the IDs is indistinguishable from an
+/// ID and will be consumed as one — callers document `--reason`/quoting as
+/// the unambiguous alternative.
+///
+/// # Examples
+///
+/// ```text
+/// use itr::util::split_ids_and_text;
+/// let (ids, text) = split_ids_and_text(&["12,14".into(), "fixed".into()]);
+/// assert_eq!(ids, vec!["12,14".to_string()]);
+/// assert_eq!(text.as_deref(), Some("fixed"));
+/// ```
+pub fn split_ids_and_text(args: &[String]) -> (Vec<String>, Option<String>) {
+    let split_at = args
+        .iter()
+        .position(|a| !is_id_token(a))
+        .unwrap_or(args.len());
+    let ids = args[..split_at].to_vec();
+    let text = if split_at < args.len() {
+        Some(args[split_at..].join(" "))
+    } else {
+        None
+    };
+    (ids, text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- parse_id_tokens / split_ids_and_text (multi-ID verbs) ---
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn parse_id_tokens_accepts_comma_and_repeated_forms() {
+        let parsed = parse_id_tokens(&args(&["1,2", "3", "4,5"]));
+        assert_eq!(parsed.ids, vec![1, 2, 3, 4, 5]);
+        assert!(parsed.duplicates.is_empty());
+        assert!(parsed.invalid.is_empty());
+        assert!(parsed.notes.is_empty());
+    }
+
+    #[test]
+    fn parse_id_tokens_expands_inclusive_ranges() {
+        let parsed = parse_id_tokens(&args(&["124-128", "130"]));
+        assert_eq!(parsed.ids, vec![124, 125, 126, 127, 128, 130]);
+        assert!(parsed.invalid.is_empty());
+    }
+
+    #[test]
+    fn parse_id_tokens_range_inside_comma_list() {
+        let parsed = parse_id_tokens(&args(&["1,5-7,9"]));
+        assert_eq!(parsed.ids, vec![1, 5, 6, 7, 9]);
+    }
+
+    #[test]
+    fn parse_id_tokens_single_id_range_is_one_id() {
+        let parsed = parse_id_tokens(&args(&["4-4"]));
+        assert_eq!(parsed.ids, vec![4]);
+    }
+
+    #[test]
+    fn parse_id_tokens_reversed_range_recovers_with_note() {
+        let parsed = parse_id_tokens(&args(&["9-5"]));
+        assert_eq!(parsed.ids, vec![5, 6, 7, 8, 9]);
+        assert_eq!(parsed.notes.len(), 1);
+        assert!(parsed.notes[0].contains("reversed"));
+    }
+
+    #[test]
+    fn parse_id_tokens_oversized_range_is_invalid_with_note() {
+        let parsed = parse_id_tokens(&args(&["1-999999"]));
+        assert!(parsed.ids.is_empty());
+        assert_eq!(parsed.invalid, vec!["1-999999".to_string()]);
+        assert!(parsed.notes[0].contains("spans more than"));
+    }
+
+    #[test]
+    fn parse_id_tokens_overlapping_ranges_dedupe_silently() {
+        let parsed = parse_id_tokens(&args(&["1-3", "2-4"]));
+        assert_eq!(parsed.ids, vec![1, 2, 3, 4]);
+        assert!(
+            parsed.duplicates.is_empty(),
+            "range overlap must not spam duplicate notes"
+        );
+    }
+
+    #[test]
+    fn parse_id_tokens_explicit_duplicates_still_reported() {
+        let parsed = parse_id_tokens(&args(&["1,1,2", "1", "2"]));
+        assert_eq!(parsed.ids, vec![1, 2]);
+        assert_eq!(parsed.duplicates, vec![1, 2]);
+    }
+
+    #[test]
+    fn parse_id_tokens_collects_invalid_tokens_and_keeps_valid_ones() {
+        let parsed = parse_id_tokens(&args(&["1,abc", "x-3", "2"]));
+        assert_eq!(parsed.ids, vec![1, 2]);
+        assert_eq!(parsed.invalid, vec!["abc".to_string(), "x-3".to_string()]);
+    }
+
+    #[test]
+    fn parse_id_tokens_skips_empty_tokens() {
+        let parsed = parse_id_tokens(&args(&["1,,2,", " 3 "]));
+        assert_eq!(parsed.ids, vec![1, 2, 3]);
+        assert!(parsed.invalid.is_empty());
+    }
+
+    #[test]
+    fn is_id_token_variants() {
+        assert!(is_id_token("12"));
+        assert!(is_id_token("12,14"));
+        assert!(is_id_token("5-8"));
+        assert!(is_id_token("1,5-8,9"));
+        assert!(!is_id_token("fixed"));
+        assert!(!is_id_token("42 things"));
+        assert!(!is_id_token(""));
+        assert!(!is_id_token(","));
+        // A bare negative integer parses as an i64, so it counts as ID-shaped;
+        // it can never match an issue and soft-falls with a REVIEW note.
+        assert!(is_id_token("-5"));
+    }
+
+    #[test]
+    fn split_ids_and_text_basic() {
+        let (ids, text) = split_ids_and_text(&args(&["12,14", "17", "fixed in a1b2c3d"]));
+        assert_eq!(ids, args(&["12,14", "17"]));
+        assert_eq!(text.as_deref(), Some("fixed in a1b2c3d"));
+    }
+
+    #[test]
+    fn split_ids_and_text_no_text() {
+        let (ids, text) = split_ids_and_text(&args(&["12", "14"]));
+        assert_eq!(ids, args(&["12", "14"]));
+        assert!(text.is_none());
+    }
+
+    #[test]
+    fn split_ids_and_text_joins_trailing_tokens() {
+        let (ids, text) = split_ids_and_text(&args(&["5", "verified", "end-to-end"]));
+        assert_eq!(ids, args(&["5"]));
+        assert_eq!(text.as_deref(), Some("verified end-to-end"));
+    }
+
+    #[test]
+    fn split_ids_and_text_numeric_token_after_text_stays_text() {
+        let (ids, text) = split_ids_and_text(&args(&["5", "wave", "2", "verified"]));
+        assert_eq!(ids, args(&["5"]));
+        assert_eq!(text.as_deref(), Some("wave 2 verified"));
+    }
+
+    #[test]
+    fn split_ids_and_text_all_text() {
+        let (ids, text) = split_ids_and_text(&args(&["not-an-id"]));
+        assert!(ids.is_empty());
+        assert_eq!(text.as_deref(), Some("not-an-id"));
+    }
 
     // --- parse_comma_list ---
 

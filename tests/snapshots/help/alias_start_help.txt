@@ -2,12 +2,12 @@ $ itr start --help
 --- exit ---
 0
 --- stdout ---
-Claim the highest-urgency unblocked issue (shorthand for next --claim)
+Claim the highest-urgency unblocked issue (shorthand for next --claim). Claiming is deliberately one-at-a-time: multi-ID syntax is not supported here
 
 Usage: itr claim [OPTIONS] [ID]
 
 Arguments:
-  [ID]  Optional issue ID to claim directly
+  [ID]  Optional issue ID to claim directly (single ID only — claiming is deliberate)
 
 Options:
       --skill <SKILL>              Filter by skill (repeatable, AND logic)
@@ -16,6 +16,6 @@ Options:
   -f, --format <FORMAT>            Output format: compact|json|pretty|oneline [default: compact]
       --db <DB>                    Override database path (skips walk-up search)
   -q, --quiet                      Suppress non-essential output
-      --fields <FIELDS>            Comma-separated list of fields to include in JSON output
+      --fields <FIELDS>            Comma-separated list of fields to include in output (all formats; oneline/pretty/compact honor the requested order)
   -h, --help                       Print help
 --- stderr ---

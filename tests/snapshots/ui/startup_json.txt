@@ -2,5 +2,5 @@ $ itr ui --port <PORT> --no-open --once -f json
 --- exit ---
 0
 --- stdout ---
-{"db_path":"<TMP>/.itr.db","port":<PORT>,"url":"http://127.0.0.1:<PORT>/?token=<TOKEN>"}
+{"url":"http://127.0.0.1:<PORT>/?token=<TOKEN>","db_path":"<TMP>/.itr.db","port":<PORT>}
 --- stderr ---

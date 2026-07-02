@@ -293,12 +293,14 @@ fn run_command(
         ),
 
         Commands::Close {
-            id,
-            positional_reason,
+            args,
             reason_flag,
             wontfix,
             duplicate_of,
         } => {
+            // The leading run of ID-shaped tokens is the ID list; the first
+            // non-ID token starts the positional reason.
+            let (id_tokens, positional_reason) = util::split_ids_and_text(&args);
             // Merge: --reason flag takes precedence over positional
             let effective_reason = match (positional_reason, reason_flag) {
                 (Some(pos), Some(flag)) => {
@@ -313,19 +315,19 @@ fn run_command(
                 (pos, None) => pos,
             };
             let (reason, wontfix) = close_args(effective_reason, wontfix, duplicate_of);
-            if let Some(dup_id) = duplicate_of {
-                db::add_relation(conn, id, dup_id, "duplicate")?;
-            }
-            commands::close::run(conn, id, reason, wontfix, fmt)
+            commands::close::run_multi(conn, &id_tokens, reason, wontfix, duplicate_of, fmt)
         }
 
-        Commands::Note { id, text, agent } => commands::note::run(conn, id, text, &agent, fmt),
+        Commands::Note { args, agent } => {
+            let (id_tokens, text) = util::split_ids_and_text(&args);
+            commands::note::run_multi(conn, &id_tokens, text, &agent, fmt)
+        }
 
         Commands::NoteDelete { id } => commands::note::run_delete(conn, id, fmt),
 
         Commands::NoteUpdate { id, text } => commands::note::run_update(conn, id, &text, fmt),
 
-        Commands::Depend { id, on } => commands::depend::run(conn, id, on, fmt),
+        Commands::Depend { ids, on } => commands::depend::run_multi(conn, &ids, on, fmt),
 
         Commands::Undepend { id, on } => commands::depend::run_undepend(conn, id, on, fmt),
 
@@ -344,10 +346,10 @@ fn run_command(
         } => commands::ready::run(conn, limit, status, skill, assigned_to, fmt),
 
         Commands::Batch { action } => match action {
-            BatchAction::Add => commands::batch::run_add(conn, fmt),
+            BatchAction::Add { dry_run } => commands::batch::run_add(conn, dry_run, fmt),
             BatchAction::Close { dry_run } => commands::batch::run_close(conn, dry_run, fmt),
             BatchAction::Update { dry_run } => commands::batch::run_update(conn, dry_run, fmt),
-            BatchAction::Note => commands::batch::run_note(conn, fmt),
+            BatchAction::Note { dry_run } => commands::batch::run_note(conn, dry_run, fmt),
         },
 
         Commands::Bulk { action } => match action {
@@ -399,6 +401,73 @@ fn run_command(
                 dry_run,
                 fmt,
             ),
+            BulkAction::Relate {
+                to,
+                relation_type,
+                status,
+                priority,
+                kind,
+                tag,
+                skill,
+                assigned_to,
+                dry_run,
+            } => commands::bulk::run_relate(
+                conn,
+                to,
+                &relation_type,
+                status,
+                priority,
+                kind,
+                tag,
+                skill,
+                assigned_to,
+                dry_run,
+                fmt,
+            ),
+            BulkAction::Depend {
+                on,
+                status,
+                priority,
+                kind,
+                tag,
+                skill,
+                assigned_to,
+                dry_run,
+            } => commands::bulk::run_depend(
+                conn,
+                on,
+                status,
+                priority,
+                kind,
+                tag,
+                skill,
+                assigned_to,
+                dry_run,
+                fmt,
+            ),
+            BulkAction::Note {
+                text,
+                agent,
+                status,
+                priority,
+                kind,
+                tag,
+                skill,
+                assigned_to,
+                dry_run,
+            } => commands::bulk::run_note(
+                conn,
+                &text,
+                &agent,
+                status,
+                priority,
+                kind,
+                tag,
+                skill,
+                assigned_to,
+                dry_run,
+                fmt,
+            ),
         },
 
         Commands::Graph { all } => commands::graph::run(conn, all, fmt),
@@ -436,10 +505,10 @@ fn run_command(
         Commands::Reindex => commands::reindex::run(conn, fmt),
 
         Commands::Relate {
-            id,
+            ids,
             to,
             relation_type,
-        } => commands::relate::run_relate(conn, id, to, &relation_type, fmt),
+        } => commands::relate::run_relate_multi(conn, &ids, to, &relation_type, fmt),
 
         Commands::Unrelate {
             id,
@@ -639,8 +708,7 @@ mod tests {
 
         run_command(
             Commands::Close {
-                id: dup,
-                positional_reason: None,
+                args: vec![dup.to_string()],
                 reason_flag: None,
                 wontfix: true,
                 duplicate_of: Some(original),

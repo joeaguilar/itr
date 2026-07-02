@@ -2,19 +2,18 @@ $ itr note --help
 --- exit ---
 0
 --- stdout ---
-Append a note to an issue
+Append a note to one or more issues
 
-Usage: itr note [OPTIONS] <ID> [TEXT]
+Usage: itr note [OPTIONS] <ID... TEXT>...
 
 Arguments:
-  <ID>    Issue ID
-  [TEXT]  Note content
+  <ID... TEXT>...  Issue ID(s) — repeat, comma-separate, or use ranges (e.g. 55 56 57 or 5-8) — followed by the note text. The first non-ID token starts the text
 
 Options:
       --agent <AGENT>    Agent/session identifier [default: ]
   -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
       --db <DB>          Override database path (skips walk-up search)
   -q, --quiet            Suppress non-essential output
-      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+      --fields <FIELDS>  Comma-separated list of fields to include in output (all formats; oneline/pretty/compact honor the requested order)
   -h, --help             Print help
 --- stderr ---

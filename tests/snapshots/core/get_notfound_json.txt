@@ -4,4 +4,4 @@ $ itr get 999 -f json
 --- stdout ---
 
 --- stderr ---
-{"code":"NOT_FOUND","error":"Issue 999 not found"}
+{"error":"Issue 999 not found","code":"NOT_FOUND"}

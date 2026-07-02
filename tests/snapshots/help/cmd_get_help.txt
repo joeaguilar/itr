@@ -7,12 +7,12 @@ Get full detail for one or more issues
 Usage: itr get [OPTIONS] <ID>...
 
 Arguments:
-  <ID>...  Issue ID(s) — repeat the argument or comma-separate (e.g. 1,2,3)
+  <ID>...  Issue ID(s) — repeat, comma-separate, or use inclusive ranges (e.g. 1,2,5-8)
 
 Options:
   -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
       --db <DB>          Override database path (skips walk-up search)
   -q, --quiet            Suppress non-essential output
-      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+      --fields <FIELDS>  Comma-separated list of fields to include in output (all formats; oneline/pretty/compact honor the requested order)
   -h, --help             Print help
 --- stderr ---

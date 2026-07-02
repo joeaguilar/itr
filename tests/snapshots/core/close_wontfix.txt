@@ -2,5 +2,5 @@ $ itr close 1 --wontfix Not doing this -f json
 --- exit ---
 0
 --- stdout ---
-{"acceptance":"acc","assigned_to":"","blocked_by":[],"blocks":[],"close_reason":"Not doing this","context":"ctx","created_at":"<TS>","files":[],"id":1,"is_blocked":false,"kind":"bug","notes":[],"parent_id":null,"priority":"high","skills":[],"status":"wontfix","tags":[],"title":"Fixture issue","updated_at":"<TS>","urgency":11.0,"urgency_breakdown":{"components":[["priority.high",6.0],["kind.bug",2.0],["age",2.0],["has_acceptance",1.0]]}}
+{"id":1,"title":"Fixture issue","status":"wontfix","priority":"high","kind":"bug","context":"ctx","files":[],"tags":[],"skills":[],"acceptance":"acc","parent_id":null,"assigned_to":"","close_reason":"Not doing this","created_at":"<TS>","updated_at":"<TS>","urgency":11.0,"blocked_by":[],"blocks":[],"is_blocked":false,"notes":[],"urgency_breakdown":{"components":[["priority.high",6.0],["kind.bug",2.0],["age",2.0],["has_acceptance",1.0]]}}
 --- stderr ---

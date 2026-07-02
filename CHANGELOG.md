@@ -37,6 +37,36 @@ All notable user-facing changes are recorded here.
 
 ### Release notes
 
+- Added: multi-ID mutating verbs — `close`, `note`, `relate`, and `depend` now
+  accept repeated IDs, comma lists, and inclusive `A-B` ranges (e.g.
+  `itr close 12,14,17 "fixed"`, `itr relate 124-132 --to 53`) in one
+  transaction with per-ID soft fallback; `get`/`show` gain the same range
+  syntax. `claim` deliberately stays single-ID.
+- Added: filter-based `bulk relate`, `bulk depend`, and `bulk note` with the
+  shared bulk filter grammar and `--dry-run` on all three (dry runs execute
+  the real code path in a rolled-back transaction, so validation cannot
+  drift and nothing is written).
+- Added: `batch add --dry-run` and `batch note --dry-run` — per-item verdicts
+  (including resolved priority/kind defaults and `@N` references) matching
+  the real run, with no writes.
+- Added: `--fields` now works on all four formats for issue lists and honors
+  the requested field order — `oneline` emits chosen columns as
+  tab-separated script-ready output, `pretty` builds its table columns from
+  the list (with extra columns like `tags`/`created_at` available), and JSON
+  re-serializes surviving keys in the requested order.
+- Added: dependency edges and note additions now record audit events
+  (`dependency_added`, `dependency_removed`, `note_added`), so every
+  multi-ID/bulk mutation shows up in `itr log`.
+- Changed: JSON `Value`-built output (ad-hoc `json!` objects, `--fields`
+  filtered output, `close`/`update` detail envelopes) now serializes in
+  insertion/struct order instead of alphabetical key order (serde_json
+  `preserve_order`); `stats -f json` keeps its documented alphabetical
+  byte-stable contract.
+- Docs: README, `itr agent-info`, and `docs/command-contracts.md` updated for
+  multi-ID syntax, the new bulk verbs, batch dry-runs, and fields-everywhere;
+  fixed the stale claim that `batch add` is all-or-nothing (per-item soft
+  fallback since #164) and added a "which one do I want" guide for
+  multi-ID vs `bulk` vs `batch`.
 - Added: the embedded agent skill (`itr skill`) now covers filing issues from
   failed gates — pull evidence from `gatr last` / `gatr errors` instead of
   re-running builds or pasting raw logs.

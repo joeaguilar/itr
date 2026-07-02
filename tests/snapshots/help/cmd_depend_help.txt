@@ -4,16 +4,16 @@ $ itr depend --help
 --- stdout ---
 Add a dependency (issue becomes blocked by --on)
 
-Usage: itr depend [OPTIONS] --on <ON> <ID>
+Usage: itr depend [OPTIONS] --on <ON> <ID>...
 
 Arguments:
-  <ID>  Issue ID that will be blocked
+  <ID>...  Issue ID(s) that will be blocked — repeat, comma-separate, or use ranges
 
 Options:
-      --on <ON>          Issue ID that blocks it
+      --on <ON>          Issue ID that blocks them
   -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
       --db <DB>          Override database path (skips walk-up search)
   -q, --quiet            Suppress non-essential output
-      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+      --fields <FIELDS>  Comma-separated list of fields to include in output (all formats; oneline/pretty/compact honor the requested order)
   -h, --help             Print help
 --- stderr ---

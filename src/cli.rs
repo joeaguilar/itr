@@ -18,7 +18,8 @@ pub struct Cli {
     #[arg(short, long, global = true)]
     pub quiet: bool,
 
-    /// Comma-separated list of fields to include in JSON output
+    /// Comma-separated list of fields to include in output (all formats;
+    /// oneline/pretty/compact honor the requested order)
     #[arg(long, global = true)]
     pub fields: Option<String>,
 }
@@ -156,7 +157,7 @@ pub enum Commands {
 
     /// Get full detail for one or more issues
     Get {
-        /// Issue ID(s) — repeat the argument or comma-separate (e.g. 1,2,3)
+        /// Issue ID(s) — repeat, comma-separate, or use inclusive ranges (e.g. 1,2,5-8)
         #[arg(value_name = "ID", required = true, num_args = 1..)]
         ids: Vec<String>,
     },
@@ -251,17 +252,16 @@ pub enum Commands {
         remove_skill: Vec<String>,
     },
 
-    /// Close an issue (shorthand for update --status done)
+    /// Close one or more issues (shorthand for update --status done)
     Close {
-        /// Issue ID
-        id: i64,
+        /// Issue ID(s) — repeat, comma-separate, or use ranges (e.g. 12,14 or 5-8) —
+        /// optionally followed by a close reason. The first non-ID token starts the
+        /// reason; use --reason for a purely numeric reason.
+        #[arg(value_name = "ID... [REASON]", required = true, num_args = 1..)]
+        args: Vec<String>,
 
-        /// Close reason
-        #[arg(value_name = "REASON")]
-        positional_reason: Option<String>,
-
-        /// Close reason (flag form, soft-fallback alias for positional)
-        #[arg(long = "reason", hide = true)]
+        /// Close reason (unambiguous flag form of the positional reason)
+        #[arg(long = "reason")]
         reason_flag: Option<String>,
 
         /// Close as wontfix instead of done
@@ -273,13 +273,12 @@ pub enum Commands {
         duplicate_of: Option<i64>,
     },
 
-    /// Append a note to an issue
+    /// Append a note to one or more issues
     Note {
-        /// Issue ID
-        id: i64,
-
-        /// Note content
-        text: Option<String>,
+        /// Issue ID(s) — repeat, comma-separate, or use ranges (e.g. 55 56 57 or 5-8) —
+        /// followed by the note text. The first non-ID token starts the text.
+        #[arg(value_name = "ID... TEXT", required = true, num_args = 1..)]
+        args: Vec<String>,
 
         /// Agent/session identifier
         #[arg(long, default_value = "")]
@@ -304,10 +303,11 @@ pub enum Commands {
     /// Add a dependency (issue becomes blocked by --on)
     #[command(visible_alias = "deps")]
     Depend {
-        /// Issue ID that will be blocked
-        id: i64,
+        /// Issue ID(s) that will be blocked — repeat, comma-separate, or use ranges
+        #[arg(value_name = "ID", required = true, num_args = 1..)]
+        ids: Vec<String>,
 
-        /// Issue ID that blocks it
+        /// Issue ID that blocks them
         #[arg(long)]
         on: i64,
     },
@@ -458,10 +458,11 @@ pub enum Commands {
         source_dir: Option<String>,
     },
 
-    /// Claim the highest-urgency unblocked issue (shorthand for next --claim)
+    /// Claim the highest-urgency unblocked issue (shorthand for next --claim).
+    /// Claiming is deliberately one-at-a-time: multi-ID syntax is not supported here.
     #[command(visible_alias = "start")]
     Claim {
-        /// Optional issue ID to claim directly
+        /// Optional issue ID to claim directly (single ID only — claiming is deliberate)
         id: Option<i64>,
 
         /// Filter by skill (repeatable, AND logic)
@@ -510,10 +511,11 @@ pub enum Commands {
         agent: Option<String>,
     },
 
-    /// Create a relation between two issues
+    /// Create a relation between issues
     Relate {
-        /// Source issue ID
-        id: i64,
+        /// Source issue ID(s) — repeat, comma-separate, or use ranges (e.g. 124-132)
+        #[arg(value_name = "ID", required = true, num_args = 1..)]
+        ids: Vec<String>,
 
         /// Target issue ID
         #[arg(long)]
@@ -594,7 +596,11 @@ pub enum Commands {
 pub enum BatchAction {
     /// Bulk-create issues from JSON array on stdin
     #[command(visible_alias = "create")]
-    Add,
+    Add {
+        /// Validate the payload and print per-item verdicts without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Bulk-close issues from JSON array on stdin (per-issue reasons)
     Close {
         /// Preview without applying changes
@@ -608,7 +614,11 @@ pub enum BatchAction {
         dry_run: bool,
     },
     /// Bulk-add notes from JSON array on stdin [{id, text, agent?}]
-    Note,
+    Note {
+        /// Preview without applying changes
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -691,6 +701,118 @@ pub enum BulkAction {
         assigned_to: Option<String>,
 
         /// Preview without applying changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Relate all issues matching filters to a target issue
+    Relate {
+        /// Target issue ID
+        #[arg(long)]
+        to: i64,
+
+        /// Relation type: duplicate|related|supersedes
+        #[arg(long, visible_alias = "type", default_value = "related")]
+        relation_type: String,
+
+        /// Filter by status
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Filter by priority
+        #[arg(long)]
+        priority: Option<String>,
+
+        /// Filter by kind
+        #[arg(long)]
+        kind: Option<String>,
+
+        /// Filter by tag
+        #[arg(long)]
+        tag: Option<String>,
+
+        /// Filter by skill
+        #[arg(long)]
+        skill: Option<String>,
+
+        /// Filter by assignee
+        #[arg(long)]
+        assigned_to: Option<String>,
+
+        /// Preview the planned relations without applying changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Make all issues matching filters blocked by --on
+    Depend {
+        /// Issue ID that blocks the matched issues
+        #[arg(long)]
+        on: i64,
+
+        /// Filter by status
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Filter by priority
+        #[arg(long)]
+        priority: Option<String>,
+
+        /// Filter by kind
+        #[arg(long)]
+        kind: Option<String>,
+
+        /// Filter by tag
+        #[arg(long)]
+        tag: Option<String>,
+
+        /// Filter by skill
+        #[arg(long)]
+        skill: Option<String>,
+
+        /// Filter by assignee
+        #[arg(long)]
+        assigned_to: Option<String>,
+
+        /// Preview the planned dependency edges without applying changes
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Append the same note to all issues matching filters
+    Note {
+        /// Note content
+        text: String,
+
+        /// Agent/session identifier
+        #[arg(long, default_value = "")]
+        agent: String,
+
+        /// Filter by status
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Filter by priority
+        #[arg(long)]
+        priority: Option<String>,
+
+        /// Filter by kind
+        #[arg(long)]
+        kind: Option<String>,
+
+        /// Filter by tag
+        #[arg(long)]
+        tag: Option<String>,
+
+        /// Filter by skill
+        #[arg(long)]
+        skill: Option<String>,
+
+        /// Filter by assignee
+        #[arg(long)]
+        assigned_to: Option<String>,
+
+        /// Preview the planned notes without applying changes
         #[arg(long)]
         dry_run: bool,
     },

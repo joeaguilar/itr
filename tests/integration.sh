@@ -2367,6 +2367,141 @@ assert_eq "graph -f json urgency precision stable on second fresh DB" "ok" "$DET
 rm -rf "$DET_DIR_A" "$DET_DIR_B"
 
 # ─────────────────────────────────────────────
+echo ""
+echo "--- multi-ID verbs + bulk relate/depend/note + batch dry-run + fields-everywhere (spec: agent-ergonomics residuals) ---"
+# ─────────────────────────────────────────────
+#
+# Acceptance for the agent-ergonomics residuals spec: every mined shell-loop
+# shape must be expressible as ONE command against a scratch DB, bulk dry-runs
+# must write nothing, batch add --dry-run must match the real run's verdicts,
+# and --fields must work (order-honoring) on all four formats.
+
+SPEC_DIR=$(mktemp -d)
+SPEC_DB="$SPEC_DIR/.itr.db"
+ITR_DB_PATH="$SPEC_DB" $ITR init -q >/dev/null
+# Seed: 1..8 tasks; tag 4,5 sprint-9; 6 is a bug; 7 assigned to blitz-3; 8 the hub.
+for i in 1 2 3; do ITR_DB_PATH="$SPEC_DB" $ITR add "Spec task $i" >/dev/null; done
+ITR_DB_PATH="$SPEC_DB" $ITR add "Sprint story A" -t sprint-9 >/dev/null
+ITR_DB_PATH="$SPEC_DB" $ITR add "Sprint story B" -t sprint-9 >/dev/null
+ITR_DB_PATH="$SPEC_DB" $ITR add "Spec bug" -k bug >/dev/null
+ITR_DB_PATH="$SPEC_DB" $ITR add "Blitz item" --assigned-to blitz-3 >/dev/null
+ITR_DB_PATH="$SPEC_DB" $ITR add "Hub issue" >/dev/null
+
+# (1) multi-ID relate with a range: one command, no loop
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR relate 1-3 --to 8 --type related)
+assert_eq "relate range creates one relation per source" "3" "$(echo "$OUT" | grep -c 'RELATION:created')"
+
+# (1) multi-ID close with comma list + reason
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR close 1,2 "fixed in a1b2c3d" -f json)
+assert_eq "multi close returns JSON array of details" "2" "$(jq_val "$OUT" "len(d)")"
+assert_eq "multi close sets status done" "done" "$(jq_val "$OUT" "d[0]['status']")"
+assert_eq "multi close records reason" "fixed in a1b2c3d" "$(jq_val "$OUT" "d[1]['close_reason']")"
+
+# (1) multi-ID close soft fallback: missing ID skipped, rest close, exit 0
+set +e
+SPEC_STDERR=$(ITR_DB_PATH="$SPEC_DB" $ITR close 3,999 "sweep" 2>&1 1>/dev/null)
+SPEC_EXIT=$?
+set -e
+assert_eq "multi close with missing ID exits 0" "0" "$SPEC_EXIT"
+assert_contains "multi close missing ID gets REVIEW" "REVIEW: id 999 not found; skipped" "$SPEC_STDERR"
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR get 3 -f json)
+assert_eq "multi close closed the existing ID" "done" "$(jq_val "$OUT" "d['status']")"
+
+# (1) multi-ID note with space-separated IDs and --agent
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR note 4 5 --agent fable-review "verified end-to-end")
+assert_eq "multi note writes one note per issue" "2" "$(echo "$OUT" | grep -c 'NOTE:')"
+assert_contains "multi note carries agent attribution" "(fable-review)" "$OUT"
+
+# (1) multi-ID depend
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR depend 4,5 --on 8)
+assert_eq "multi depend adds one edge per ID" "2" "$(echo "$OUT" | grep -c 'DEPEND:')"
+ITR_DB_PATH="$SPEC_DB" $ITR undepend 4 --on 8 >/dev/null
+ITR_DB_PATH="$SPEC_DB" $ITR undepend 5 --on 8 >/dev/null
+
+# (5) all multi-ID mutations appear in the audit log
+LOG_OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR log 4 -f json)
+assert_contains "audit log has dependency_added" "dependency_added" "$LOG_OUT"
+assert_contains "audit log has dependency_removed" "dependency_removed" "$LOG_OUT"
+assert_contains "audit log has note_added" "note_added" "$LOG_OUT"
+LOG_OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR log 1 -f json)
+assert_contains "audit log has relation_added from multi relate" "relation_added" "$LOG_OUT"
+assert_contains "audit log has status close event" "status" "$LOG_OUT"
+
+# (2) bulk depend --dry-run prints planned edges and writes nothing
+BEFORE=$(ITR_DB_PATH="$SPEC_DB" $ITR export)
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR bulk depend --tag sprint-9 --on 8 --dry-run)
+assert_contains "bulk depend dry-run prints planned edge" "DEPEND: 4 blocked by 8" "$OUT"
+assert_contains "bulk depend dry-run summary marks dry-run" "(dry-run)" "$OUT"
+AFTER=$(ITR_DB_PATH="$SPEC_DB" $ITR export)
+assert_eq "bulk depend dry-run leaves DB export byte-identical" "$BEFORE" "$AFTER"
+
+# (2) bulk depend real run applies
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR bulk depend --tag sprint-9 --on 8)
+assert_contains "bulk depend applies edges" "BULK_DEPEND: 2 issues" "$OUT"
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR get 4 -f json)
+assert_eq "bulk depend edge visible on issue" "[8]" "$(jq_val "$OUT" "d['blocked_by']")"
+
+# (2) bulk relate + bulk note
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR bulk relate --kind bug --status open --to 8 --type related)
+assert_contains "bulk relate applies" "BULK_RELATE: 1 issues" "$OUT"
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR bulk note --assigned-to blitz-3 "wave 2 verified" --agent scrum)
+assert_contains "bulk note applies" "BULK_NOTE: 1 issues" "$OUT"
+assert_contains "bulk note attributes agent" "(scrum)" "$OUT"
+
+# (3) batch add --dry-run: same verdicts as real run, nothing written
+SPEC_PAYLOAD='[{"title":"Pan gesture","priority":"urgent","file":"src/chart.rs"},{"title":42},{"title":"Tick labels","blocked_by":["@0"]}]'
+DRY_OUT=$(echo "$SPEC_PAYLOAD" | ITR_DB_PATH="$SPEC_DB" $ITR batch add --dry-run -f json)
+assert_eq "batch add dry-run flags dry_run" "True" "$(jq_val "$DRY_OUT" "d['dry_run']")"
+DRY_VERDICTS=$(jq_val "$DRY_OUT" "','.join(r['outcome'] for r in d['results'])")
+COUNT_BEFORE=$(ITR_DB_PATH="$SPEC_DB" $ITR list --all -f json | python3 -c "import sys,json;print(len(json.load(sys.stdin)))")
+REAL_OUT=$(echo "$SPEC_PAYLOAD" | ITR_DB_PATH="$SPEC_DB" $ITR batch add -f json)
+REAL_VERDICTS=$(jq_val "$REAL_OUT" "','.join(r['outcome'] for r in d['results'])")
+assert_eq "batch add dry-run verdicts match real run" "$REAL_VERDICTS" "$DRY_VERDICTS"
+COUNT_AFTER=$(ITR_DB_PATH="$SPEC_DB" $ITR list --all -f json | python3 -c "import sys,json;print(len(json.load(sys.stdin)))")
+assert_eq "batch add real run created exactly the valid items" "$((COUNT_BEFORE + 2))" "$COUNT_AFTER"
+assert_contains "batch add dry-run shows resolved priority default" "critical" "$DRY_OUT"
+
+# (3) batch note --dry-run writes nothing
+NOTE_COUNT_BEFORE=$(ITR_DB_PATH="$SPEC_DB" $ITR get 8 -f json | python3 -c "import sys,json;print(len(json.load(sys.stdin)['notes']))")
+echo '[{"id":8,"text":"planned note"}]' | ITR_DB_PATH="$SPEC_DB" $ITR batch note --dry-run >/dev/null
+NOTE_COUNT_AFTER=$(ITR_DB_PATH="$SPEC_DB" $ITR get 8 -f json | python3 -c "import sys,json;print(len(json.load(sys.stdin)['notes']))")
+assert_eq "batch note dry-run writes no notes" "$NOTE_COUNT_BEFORE" "$NOTE_COUNT_AFTER"
+
+# (4) --fields on all four formats honors order + unknown-name soft-fallback
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR list -f oneline --fields id,status,title | head -1)
+assert_eq "oneline fields TSV column count" "3" "$(echo "$OUT" | awk -F'\t' '{print NF}')"
+FIRST_FIELD=$(echo "$OUT" | cut -f2)
+assert_eq "oneline fields column 2 is status" "open" "$FIRST_FIELD"
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR list -f pretty --fields id,status,blocked_by,title | head -1)
+assert_contains "pretty fields header has requested cols" "Status" "$OUT"
+case "$OUT" in
+    *"Status"*"Blocked"*"Title"*) pass "pretty fields header honors requested order" ;;
+    *) fail "pretty fields header honors requested order" "got: $OUT" ;;
+esac
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR list -f json --fields title,id | python3 -c "import sys,json; print(','.join(list(json.load(sys.stdin)[0].keys())))")
+assert_eq "json fields honor requested order" "title,id" "$OUT"
+OUT=$(ITR_DB_PATH="$SPEC_DB" $ITR list --fields status,id | head -1)
+case "$OUT" in
+    STATUS:*ID:*) pass "compact fields honor requested order" ;;
+    *) fail "compact fields honor requested order" "got: $OUT" ;;
+esac
+set +e
+SPEC_STDERR=$(ITR_DB_PATH="$SPEC_DB" $ITR list -f oneline --fields id,bogus,title 2>&1 1>/dev/null)
+SPEC_EXIT=$?
+set -e
+assert_eq "oneline unknown field soft-falls exit 0" "0" "$SPEC_EXIT"
+assert_contains "oneline unknown field warns on stderr" "REVIEW" "$SPEC_STDERR"
+
+# claim stays deliberately single-ID (multi syntax is a clap parse error, exit 2)
+set +e
+ITR_DB_PATH="$SPEC_DB" $ITR claim 4,5 >/dev/null 2>&1
+SPEC_EXIT=$?
+set -e
+assert_eq "claim rejects multi-ID syntax" "2" "$SPEC_EXIT"
+
+rm -rf "$SPEC_DIR"
+
+# ─────────────────────────────────────────────
 # Auto-discovered normalized snapshot contracts (issue #140)
 # ─────────────────────────────────────────────
 #

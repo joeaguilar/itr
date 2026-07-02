@@ -7,9 +7,10 @@ Bulk-create issues from JSON array on stdin
 Usage: itr batch add [OPTIONS]
 
 Options:
+      --dry-run          Validate the payload and print per-item verdicts without writing
   -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
       --db <DB>          Override database path (skips walk-up search)
   -q, --quiet            Suppress non-essential output
-      --fields <FIELDS>  Comma-separated list of fields to include in JSON output
+      --fields <FIELDS>  Comma-separated list of fields to include in output (all formats; oneline/pretty/compact honor the requested order)
   -h, --help             Print help
 --- stderr ---

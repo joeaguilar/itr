@@ -2,7 +2,7 @@ $ itr batch update --dry-run
 --- exit ---
 0
 --- stdout ---
-BATCH_UPDATE: 2 items (2 ok, 0 error, 0 review)
+BATCH_UPDATE: 2 items (2 ok, 0 error, 0 review) (dry-run — nothing written)
   OK:1
   OK:2
 --- stderr ---
