@@ -56,7 +56,7 @@ itr close <ID> "reason"        # Close when done
 **Bulk Operations:**
 - `itr batch add` (alias: `batch create`) — Bulk-create from JSON array on stdin. Item fields mirror the `add` flags; `parent` and `parent_id` are both accepted; `blocked_by` takes integer IDs, "N" strings, or "@N" intra-batch references. Malformed items and unresolvable parents/blockers soft-fall per item instead of failing the batch. `--dry-run` validates the payload and prints the same per-item verdicts (including resolved priority/kind defaults) without writing anything
 - `itr batch close` — Bulk-close from JSON array on stdin (per-issue reasons, soft fallback, --dry-run)
-- `itr batch update` — Bulk-update from JSON array on stdin (per-issue changes, soft fallback, --dry-run)
+- `itr batch update` — Bulk-update from JSON array on stdin (per-issue changes, soft fallback, --dry-run). Item fields mirror the `update` flags, including `parent_id` (alias `parent`) to re-parent; `"parent_id": null` or `"no_parent": true` clears the parent. A missing parent or would-be cycle keeps the existing parent with a review note
 - `itr batch note` — Bulk-note from JSON array `[{id, text, agent?}]` on stdin (--dry-run)
 - `itr bulk close` — Close all matching filters (--reason, --wontfix, --status, --priority, --kind, --tag, --skill, --assigned-to, --dry-run)
 - `itr bulk update` — Update matching issues (--set-status, --set-priority, --add-tag, --dry-run)

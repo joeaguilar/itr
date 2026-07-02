@@ -1507,6 +1507,49 @@ BC_OUT=$(echo '[{"id":3}]' | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch close -f j
 HAS_SUMMARY=$(echo "$BC_OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print('summary' in d)")
 assert_eq "batch close --fields filters summary" "False" "$HAS_SUMMARY"
 
+# Batch update parent changes (#211): set, clear via null, soft fallbacks
+OUT=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR add "BU epic" -k epic -f json)
+BU_EPIC=$(jq_val "$OUT" "d['id']")
+OUT=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR add "BU parent child" -f json)
+BU_CHILD=$(jq_val "$OUT" "d['id']")
+
+OUT=$(echo "[{\"id\":$BU_CHILD,\"parent_id\":$BU_EPIC}]" | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update -f json)
+assert_eq "batch update parent_id ok" "ok" "$(jq_val "$OUT" "d['results'][0]['outcome']")"
+OUT_C=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR get "$BU_CHILD" -f json)
+assert_eq "batch update parent_id applied" "$BU_EPIC" "$(jq_val "$OUT_C" "d['parent_id']")"
+
+# --dry-run: parent change validated but not written
+OUT=$(echo "[{\"id\":$BU_CHILD,\"parent_id\":null}]" | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update --dry-run -f json)
+assert_eq "batch update parent dry-run ok" "ok" "$(jq_val "$OUT" "d['results'][0]['outcome']")"
+OUT_C=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR get "$BU_CHILD" -f json)
+assert_eq "batch update parent dry-run writes nothing" "$BU_EPIC" "$(jq_val "$OUT_C" "d['parent_id']")"
+
+# "parent_id": null clears the parent
+OUT=$(echo "[{\"id\":$BU_CHILD,\"parent_id\":null}]" | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update -f json)
+assert_eq "batch update parent null ok" "ok" "$(jq_val "$OUT" "d['results'][0]['outcome']")"
+OUT_C=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR get "$BU_CHILD" -f json)
+assert_eq "batch update parent null clears" "None" "$(jq_val "$OUT_C" "d['parent_id']")"
+
+# "parent" alias sets, "no_parent": true clears
+OUT=$(echo "[{\"id\":$BU_CHILD,\"parent\":$BU_EPIC}]" | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update -f json)
+OUT_C=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR get "$BU_CHILD" -f json)
+assert_eq "batch update parent alias applied" "$BU_EPIC" "$(jq_val "$OUT_C" "d['parent_id']")"
+OUT=$(echo "[{\"id\":$BU_CHILD,\"no_parent\":true}]" | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update -f json)
+OUT_C=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR get "$BU_CHILD" -f json)
+assert_eq "batch update no_parent clears" "None" "$(jq_val "$OUT_C" "d['parent_id']")"
+
+# Missing parent is a per-item soft fallback, not an error
+OUT=$(echo "[{\"id\":$BU_CHILD,\"parent_id\":9999}]" | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update -f json)
+assert_eq "batch update missing parent review" "review" "$(jq_val "$OUT" "d['results'][0]['outcome']")"
+OUT_C=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR get "$BU_CHILD" -f json)
+assert_eq "batch update missing parent unchanged" "None" "$(jq_val "$OUT_C" "d['parent_id']")"
+
+# Cycle-creating parent is a per-item soft fallback
+OUT=$(echo "[{\"id\":$BU_CHILD,\"parent_id\":$BU_EPIC},{\"id\":$BU_EPIC,\"parent_id\":$BU_CHILD}]" | ITR_DB_PATH="$BU_DIR/.itr.db" $ITR batch update -f json)
+assert_eq "batch update cycle parent review" "review" "$(jq_val "$OUT" "d['results'][1]['outcome']")"
+OUT_E=$(ITR_DB_PATH="$BU_DIR/.itr.db" $ITR get "$BU_EPIC" -f json)
+assert_eq "batch update cycle parent unchanged" "None" "$(jq_val "$OUT_E" "d['parent_id']")"
+
 # ─────────────────────────────────────────────
 echo ""
 echo "--- batch note ---"

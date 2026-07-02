@@ -5,7 +5,7 @@ use crate::error::ItrError;
 use crate::format::{self, Format};
 use crate::models::{
     BatchAddInput, BatchCloseInput, BatchItemResult, BatchNoteInput, BatchResult, BatchSummary,
-    BatchUpdateInput, UnblockedIssue,
+    BatchUpdateInput, ParentChange, UnblockedIssue,
 };
 use crate::normalize;
 use crate::normalize::{validate_kind, validate_priority, validate_status};
@@ -569,6 +569,46 @@ fn run_update_core(conn: &Connection, input: &str, dry_run: bool) -> Result<Batc
             persist_list_field(&tx, item.id, "skills", &current, &updated)?;
         }
 
+        // Handle parent changes: `"parent_id": N` re-parents, `"parent_id":
+        // null` or `"no_parent": true` clears — mirroring `itr update
+        // --parent/--no-parent`, but with soft-fallback review notes where
+        // the single-update path hard-errors (missing parent, cycle).
+        let parent_change = if item.no_parent {
+            if matches!(item.parent_id, ParentChange::Set(_)) {
+                review_notes.push(
+                    "both parent_id and no_parent set; parent unchanged. Use one of parent_id: <ID> or no_parent: true".to_string(),
+                );
+                ParentChange::Unchanged
+            } else {
+                ParentChange::Clear
+            }
+        } else {
+            item.parent_id
+        };
+        let old_parent = issue.parent_id.map(|p| p.to_string()).unwrap_or_default();
+        match parent_change {
+            ParentChange::Unchanged => {}
+            ParentChange::Set(pid) => {
+                if !db::issue_exists(&tx, pid)? {
+                    review_notes.push(format!("parent {pid} not found; parent unchanged"));
+                } else if db::is_self_or_descendant(&tx, item.id, pid)? {
+                    review_notes.push(format!(
+                        "parent {} would create a cycle with {}; parent unchanged",
+                        pid, item.id
+                    ));
+                } else if old_parent != pid.to_string() {
+                    db::record_event(&tx, item.id, "parent_id", &old_parent, &pid.to_string())?;
+                    db::update_issue_parent(&tx, item.id, Some(pid))?;
+                }
+            }
+            ParentChange::Clear => {
+                if !old_parent.is_empty() {
+                    db::record_event(&tx, item.id, "parent_id", &old_parent, "")?;
+                    db::update_issue_parent(&tx, item.id, None)?;
+                }
+            }
+        }
+
         // Add _needs_review tag and notes if any field was auto-corrected
         if !review_notes.is_empty() {
             ensure_needs_review_tag(&tx, item.id)?;
@@ -1094,6 +1134,190 @@ mod tests {
             result.results[0].notes[0].contains("kept 'done'"),
             "review note must say which value was kept: {:?}",
             result.results[0].notes
+        );
+    }
+
+    // --- #211: batch update must support parent changes (was silently
+    // dropped: item reported ok, nothing written) ---
+
+    #[test]
+    fn update_parent_id_reparents_and_records_event() {
+        let conn = open_test_db();
+        let epic = seed(&conn, "Epic");
+        let child = seed(&conn, "child");
+        let input = format!(r#"[{{"id":{child},"parent_id":{epic}}}]"#);
+        let result = run_update_core(&conn, &input, false).unwrap();
+        assert_eq!(result.results[0].outcome, "ok");
+        assert_eq!(db::get_issue(&conn, child).unwrap().parent_id, Some(epic));
+        let events = events_for(&conn, child, "parent_id");
+        assert_eq!(events.len(), 1, "re-parenting must be audited");
+        assert_eq!(events[0].old_value, "");
+        assert_eq!(events[0].new_value, epic.to_string());
+    }
+
+    #[test]
+    fn update_parent_alias_reparents() {
+        let conn = open_test_db();
+        let epic = seed(&conn, "Epic");
+        let child = seed(&conn, "child");
+        let input = format!(r#"[{{"id":{child},"parent":{epic}}}]"#);
+        run_update_core(&conn, &input, false).unwrap();
+        assert_eq!(
+            db::get_issue(&conn, child).unwrap().parent_id,
+            Some(epic),
+            "JSON 'parent' key must map to parent_id"
+        );
+    }
+
+    #[test]
+    fn update_parent_null_clears_parent() {
+        let conn = open_test_db();
+        let epic = seed(&conn, "Epic");
+        let child = seed(&conn, "child");
+        run_update_core(
+            &conn,
+            &format!(r#"[{{"id":{child},"parent_id":{epic}}}]"#),
+            false,
+        )
+        .unwrap();
+        let result = run_update_core(
+            &conn,
+            &format!(r#"[{{"id":{child},"parent_id":null}}]"#),
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.results[0].outcome, "ok");
+        assert_eq!(db::get_issue(&conn, child).unwrap().parent_id, None);
+        let events = events_for(&conn, child, "parent_id");
+        assert_eq!(events.len(), 2, "clearing must be audited");
+        assert_eq!(events[1].new_value, "");
+    }
+
+    #[test]
+    fn update_no_parent_true_clears_parent() {
+        let conn = open_test_db();
+        let epic = seed(&conn, "Epic");
+        let child = seed(&conn, "child");
+        run_update_core(
+            &conn,
+            &format!(r#"[{{"id":{child},"parent_id":{epic}}}]"#),
+            false,
+        )
+        .unwrap();
+        run_update_core(
+            &conn,
+            &format!(r#"[{{"id":{child},"no_parent":true}}]"#),
+            false,
+        )
+        .unwrap();
+        assert_eq!(db::get_issue(&conn, child).unwrap().parent_id, None);
+    }
+
+    #[test]
+    fn update_absent_parent_key_leaves_parent_unchanged() {
+        let conn = open_test_db();
+        let epic = seed(&conn, "Epic");
+        let child = seed(&conn, "child");
+        run_update_core(
+            &conn,
+            &format!(r#"[{{"id":{child},"parent_id":{epic}}}]"#),
+            false,
+        )
+        .unwrap();
+        run_update_core(
+            &conn,
+            &format!(r#"[{{"id":{child},"priority":"high"}}]"#),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            db::get_issue(&conn, child).unwrap().parent_id,
+            Some(epic),
+            "an item without a parent key must not touch the parent"
+        );
+    }
+
+    #[test]
+    fn update_missing_parent_is_soft_fallback() {
+        let conn = open_test_db();
+        let id = seed(&conn, "orphan");
+        let result = run_update_core(
+            &conn,
+            &format!(r#"[{{"id":{id},"parent_id":9999}}]"#),
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.results[0].outcome, "review");
+        assert_eq!(db::get_issue(&conn, id).unwrap().parent_id, None);
+        assert!(
+            result.results[0].notes[0].contains("parent 9999"),
+            "review note must name the missing parent: {:?}",
+            result.results[0].notes
+        );
+        assert!(
+            events_for(&conn, id, "parent_id").is_empty(),
+            "no event when nothing was written"
+        );
+    }
+
+    #[test]
+    fn update_parent_cycle_is_soft_fallback() {
+        let conn = open_test_db();
+        let a = seed(&conn, "A");
+        let b = seed(&conn, "B");
+        run_update_core(&conn, &format!(r#"[{{"id":{a},"parent_id":{b}}}]"#), false).unwrap();
+        let result =
+            run_update_core(&conn, &format!(r#"[{{"id":{b},"parent_id":{a}}}]"#), false).unwrap();
+        assert_eq!(result.results[0].outcome, "review");
+        assert_eq!(
+            db::get_issue(&conn, b).unwrap().parent_id,
+            None,
+            "cycle-creating parent must be rejected"
+        );
+        assert!(
+            result.results[0].notes[0].contains("cycle"),
+            "review note must mention the cycle: {:?}",
+            result.results[0].notes
+        );
+    }
+
+    #[test]
+    fn update_self_parent_is_soft_fallback() {
+        let conn = open_test_db();
+        let id = seed(&conn, "narcissist");
+        let result = run_update_core(
+            &conn,
+            &format!(r#"[{{"id":{id},"parent_id":{id}}}]"#),
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.results[0].outcome, "review");
+        assert_eq!(db::get_issue(&conn, id).unwrap().parent_id, None);
+    }
+
+    #[test]
+    fn update_parent_id_and_no_parent_conflict_is_soft_fallback() {
+        let conn = open_test_db();
+        let epic = seed(&conn, "Epic");
+        let child = seed(&conn, "child");
+        run_update_core(
+            &conn,
+            &format!(r#"[{{"id":{child},"parent_id":{epic}}}]"#),
+            false,
+        )
+        .unwrap();
+        let other = seed(&conn, "Other epic");
+        let result = run_update_core(
+            &conn,
+            &format!(r#"[{{"id":{child},"parent_id":{other},"no_parent":true}}]"#),
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.results[0].outcome, "review");
+        assert_eq!(
+            db::get_issue(&conn, child).unwrap().parent_id,
+            Some(epic),
+            "conflicting parent directives must leave the parent unchanged"
         );
     }
 

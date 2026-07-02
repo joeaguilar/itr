@@ -276,7 +276,7 @@ verbs themselves also take multiple IDs — `itr close 12,14,17 "reason"`,
 |---------|-------------|
 | `itr batch add` | Bulk-create issues from JSON array on stdin (alias: `itr batch create`; `--dry-run` validates without writing) |
 | `itr batch close` | Bulk-close issues from JSON array on stdin (per-issue reasons; `--dry-run`) |
-| `itr batch update` | Bulk-update issues from JSON array on stdin (per-issue changes; `--dry-run`) |
+| `itr batch update` | Bulk-update issues from JSON array on stdin (per-issue changes incl. `parent_id`/`parent`; `null` or `no_parent: true` clears the parent; `--dry-run`) |
 | `itr batch note` | Bulk-add notes from JSON array `[{id, text, agent?}]` on stdin (`--dry-run`) |
 | `itr bulk close` | Close every issue matching `--status/--priority/--kind/--tag/--skill/--assigned-to` (`--reason`, `--wontfix`, `--dry-run`) |
 | `itr bulk update` | Update fields (`--set-status`, `--set-priority`, `--add-tag`) on every issue matching filters (`--dry-run`) |

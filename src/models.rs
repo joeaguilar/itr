@@ -265,6 +265,37 @@ pub struct BatchUpdateInput {
     pub add_skills: Vec<String>,
     #[serde(default)]
     pub remove_skills: Vec<String>,
+    /// Re-parent (`"parent_id": N`) or clear (`"parent_id": null`) the parent
+    /// epic; an absent key leaves it unchanged. Accepts both `parent_id` and
+    /// `parent` — agents naturally mirror the `--parent` CLI flag in JSON
+    /// payloads (#150).
+    #[serde(default, alias = "parent", deserialize_with = "parent_change")]
+    pub parent_id: ParentChange,
+    /// `"no_parent": true` also clears the parent — mirrors `--no-parent`.
+    #[serde(default)]
+    pub no_parent: bool,
+}
+
+/// Tri-state parent directive for a batch update item: an absent key must
+/// mean "leave alone" while an explicit JSON `null` means "clear".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub enum ParentChange {
+    #[default]
+    Unchanged,
+    Clear,
+    Set(i64),
+}
+
+/// Map a *present* `parent_id` key to `Set`/`Clear`. An absent key never
+/// reaches this function — `#[serde(default)]` yields `Unchanged` instead.
+fn parent_change<'de, D>(de: D) -> Result<ParentChange, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match Option::<i64>::deserialize(de)? {
+        Some(id) => ParentChange::Set(id),
+        None => ParentChange::Clear,
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
