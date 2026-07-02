@@ -18,8 +18,32 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Create the release once, up front. The build matrix only uploads assets:
+  # concurrent matrix jobs racing to create the same release lose with a
+  # validation conflict (bit ccq's v0.1.1, where 2 of 7 uploads failed).
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ensure release exists
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          generate_release_notes: true
+
   build:
     name: ${{ matrix.target }}
+    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -134,4 +158,3 @@ jobs:
             ${{ env.ASSET }}
             ${{ env.CHECKSUM }}
           fail_on_unmatched_files: true
-          generate_release_notes: true

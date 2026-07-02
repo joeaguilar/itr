@@ -253,7 +253,9 @@ install_from_release() {
 
     local tmpdir
     tmpdir=$(mktemp -d)
-    trap 'rm -rf "$tmpdir"' RETURN
+    # ${tmpdir:-}: the RETURN trap can outlive this function's scope (it also
+    # fires when callers return), where the local is unset and set -u trips.
+    trap 'rm -rf "${tmpdir:-}"' RETURN
 
     info "Downloading ${asset_base}.tar.gz"
     if ! http_get "$archive_url" "$tmpdir/${asset_base}.tar.gz"; then
