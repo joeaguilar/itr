@@ -1,10 +1,11 @@
 [package]
 name = "itr"
-# Intentionally pinned at 0.1.0. Release versions are derived from git tags
-# (`git describe --tags --always --dirty`) via build.rs and surfaced at runtime.
-# This field is only a fallback for source builds without git metadata. See
-# CHANGELOG.md "Versioning" for the full rationale.
-version = "0.1.0"
+# Kept in sync with the latest release tag by .github/workflows/auto-version.yml,
+# which commits a bump here before tagging. Git tags remain the source of truth:
+# release versions come from `git describe` via build.rs; this field is the
+# fallback for source builds without git metadata and what cargo itself reports
+# ("Compiling itr vX.Y.Z", `cargo install --list`). See CHANGELOG.md "Versioning".
+version = "2.13.1"
 edition = "2021"
 description = "Agent-first issue tracker CLI"
 license = "MIT"

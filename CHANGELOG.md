@@ -15,13 +15,15 @@ All notable user-facing changes are recorded here.
   is the terse maintained history.
 - Built binaries embed `git describe --tags --always --dirty` through `build.rs`,
   falling back to the Cargo package version when git metadata is unavailable.
-- `Cargo.toml` intentionally pins `package.version` at `0.1.0` and does not track
-  the latest `v*` tag. Git tags are the source of truth for releases; `build.rs`
-  surfaces the tag-derived version at runtime. The Cargo field is only used as a
-  fallback for source builds with no git metadata, so bumping it on every release
-  would add churn without changing user-visible behavior. See the `0.1.0` Cargo
-  pin and the `v0.1.0` git tag (re-dated `2026-03-07` to mark the bootstrap point
-  for git-based history — see that entry below).
+- `Cargo.toml` `package.version` tracks the latest `v*` tag: `auto-version.yml`
+  commits a manifest sync (marked `[skip version]`) before creating each tag, so
+  the tagged tree carries a matching version. Git tags remain the source of
+  truth — `build.rs` surfaces the tag-derived version at runtime — but the Cargo
+  field is what cargo itself reports (`Compiling itr vX.Y.Z`,
+  `cargo install --list`) and the fallback for source builds with no git
+  metadata. (The field was pinned at `0.1.0` from the `v0.1.0` bootstrap tag,
+  re-dated `2026-03-07` — see that entry below — until `v2.13.1`, when the
+  stale manifest proved confusing enough to start syncing.)
 
 ## Entry Format
 

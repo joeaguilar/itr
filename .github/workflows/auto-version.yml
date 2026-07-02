@@ -95,9 +95,32 @@ jobs:
           esac
 
           NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
           echo "Bump: $BUMP -> $NEW_TAG"
 
-          # Create and push tag
+          # Sync the manifest so the tagged tree carries a matching version:
+          # cargo's own output ("Compiling itr vX.Y.Z", `cargo install --list`)
+          # and the tagless-checkout fallback in build.rs read this field (#213).
+          # Plain text edits — no Rust toolchain needed on the runner.
+          sed -i -E "0,/^version = \".*\"\$/s//version = \"${NEW_VERSION}\"/" Cargo.toml
+          awk -v ver="$NEW_VERSION" '
+            $0 == "name = \"itr\"" { print; getline; sub(/version = ".*"/, "version = \"" ver "\""); print; next }
+            { print }
+          ' Cargo.lock > Cargo.lock.tmp && mv Cargo.lock.tmp Cargo.lock
+
+          if ! git diff --quiet -- Cargo.toml Cargo.lock; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Cargo.toml Cargo.lock
+            # [skip version] keeps this push from re-triggering a bump; the
+            # GITHUB_TOKEN push wouldn't trigger workflows anyway (defense in
+            # depth). If main moved since checkout the push fails and the next
+            # push to main retries the whole tagging run.
+            git commit -m "chore(release): sync manifest version to ${NEW_TAG} [skip version]"
+            git push origin HEAD:main
+          fi
+
+          # Create and push tag (points at the sync commit when one was made)
           git tag "$NEW_TAG"
           git push origin "$NEW_TAG"
           echo "Tagged $NEW_TAG"
