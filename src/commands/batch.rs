@@ -32,6 +32,52 @@ const BATCH_ADD_KNOWN_KEYS: &[&str] = &[
     "blocked_by",
 ];
 
+/// JSON keys recognized by [`BatchUpdateInput`] (including serde aliases).
+/// Keep in sync with the struct definition in `models.rs` (#212).
+const BATCH_UPDATE_KNOWN_KEYS: &[&str] = &[
+    "id",
+    "status",
+    "priority",
+    "kind",
+    "title",
+    "context",
+    "assigned_to",
+    "add_tags",
+    "remove_tags",
+    "add_skills",
+    "remove_skills",
+    "parent_id",
+    "parent",
+    "no_parent",
+];
+
+/// JSON keys recognized by [`BatchCloseInput`] (#212).
+const BATCH_CLOSE_KNOWN_KEYS: &[&str] = &["id", "reason", "wontfix"];
+
+/// JSON keys recognized by [`BatchNoteInput`] (#212).
+const BATCH_NOTE_KNOWN_KEYS: &[&str] = &["id", "text", "agent"];
+
+/// REVIEW notes for any keys of `value` not in `known_keys` — the shared
+/// "never silently swallow input" check behind every batch verb (#150, #212).
+fn unknown_key_notes(value: &serde_json::Value, known_keys: &[&str]) -> Vec<String> {
+    let Some(map) = value.as_object() else {
+        return vec![];
+    };
+    let unknown: Vec<String> = map
+        .keys()
+        .filter(|k| !known_keys.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    if unknown.is_empty() {
+        return vec![];
+    }
+    vec![format!(
+        "REVIEW: unrecognized field(s) ignored: {}. Known fields: {}",
+        unknown.join(", "),
+        known_keys.join(", ")
+    )]
+}
+
 /// A single resolved `blocked_by` entry from an add payload.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum BlockedByRef {
@@ -69,47 +115,41 @@ pub(crate) fn parse_add_item(
     value: &serde_json::Value,
 ) -> Result<(BatchAddInput, Vec<String>), serde_json::Error> {
     let item: BatchAddInput = serde_json::from_value(value.clone())?;
-    let mut review_notes = Vec::new();
-    if let Some(map) = value.as_object() {
-        let unknown: Vec<String> = map
-            .keys()
-            .filter(|k| !BATCH_ADD_KNOWN_KEYS.contains(&k.as_str()))
-            .cloned()
-            .collect();
-        if !unknown.is_empty() {
-            review_notes.push(format!(
-                "REVIEW: unrecognized field(s) ignored: {}. Known fields: {}",
-                unknown.join(", "),
-                BATCH_ADD_KNOWN_KEYS.join(", ")
-            ));
-        }
-    }
-    Ok((item, review_notes))
+    Ok((item, unknown_key_notes(value, BATCH_ADD_KNOWN_KEYS)))
 }
 
 /// Deserialize each element of a JSON array individually so one malformed
 /// item becomes a per-item `error` outcome instead of rejecting the whole
-/// batch (soft fallback, #164). A top-level non-array payload is still a
-/// hard parse error.
+/// batch (soft fallback, #164). Each parsed item carries REVIEW notes for
+/// keys outside `known_keys` — unknown fields must never be silently
+/// dropped (#212). A top-level non-array payload is still a hard parse
+/// error.
+/// One deserialized batch item plus its unknown-key REVIEW notes, or the
+/// per-item `error` outcome when the item failed to parse at all.
+type ParsedItem<T> = Result<(T, Vec<String>), BatchItemResult>;
+
 fn parse_each<T: serde::de::DeserializeOwned>(
     input: &str,
-) -> Result<Vec<Result<T, BatchItemResult>>, ItrError> {
+    known_keys: &[&str],
+) -> Result<Vec<ParsedItem<T>>, ItrError> {
     let values: Vec<serde_json::Value> = serde_json::from_str(input)?;
     Ok(values
         .into_iter()
         .enumerate()
         .map(|(idx, value)| {
-            serde_json::from_value::<T>(value.clone()).map_err(|e| BatchItemResult {
-                id: value
-                    .get("id")
-                    .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(0),
-                outcome: "error".to_string(),
-                error: Some(format!("item {idx}: {e}")),
-                notes: vec![],
-                unblocked: vec![],
-                issue: None,
-            })
+            serde_json::from_value::<T>(value.clone())
+                .map(|item| (item, unknown_key_notes(&value, known_keys)))
+                .map_err(|e| BatchItemResult {
+                    id: value
+                        .get("id")
+                        .and_then(serde_json::Value::as_i64)
+                        .unwrap_or(0),
+                    outcome: "error".to_string(),
+                    error: Some(format!("item {idx}: {e}")),
+                    notes: vec![],
+                    unblocked: vec![],
+                    issue: None,
+                })
         })
         .collect())
 }
@@ -343,14 +383,14 @@ pub fn run_close(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), It
 }
 
 fn run_close_core(conn: &Connection, input: &str, dry_run: bool) -> Result<BatchResult, ItrError> {
-    let items = parse_each::<BatchCloseInput>(input)?;
+    let items = parse_each::<BatchCloseInput>(input, BATCH_CLOSE_KNOWN_KEYS)?;
 
     let tx = conn.unchecked_transaction()?;
 
     let mut results: Vec<BatchItemResult> = Vec::with_capacity(items.len());
 
     for entry in items {
-        let item = match entry {
+        let (item, review_notes) = match entry {
             Ok(item) => item,
             Err(error_result) => {
                 results.push(error_result);
@@ -366,7 +406,7 @@ fn run_close_core(conn: &Connection, input: &str, dry_run: bool) -> Result<Batch
                     id: item.id,
                     outcome: "error".to_string(),
                     error: Some(format!("Issue {} not found", item.id)),
-                    notes: vec![],
+                    notes: review_notes,
                     unblocked: vec![],
                     issue: None,
                 });
@@ -375,13 +415,29 @@ fn run_close_core(conn: &Connection, input: &str, dry_run: bool) -> Result<Batch
             Err(e) => return Err(e),
         };
 
+        // Unknown payload keys still close the issue (accept partial valid
+        // input) but flag the item for review (#212).
+        if !review_notes.is_empty() {
+            ensure_needs_review_tag(&tx, item.id)?;
+            for note_text in &review_notes {
+                db::add_note(&tx, item.id, note_text, "itr")?;
+            }
+        }
+        let outcome = if review_notes.is_empty() {
+            "ok"
+        } else {
+            "review"
+        };
+
         // Already closed — idempotent ok
         if issue.status == "done" || issue.status == "wontfix" {
+            let mut notes = vec![format!("Already {}", issue.status)];
+            notes.extend(review_notes);
             results.push(BatchItemResult {
                 id: item.id,
-                outcome: "ok".to_string(),
+                outcome: outcome.to_string(),
                 error: None,
-                notes: vec![format!("Already {}", issue.status)],
+                notes,
                 unblocked: vec![],
                 issue: None,
             });
@@ -412,15 +468,16 @@ fn run_close_core(conn: &Connection, input: &str, dry_run: bool) -> Result<Batch
             .map(|(id, title)| UnblockedIssue { id, title })
             .collect();
 
-        let notes = if item.reason.is_empty() {
+        let mut notes = if item.reason.is_empty() {
             vec![]
         } else {
             vec![item.reason.clone()]
         };
+        notes.extend(review_notes);
 
         results.push(BatchItemResult {
             id: item.id,
-            outcome: "ok".to_string(),
+            outcome: outcome.to_string(),
             error: None,
             notes,
             unblocked,
@@ -449,14 +506,14 @@ pub fn run_update(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), I
 }
 
 fn run_update_core(conn: &Connection, input: &str, dry_run: bool) -> Result<BatchResult, ItrError> {
-    let items = parse_each::<BatchUpdateInput>(input)?;
+    let items = parse_each::<BatchUpdateInput>(input, BATCH_UPDATE_KNOWN_KEYS)?;
 
     let tx = conn.unchecked_transaction()?;
 
     let mut results: Vec<BatchItemResult> = Vec::with_capacity(items.len());
 
     for entry in items {
-        let item = match entry {
+        let (item, mut review_notes) = match entry {
             Ok(item) => item,
             Err(error_result) => {
                 results.push(error_result);
@@ -472,7 +529,7 @@ fn run_update_core(conn: &Connection, input: &str, dry_run: bool) -> Result<Batc
                     id: item.id,
                     outcome: "error".to_string(),
                     error: Some(format!("Issue {} not found", item.id)),
-                    notes: vec![],
+                    notes: review_notes,
                     unblocked: vec![],
                     issue: None,
                 });
@@ -481,7 +538,6 @@ fn run_update_core(conn: &Connection, input: &str, dry_run: bool) -> Result<Batc
             Err(e) => return Err(e),
         };
 
-        let mut review_notes: Vec<String> = Vec::new();
         let mut new_status: Option<String> = None;
 
         // Handle status
@@ -666,14 +722,14 @@ pub fn run_note(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), Itr
 }
 
 fn run_note_core(conn: &Connection, input: &str, dry_run: bool) -> Result<BatchResult, ItrError> {
-    let items = parse_each::<BatchNoteInput>(input)?;
+    let items = parse_each::<BatchNoteInput>(input, BATCH_NOTE_KNOWN_KEYS)?;
 
     let tx = conn.unchecked_transaction()?;
 
     let mut results: Vec<BatchItemResult> = Vec::with_capacity(items.len());
 
     for entry in items {
-        let item = match entry {
+        let (item, review_notes) = match entry {
             Ok(item) => item,
             Err(error_result) => {
                 results.push(error_result);
@@ -690,11 +746,26 @@ fn run_note_core(conn: &Connection, input: &str, dry_run: bool) -> Result<BatchR
 
         match db::add_note(&tx, item.id, &item.text, &agent) {
             Ok(note) => {
+                // Unknown payload keys still add the note (accept partial
+                // valid input) but flag the item for review (#212).
+                if !review_notes.is_empty() {
+                    ensure_needs_review_tag(&tx, item.id)?;
+                    for note_text in &review_notes {
+                        db::add_note(&tx, item.id, note_text, "itr")?;
+                    }
+                }
+                let outcome = if review_notes.is_empty() {
+                    "ok"
+                } else {
+                    "review"
+                };
+                let mut notes = vec![note.content];
+                notes.extend(review_notes);
                 results.push(BatchItemResult {
                     id: item.id,
-                    outcome: "ok".to_string(),
+                    outcome: outcome.to_string(),
                     error: None,
-                    notes: vec![note.content],
+                    notes,
                     unblocked: vec![],
                     issue: None,
                 });
@@ -704,7 +775,7 @@ fn run_note_core(conn: &Connection, input: &str, dry_run: bool) -> Result<BatchR
                     id: item.id,
                     outcome: "error".to_string(),
                     error: Some(format!("Issue {} not found", item.id)),
-                    notes: vec![],
+                    notes: review_notes,
                     unblocked: vec![],
                     issue: None,
                 });
@@ -1060,7 +1131,9 @@ mod tests {
 
     #[test]
     fn malformed_item_error_uses_id_from_payload_when_present() {
-        let parsed = parse_each::<BatchCloseInput>(r#"[{"id":42,"wontfix":"yes"}]"#).unwrap();
+        let parsed =
+            parse_each::<BatchCloseInput>(r#"[{"id":42,"wontfix":"yes"}]"#, BATCH_CLOSE_KNOWN_KEYS)
+                .unwrap();
         let err = parsed[0].as_ref().unwrap_err();
         assert_eq!(err.id, 42);
         assert_eq!(err.outcome, "error");
@@ -1135,6 +1208,71 @@ mod tests {
             "review note must say which value was kept: {:?}",
             result.results[0].notes
         );
+    }
+
+    // --- #212: unknown item keys in update/close/note get REVIEW notes
+    // instead of being silently dropped (parity with batch add, #150) ---
+
+    #[test]
+    fn update_unknown_key_emits_review_note_and_applies_valid_fields() {
+        let conn = open_test_db();
+        let id = seed(&conn, "typo victim");
+        let input = format!(r#"[{{"id":{id},"prioriy":"high","status":"in-progress"}}]"#);
+        let result = run_update_core(&conn, &input, false).unwrap();
+        assert_eq!(result.results[0].outcome, "review");
+        assert!(
+            result.results[0].notes[0].contains("prioriy"),
+            "note should name the unrecognized key: {:?}",
+            result.results[0].notes
+        );
+        let issue = db::get_issue(&conn, id).unwrap();
+        assert_eq!(issue.status, "in-progress", "valid fields must still apply");
+        assert_eq!(
+            issue.priority, "medium",
+            "typoed key must not change anything"
+        );
+        assert!(issue.tags.contains(&"_needs_review".to_string()));
+    }
+
+    #[test]
+    fn close_unknown_key_emits_review_note_and_still_closes() {
+        let conn = open_test_db();
+        let id = seed(&conn, "to close");
+        let input = format!(r#"[{{"id":{id},"reson":"fixed"}}]"#);
+        let result = run_close_core(&conn, &input, false).unwrap();
+        assert_eq!(result.results[0].outcome, "review");
+        assert!(
+            result.results[0].notes.iter().any(|n| n.contains("reson")),
+            "note should name the unrecognized key: {:?}",
+            result.results[0].notes
+        );
+        let issue = db::get_issue(&conn, id).unwrap();
+        assert_eq!(issue.status, "done", "unknown key must not block the close");
+        assert_eq!(issue.close_reason, "", "typoed reason must not be applied");
+        assert!(issue.tags.contains(&"_needs_review".to_string()));
+    }
+
+    #[test]
+    fn note_unknown_key_emits_review_note_and_still_adds_note() {
+        let conn = open_test_db();
+        let id = seed(&conn, "to annotate");
+        let input = format!(r#"[{{"id":{id},"text":"hello","agnt":"bot"}}]"#);
+        let result = run_note_core(&conn, &input, false).unwrap();
+        assert_eq!(result.results[0].outcome, "review");
+        assert!(
+            result.results[0].notes.iter().any(|n| n.contains("agnt")),
+            "note should name the unrecognized key: {:?}",
+            result.results[0].notes
+        );
+        let contents = note_contents(&conn, id);
+        assert!(
+            contents.iter().any(|n| n == "hello"),
+            "the note itself must still be added: {contents:?}"
+        );
+        assert!(db::get_issue(&conn, id)
+            .unwrap()
+            .tags
+            .contains(&"_needs_review".to_string()));
     }
 
     // --- #211: batch update must support parent changes (was silently
