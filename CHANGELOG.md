@@ -37,6 +37,9 @@ All notable user-facing changes are recorded here.
 
 ### Release notes
 
+- Added: the embedded agent skill (`itr skill`) now covers filing issues from
+  failed gates — pull evidence from `gatr last` / `gatr errors` instead of
+  re-running builds or pasting raw logs.
 - Added: `CHANGELOG.md` release history and maintainer guidance.
 - Added: Cross-platform release workflow and documented prebuilt-binary install
   paths for macOS, Linux, and Windows.

@@ -45,6 +45,8 @@ When the user dumps a list ("file these five things…"), use `itr batch add` wi
 3. **File it.** Use `-f json` so you can capture the new ID from the response.
 4. **Report back** with the issue ID and a one-line summary. Don't dump the full JSON.
 
+**Filing from a failed build/test gate?** Don't re-run the gate or paste raw log walls. If the gate ran through `gatr` (see the gatr skill), pull the evidence from the record: `gatr last --json` for exit code and error/warning counts, `gatr errors` for the exact error blocks (quote the relevant one in `-c`), and include the `log=` path in the context so whoever claims the issue can open the full log. If the gate didn't run through gatr, rerun it once as `gatr run --tag <name> -- <cmd>` and file from that.
+
 ## Don't
 
 - Don't invent priorities, kinds, or acceptance criteria the user didn't imply — ask or leave a field empty.
