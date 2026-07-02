@@ -26,7 +26,13 @@ just fmt           # cargo fmt --all
 just deny          # cargo deny check (license, advisory, ban checks)
 just verify        # release + lint + test + fmt-check + deny (full pre-push validation)
 just ci            # fmt-check + lint + deny + test
+just gate          # the ci gate through gatr (full log kept, queryable via `gatr last`)
 ```
+
+Run gates through `gatr` (`gatr run --tag ci -- just ci`) instead of piping
+through `tail`/`grep`: the contract line gives exit/error counts at a glance,
+`gatr errors` reprints the failure blocks, and `gatr last` answers "was the
+gate green?" without rerunning.
 
 Unit tests live in `src/util.rs` and `src/format.rs`; the shell-based integration suite is `tests/integration.sh`. The integration suite uses `python3 -c` with `json.load` for JSON parsing (not `jq`). The UI integration test starts a localhost server, so sandboxed environments may need localhost bind/connect permission.
 

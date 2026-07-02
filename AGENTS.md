@@ -23,6 +23,16 @@ cargo deny check
 ./tests/integration.sh ./target/debug/itr
 ```
 
+Run gates through [gatr](https://github.com/joeaguilar/gatr) rather than
+piping output through `tail`/`grep` — the full log lands on disk and the
+result stays queryable after the terminal scrolls away:
+
+```bash
+gatr run --tag ci -- just ci        # or: just gate
+gatr last --tag ci                  # was the gate green?
+gatr errors                         # just the extracted error blocks
+```
+
 `cargo deny check` runs license, advisory, and ban policy checks against
 `deny.toml`; CI runs it on every push, so add or audit any new dependency
 locally before opening a PR.

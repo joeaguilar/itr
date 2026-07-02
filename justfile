@@ -60,6 +60,10 @@ verify: release lint test-unit test fmt-check deny
 # Lint + format + deny + unit tests + integration tests (CI-style)
 ci: fmt-check lint deny test-unit test
 
+# The ci gate through gatr: full log kept, result queryable via `gatr last`
+gate:
+    gatr run --tag ci -- just ci
+
 # ─── Clean ───────────────────────────────────────────────────────────
 
 # Remove build artifacts
