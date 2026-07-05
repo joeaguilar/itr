@@ -110,29 +110,63 @@ pub fn find_db(override_path: Option<&str>) -> Result<PathBuf, ItrError> {
     }
 }
 
-/// Resolve an explicit DB override (`ITR_DB_PATH` env var or `--db` flag).
+/// Resolve a DB address (from `--db` or `ITR_DB_PATH`) to a `.itr.db` file.
 ///
-/// Returns `None` when no usable override is present — an empty-string
-/// `ITR_DB_PATH` is treated as unset — so the caller falls through to the
-/// walk-up finder. A nonexistent override path is rejected with `NoDatabase`
-/// instead of letting `Connection::open` create an empty junk file that the
-/// walk-up finder would forever discover as a broken database (#160). The
-/// offending path is named on stderr because the `NoDatabase` variant
-/// carries no payload.
+/// If `path` is an existing **directory**, resolve to `<path>/.itr.db` — a
+/// control plane can point at a project root without hand-appending the
+/// suffix. Otherwise the path is used verbatim (a `.itr.db` file, or any
+/// filename the caller chose). This is address→file mapping only; it does not
+/// check that the resulting file exists and never creates anything, so it is
+/// shared by both `find_db` (open) and `itr init` (create).
+pub fn db_path_for(path: &str) -> PathBuf {
+    let p = Path::new(path);
+    if p.is_dir() {
+        p.join(".itr.db")
+    } else {
+        PathBuf::from(path)
+    }
+}
+
+/// Resolve an explicit DB override (`--db` flag or `ITR_DB_PATH` env var).
+///
+/// Precedence is unified across every command: an explicit `--db` flag wins
+/// over an ambient `ITR_DB_PATH`, which wins over the walk-up finder. A
+/// control plane sets `ITR_DB_PATH` for its own tracker, then passes `--db
+/// <project>` per call to address another project's tracker — the explicit
+/// flag must not be silently shadowed by the ambient env (matches `itr init`
+/// and the documented rationale in docs/environment.md).
+///
+/// Returns `None` when no usable override is present — an empty-string `--db`
+/// or `ITR_DB_PATH` is treated as unset — so the caller falls through to the
+/// walk-up finder. Both flag and env accept a directory (resolved via
+/// [`db_path_for`]) or a file path.
+///
+/// A directory with no `.itr.db`, or a nonexistent path, is rejected with
+/// `NoDatabase` instead of letting `Connection::open` create an empty junk
+/// file that the walk-up finder would forever discover as a broken database
+/// (#160). The offending path is named on stderr because the `NoDatabase`
+/// variant carries no payload.
 fn resolve_override_db(
     env_path: Option<&str>,
     cli_path: Option<&str>,
 ) -> Option<Result<PathBuf, ItrError>> {
-    let (path, source) = match (env_path, cli_path) {
-        (Some(p), _) if !p.is_empty() => (p, "ITR_DB_PATH"),
-        (_, Some(p)) => (p, "--db"),
+    let (path, source) = match (cli_path, env_path) {
+        (Some(p), _) if !p.is_empty() => (p, "--db"),
+        (_, Some(p)) if !p.is_empty() => (p, "ITR_DB_PATH"),
         _ => return None,
     };
-    if path.is_empty() {
-        eprintln!("ERROR: {source} is set to an empty path; no database opened.");
+    let p = Path::new(path);
+    if p.is_dir() {
+        let candidate = p.join(".itr.db");
+        if candidate.exists() {
+            return Some(Ok(candidate));
+        }
+        eprintln!(
+            "ERROR: {source} points to '{path}', a directory with no .itr.db. Run 'itr init --db {path}' to create it."
+        );
         return Some(Err(ItrError::NoDatabase));
     }
-    if Path::new(path).exists() {
+    if p.exists() {
         Some(Ok(PathBuf::from(path)))
     } else {
         eprintln!(
@@ -2131,11 +2165,84 @@ mod tests {
     }
 
     #[test]
-    fn empty_cli_override_is_rejected_not_a_temp_db() {
-        assert!(matches!(
-            resolve_override_db(None, Some("")),
-            Some(Err(ItrError::NoDatabase))
+    fn empty_cli_override_falls_through() {
+        // Empty --db is "unset": with no env either, resolution defers (None)
+        // to the walk-up finder rather than erroring or opening a temp db.
+        assert!(resolve_override_db(None, Some("")).is_none());
+        assert!(resolve_override_db(Some(""), Some("")).is_none());
+    }
+
+    #[test]
+    fn cli_override_wins_over_env() {
+        // P2: an explicit --db must beat an ambient ITR_DB_PATH so a control
+        // plane can keep env on its own tracker and target another per call.
+        let dir = std::env::temp_dir().join(format!(
+            "itr-cli-wins-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         ));
+        let a = dir.join("A");
+        let b = dir.join("B");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let a_db = a.join(".itr.db");
+        let b_db = b.join(".itr.db");
+        drop(init_db(&a_db).unwrap());
+        drop(init_db(&b_db).unwrap());
+
+        let resolved =
+            resolve_override_db(Some(a_db.to_str().unwrap()), Some(b_db.to_str().unwrap()));
+        assert!(
+            matches!(resolved, Some(Ok(ref p)) if *p == b_db),
+            "--db must win over ITR_DB_PATH, got {resolved:?}"
+        );
+        // Empty --db still yields the env, not the walk-up.
+        let env_wins = resolve_override_db(Some(a_db.to_str().unwrap()), Some(""));
+        assert!(matches!(env_wins, Some(Ok(ref p)) if *p == a_db));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn directory_override_resolves_to_itr_db_inside() {
+        // P1: a directory address opens <dir>/.itr.db; a file address is
+        // used verbatim; an empty dir (no .itr.db) is rejected without
+        // creating a file.
+        let dir = std::env::temp_dir().join(format!(
+            "itr-dir-override-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join(".itr.db");
+        drop(init_db(&db_path).unwrap());
+
+        // Directory form → <dir>/.itr.db
+        let from_dir = resolve_override_db(None, Some(dir.to_str().unwrap()));
+        assert!(matches!(from_dir, Some(Ok(ref p)) if *p == db_path));
+        // db_path_for is the shared address→file mapping.
+        assert_eq!(db_path_for(dir.to_str().unwrap()), db_path);
+        assert_eq!(
+            db_path_for(db_path.to_str().unwrap()),
+            db_path,
+            "a file path is used verbatim"
+        );
+
+        // A sibling directory with no .itr.db is rejected, nothing created.
+        let empty = dir.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let rejected = resolve_override_db(None, Some(empty.to_str().unwrap()));
+        assert!(matches!(rejected, Some(Err(ItrError::NoDatabase))));
+        assert!(
+            std::fs::metadata(empty.join(".itr.db")).is_err(),
+            "a directory with no .itr.db must not have one created"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

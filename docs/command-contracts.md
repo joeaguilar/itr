@@ -19,8 +19,12 @@ All commands accept the global parser flags from `src/cli.rs`:
   case-insensitive and surrounding whitespace is trimmed (issue #192), so
   `-f JSON` works. Default is `compact`. Unknown formats exit before handler
   dispatch.
-- `--db`: database path override. `ITR_DB_PATH` takes precedence over `--db`
-  for every command except `init`, which inverts the order — see
+- `--db`: database address override — a `.itr.db` file or a directory
+  containing one (a directory resolves to `<dir>/.itr.db`). An explicit `--db`
+  takes precedence over `ITR_DB_PATH` on **every** command (including `init`),
+  which in turn wins over the walk-up search; an empty value is treated as
+  unset. A directory with no `.itr.db`, or a missing path, is rejected with a
+  named-path error (no junk db is created). See
   [environment.md](environment.md#itr_db_path) for the full precedence rules.
 - `--fields`: comma-separated field selector. It is stable for issue, list,
   search, and batch JSON outputs; for `stats`, `graph`, and `log` JSON outputs

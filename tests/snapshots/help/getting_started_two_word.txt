@@ -12,6 +12,8 @@ Do NOT use full paths like ~/.cargo/bin/itr or ./target/release/itr.
 Set `ITR_AGENT=<your-name>` in your environment to identify yourself for claims, notes, and audit log entries.
 Use `-f json` for all machine-parseable output. Use `--fields id,title,urgency,status` to reduce token usage.
 
+To address a specific project's tracker, pass `--db <path>` where `<path>` is either a `.itr.db` file or the project's root directory (a directory resolves to `<dir>/.itr.db`). This lets you operate on any project by root path without `cd`-ing into it. An explicit `--db` always wins over an ambient `ITR_DB_PATH`, so you can keep `ITR_DB_PATH` on your own tracker and still target another project per call: `itr --db /work/projectA close 42 "done"`.
+
 ### Standard Workflow
 
 ```

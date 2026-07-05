@@ -7,13 +7,19 @@ use std::fs;
 use std::path::PathBuf;
 
 pub fn run(agents_md: bool, fmt: Format, db_override: Option<&str>) -> Result<(), ItrError> {
-    let db_path = if let Some(p) = db_override {
-        PathBuf::from(p)
-    } else if let Ok(p) = env::var("ITR_DB_PATH") {
-        PathBuf::from(p)
-    } else {
-        let cwd = env::current_dir().map_err(ItrError::Io)?;
-        cwd.join(".itr.db")
+    // Precedence matches every other command (docs/environment.md): an
+    // explicit --db wins over an ambient ITR_DB_PATH, which wins over cwd. A
+    // directory address resolves to <dir>/.itr.db so `itr init --db <root>`
+    // creates the db inside the project root, not a file named after it.
+    let db_path = match db_override {
+        Some(p) if !p.is_empty() => db::db_path_for(p),
+        _ => match env::var("ITR_DB_PATH") {
+            Ok(p) if !p.is_empty() => db::db_path_for(&p),
+            _ => {
+                let cwd = env::current_dir().map_err(ItrError::Io)?;
+                cwd.join(".itr.db")
+            }
+        },
     };
 
     let created = if db_path.exists() {

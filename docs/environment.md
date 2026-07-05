@@ -31,29 +31,36 @@ Scopes:
 
 ### `ITR_DB_PATH`
 
-Absolute path to the `.itr.db` SQLite file. Skips the walk-up search that
-normally locates the database from the current directory.
+Path to a `.itr.db` SQLite file **or a directory containing one**. When it
+names a directory, `itr` opens `<dir>/.itr.db` — a control plane can address a
+project by its root path without hand-appending the `.itr.db` suffix. Setting
+this skips the walk-up search that normally locates the database from the
+current directory.
 
-**Precedence (every command except `itr init`)** — `ITR_DB_PATH` wins:
+**Precedence (every command, including `itr init`)** — an explicit `--db`
+flag wins:
 
-1. `ITR_DB_PATH` (if set)
-2. `--db <PATH>` flag
-3. Walk-up search from the current directory for `.itr.db`
+1. `--db <PATH>` flag (if supplied and non-empty)
+2. `ITR_DB_PATH` (if set and non-empty)
+3. Walk-up search from the current directory for `.itr.db` (for `init`, the
+   target is `./.itr.db` in the current directory)
 
-**Precedence asymmetry — `itr init` inverts this** — `--db` wins:
+The order is uniform across all commands: an explicit `--db` has to be able to
+override an ambient `ITR_DB_PATH` you set for a different project. This is the
+control-plane pattern — a long-lived process sets `ITR_DB_PATH` for its own
+tracker, then passes `--db <project-root>` per call to add/close on another
+project's behalf. An empty `--db` or `ITR_DB_PATH` is treated as unset and
+falls through to the next level. (Historically only `itr init` gave the flag
+priority; every other command let the env win, which silently routed
+per-project writes into the wrong tracker.)
 
-1. `--db <PATH>` flag (if supplied)
-2. `ITR_DB_PATH` (if set)
-3. `./.itr.db` in the current directory
+A directory override with no `.itr.db` inside, or a path that does not exist,
+is rejected with a named-path error suggesting `itr init --db <path>` — `itr`
+never creates a junk database from a bad override (#160).
 
-The inversion is deliberate. `init` is how you create a database, so the
-explicit flag has to be able to override an ambient `ITR_DB_PATH` that you set
-for a different project. Every other command treats `ITR_DB_PATH` as an
-intentional override that should not be silently shadowed by a stray flag.
-
-If unset, `itr` walks up from the current directory looking for `.itr.db`,
-which is how `cd`'ing into a project subdirectory still finds the project
-database without any configuration.
+If neither is set, `itr` walks up from the current directory looking for
+`.itr.db`, which is how `cd`'ing into a project subdirectory still finds the
+project database without any configuration.
 
 Source: [`src/db.rs::find_db`](../src/db.rs),
 [`src/commands/init.rs`](../src/commands/init.rs).
