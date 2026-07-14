@@ -611,6 +611,7 @@ const COMPACT_LINE_FIELDS: &[&str] = &[
     "assigned_to",
     "title",
     "acceptance",
+    "parent_id",
 ];
 
 fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
@@ -673,6 +674,13 @@ fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
                     "title" => lines.push(format!("TITLE: {}", escape_line_value(&i.title))),
                     "acceptance" if !i.acceptance.is_empty() => {
                         lines.push(format!("ACCEPTANCE: {}", escape_line_value(&i.acceptance)));
+                    }
+                    // Mirror `get`'s compact `PARENT: N` line so both views agree
+                    // (#216). Only rendered when the issue has a parent.
+                    "parent_id" => {
+                        if let Some(pid) = i.parent_id {
+                            lines.push(format!("PARENT: {pid}"));
+                        }
                     }
                     _ => {}
                 }
@@ -1795,6 +1803,7 @@ mod tests {
             files: vec![],
             skills: vec![],
             acceptance: String::new(),
+            parent_id: None,
             assigned_to: String::new(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),

@@ -2,5 +2,5 @@ $ itr wip -f json
 --- exit ---
 0
 --- stdout ---
-[{"id":1,"title":"Fixture issue","status":"in-progress","priority":"high","kind":"bug","urgency":15.0,"is_blocked":false,"blocked_by":[],"tags":[],"files":[],"skills":[],"acceptance":"acc","assigned_to":"","created_at":"<TS>","updated_at":"<TS>"}]
+[{"id":1,"title":"Fixture issue","status":"in-progress","priority":"high","kind":"bug","urgency":15.0,"is_blocked":false,"blocked_by":[],"tags":[],"files":[],"skills":[],"acceptance":"acc","parent_id":null,"assigned_to":"","created_at":"<TS>","updated_at":"<TS>"}]
 --- stderr ---

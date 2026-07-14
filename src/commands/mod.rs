@@ -77,6 +77,7 @@ pub fn build_issue_summary_owned(
         files: issue.files,
         skills: issue.skills,
         acceptance: issue.acceptance,
+        parent_id: issue.parent_id,
         assigned_to: issue.assigned_to,
         created_at: issue.created_at,
         updated_at: issue.updated_at,

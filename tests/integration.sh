@@ -2075,6 +2075,18 @@ OUT=$(ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR get 1 -f json)
 PID_AFTER_DESC=$(jq_val "$OUT" "d.get('parent_id') is None")
 assert_eq "update --parent descendant leaves parent unchanged" "True" "$PID_AFTER_DESC"
 
+# parent_id parity: `list --fields` must report the same parent_id as `get`
+# (#216). Regression: IssueSummary dropped parent_id, so list returned null
+# while get returned the true parent for the same issue. State here: issue 3's
+# parent is epic 1 (set at line ~2064), so both views must agree on 1.
+GET_PID=$(jq_val "$(ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR get 3 -f json --fields id,parent_id)" "d['parent_id']")
+assert_eq "get --fields reports parent_id" "1" "$GET_PID"
+LIST_PID=$(jq_val "$(ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR list --all -f json --fields id,parent_id)" "next(i['parent_id'] for i in d if i['id'] == 3)")
+assert_eq "list --fields parent_id matches get (JSON)" "1" "$LIST_PID"
+# Compact list must surface the parent too, mirroring get's `PARENT: N` line.
+LIST_COMPACT=$(ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR list --all --fields id,parent_id 2>&1)
+assert_contains "list --fields parent_id compact shows PARENT" "PARENT: 1" "$LIST_COMPACT"
+
 # Conflicting flags: both --parent and --no-parent should be rejected
 set +e
 CONFLICT_OUT=$(ITR_DB_PATH="$PARENT_DIR/.itr.db" $ITR update 3 --parent 2 --no-parent 2>&1)

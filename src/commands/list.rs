@@ -155,6 +155,7 @@ mod tests {
             files: vec![],
             skills: vec![],
             acceptance: String::new(),
+            parent_id: None,
             assigned_to: String::new(),
             created_at: created_at.to_string(),
             updated_at: updated_at.to_string(),
