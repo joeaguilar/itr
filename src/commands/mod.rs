@@ -63,6 +63,7 @@ pub fn build_issue_summary_owned(
 ) -> IssueSummary {
     let urg = urgency::compute_urgency(&issue, config, conn);
     let blocked_by = db::get_blockers(conn, issue.id).unwrap_or_default();
+    let blocks = db::get_blocking(conn, issue.id).unwrap_or_default();
     let is_blocked = db::is_blocked(conn, issue.id).unwrap_or(false);
     IssueSummary {
         id: issue.id,
@@ -73,11 +74,14 @@ pub fn build_issue_summary_owned(
         urgency: urg,
         is_blocked,
         blocked_by,
+        blocks,
         tags: issue.tags,
         files: issue.files,
         skills: issue.skills,
         acceptance: issue.acceptance,
+        context: issue.context,
         parent_id: issue.parent_id,
+        close_reason: issue.close_reason,
         assigned_to: issue.assigned_to,
         created_at: issue.created_at,
         updated_at: issue.updated_at,

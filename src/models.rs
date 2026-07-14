@@ -77,10 +77,19 @@ pub struct IssueSummary {
     pub files: Vec<String>,
     pub skills: Vec<String>,
     pub acceptance: String,
-    /// Mirrors `Issue::parent_id` so `list --fields parent_id` reports the same
-    /// value `get` does. No `skip_serializing_if`: like `Issue`, a missing
-    /// parent serializes as explicit `null`, never an absent key (#216).
+    /// Flat `Issue` fields carried so `list --fields X` reports the same value
+    /// `get` does. No `skip_serializing_if` on any of them: they mirror `Issue`
+    /// /`IssueDetail` exactly (which always serialize these), so a missing value
+    /// is explicit `null`/`""`/`[]`, never an absent key — the split-brain that
+    /// #216 fixed for `parent_id` and this extends to every flat field.
+    #[serde(default)]
+    pub context: String,
     pub parent_id: Option<i64>,
+    #[serde(default)]
+    pub close_reason: String,
+    /// Mirror of `blocked_by` (already carried): issues this one blocks.
+    #[serde(default)]
+    pub blocks: Vec<i64>,
     #[serde(default)]
     pub assigned_to: String,
     pub created_at: String,

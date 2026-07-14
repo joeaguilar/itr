@@ -2124,6 +2124,82 @@ assert_eq "parent_id audit event records ITR_AGENT" "audit-agent" "$AUDIT_AGENT"
 rm -rf "$PARENT_DIR" "$AUDIT_DIR"
 
 # ─────────────────────────────────────────────
+echo "--- list/get --fields parity across all output modes (#216 follow-up) ---"
+# ─────────────────────────────────────────────
+# The parent_id fix exposed a whole class of bug: IssueSummary is a lossy
+# projection, so any flat Issue field it drops makes `list --fields X` disagree
+# with `get --fields X`. This section pins parity for every flat field across
+# all four list output modes (json, compact, oneline, pretty), and pins the
+# soft-fallback warning for heavyweight detail-only fields list cannot produce.
+
+PARITY_DIR=$(mktemp -d)
+ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR init >/dev/null
+ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR add "Parity epic" -k epic -f json >/dev/null                          # 1
+ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR add "Parity child" --context "child context text" -f json >/dev/null # 2
+ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR add "Parity blocker" -f json >/dev/null                               # 3
+ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR add "Parity closed" -f json >/dev/null                                # 4
+ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR update 2 --parent 1 -f json >/dev/null
+ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR depend 2 --on 3 >/dev/null 2>&1                # 2 blocked_by 3; 3 blocks 2
+ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR close 4 --reason "shipped it" >/dev/null 2>&1  # 4 gets a close_reason
+
+# Helper: pull a field for a given issue id out of a `list --all -f json` payload.
+list_field() { jq_val "$(ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR list --all -f json --fields "id,$1")" "next(i.get('$1') for i in d if i['id'] == $2)"; }
+get_field()  { jq_val "$(ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR get $2 -f json --fields "id,$1")" "d.get('$1')"; }
+
+# JSON parity: list must equal get for every flat field.
+assert_eq "parity JSON context"      "$(get_field context 2)"      "$(list_field context 2)"
+assert_eq "parity JSON parent_id"    "$(get_field parent_id 2)"    "$(list_field parent_id 2)"
+assert_eq "parity JSON blocked_by"   "$(get_field blocked_by 2)"   "$(list_field blocked_by 2)"
+assert_eq "parity JSON blocks"       "$(get_field blocks 3)"       "$(list_field blocks 3)"
+assert_eq "parity JSON close_reason" "$(get_field close_reason 4)" "$(list_field close_reason 4)"
+# Concrete values so a "both empty" false-pass can't hide a regression.
+assert_eq "parity JSON context value"      "child context text" "$(list_field context 2)"
+assert_eq "parity JSON blocks value"       "[2]"                "$(list_field blocks 3)"
+assert_eq "parity JSON close_reason value" "shipped it"         "$(list_field close_reason 4)"
+
+# Compact parity: list must render the same KEY: lines get does.
+CHILD_COMPACT=$(ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR list --all --fields id,context,parent_id,created_at,updated_at 2>&1)
+assert_contains "parity compact context"    "CONTEXT: child context text" "$CHILD_COMPACT"
+assert_contains "parity compact parent"     "PARENT: 1"                   "$CHILD_COMPACT"
+assert_contains "parity compact created_at" "CREATED:"                    "$CHILD_COMPACT"
+assert_contains "parity compact updated_at" "UPDATED:"                    "$CHILD_COMPACT"
+BLOCKER_COMPACT=$(ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR list --all --fields id,blocks 2>&1)
+assert_contains "parity compact blocks"     "BLOCKS:2"                    "$BLOCKER_COMPACT"
+CLOSED_COMPACT=$(ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR list --all --fields id,close_reason 2>&1)
+assert_contains "parity compact close_reason" "CLOSE_REASON: shipped it"  "$CLOSED_COMPACT"
+
+# Oneline parity: requested field must render a non-empty cell (was empty before).
+ONELINE_CTX=$(ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR list --all --format oneline --fields id,context 2>&1 | python3 -c "import sys
+for l in sys.stdin:
+    p=l.rstrip('\n').split('\t')
+    if p and p[0]=='2': print(p[1] if len(p)>1 else '')")
+assert_eq "parity oneline context" "child context text" "$ONELINE_CTX"
+ONELINE_PID=$(ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR list --all --format oneline --fields id,parent_id 2>&1 | python3 -c "import sys
+for l in sys.stdin:
+    p=l.rstrip('\n').split('\t')
+    if p and p[0]=='2': print(p[1] if len(p)>1 else '')")
+assert_eq "parity oneline parent_id" "1" "$ONELINE_PID"
+
+# Pretty parity: requested column must appear in the header (was dropped before).
+PRETTY_OUT=$(ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR list --all -f pretty --fields id,parent_id,context 2>&1)
+assert_contains "parity pretty parent_id col" "Parent" "$PRETTY_OUT"
+assert_contains "parity pretty context col"   "Context" "$PRETTY_OUT"
+
+# Heavyweight detail-only fields: list cannot produce them, but must not
+# silently swallow the request — it warns and points at `get`. (exit 0)
+set +e
+NOTES_STDERR=$(ITR_DB_PATH="$PARITY_DIR/.itr.db" $ITR list --all --fields id,notes 2>&1 1>/dev/null)
+NOTES_EXIT=$?
+set -e
+assert_eq "list --fields notes exits 0" "0" "$NOTES_EXIT"
+assert_contains "list --fields notes warns REVIEW" "REVIEW" "$NOTES_STDERR"
+assert_contains "list --fields notes suggests get" "get" "$NOTES_STDERR"
+# A supported field alongside an unsupported one must not spuriously warn about the supported one.
+assert_contains "list unsupported warn names notes" "notes" "$NOTES_STDERR"
+
+rm -rf "$PARITY_DIR"
+
+# ─────────────────────────────────────────────
 echo "--- import drops events/relations with REVIEW warning ---"
 # ─────────────────────────────────────────────
 

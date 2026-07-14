@@ -47,6 +47,55 @@ fn warn_fields_unsupported(what: &str) {
     }
 }
 
+/// Flat fields a summary list (`list`/`ready`/`next`/`wip`) can produce — the
+/// serializable surface of [`IssueSummary`]. Any *valid* `--fields` value not
+/// listed here is a heavyweight detail-only field (`notes`, `relations`,
+/// `children`, `urgency_breakdown`) or a search-only field the summary cannot
+/// render.
+const LIST_SUMMARY_FIELDS: &[&str] = &[
+    "id",
+    "title",
+    "status",
+    "priority",
+    "kind",
+    "urgency",
+    "is_blocked",
+    "blocked_by",
+    "blocks",
+    "tags",
+    "files",
+    "skills",
+    "acceptance",
+    "context",
+    "parent_id",
+    "close_reason",
+    "assigned_to",
+    "created_at",
+    "updated_at",
+];
+
+/// Warn (never silently drop) when a summary-list `--fields` request names a
+/// valid field the list cannot produce, pointing the caller at `get`. This is
+/// the same "never silently swallow input" contract that #216 enforced for
+/// wrong values, applied to unproducible fields. Unknown (invalid) names are
+/// handled separately by [`validate_fields`].
+fn warn_list_unsupported_fields() {
+    if let Some(fields) = get_fields_filter() {
+        let mut unsupported: Vec<&str> = fields
+            .iter()
+            .map(String::as_str)
+            .filter(|f| VALID_FIELDS.contains(f) && !LIST_SUMMARY_FIELDS.contains(f))
+            .collect();
+        unsupported.dedup();
+        if !unsupported.is_empty() {
+            eprintln!(
+                "REVIEW: field(s) [{}] are not available in list output \u{2014} use `get <id>` for per-issue detail. Emitting the fields the list can produce.",
+                unsupported.join(", ")
+            );
+        }
+    }
+}
+
 /// Returns true if `name` should be included in output.
 /// When no --fields filter is set, all fields are included.
 fn field_enabled(fields: Option<&Vec<String>>, name: &str) -> bool {
@@ -521,6 +570,7 @@ fn format_issue_detail_pretty(d: &IssueDetail) -> String {
 /// assert_eq!(format_issue_list(&[], Format::Compact), "");
 /// ```
 pub fn format_issue_list(issues: &[IssueSummary], fmt: Format) -> String {
+    warn_list_unsupported_fields();
     match fmt {
         Format::Json => apply_fields_filter(&serde_json::to_string(issues).unwrap_or_default()),
         Format::Compact => format_issue_list_compact(issues),
@@ -548,11 +598,22 @@ fn oneline_field_value(i: &IssueSummary, field: &str) -> String {
             .map(std::string::ToString::to_string)
             .collect::<Vec<_>>()
             .join(","),
+        "blocks" => i
+            .blocks
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(","),
         "tags" => escape_line_value(&i.tags.join(",")),
         "files" => escape_line_value(&i.files.join(",")),
         "skills" => escape_line_value(&i.skills.join(",")),
         "title" => escape_line_value(&i.title),
+        "context" => escape_line_value(&i.context),
         "acceptance" => escape_line_value(&i.acceptance),
+        // Empty cell (not "null") when the issue has no parent, keeping the
+        // tab-separated column count stable for scripts.
+        "parent_id" => i.parent_id.map(|p| p.to_string()).unwrap_or_default(),
+        "close_reason" => escape_line_value(&i.close_reason),
         "assigned_to" => escape_line_value(&i.assigned_to),
         "created_at" => i.created_at.clone(),
         "updated_at" => i.updated_at.clone(),
@@ -600,11 +661,14 @@ fn format_issue_list_oneline(issues: &[IssueSummary]) -> String {
         .join("\n")
 }
 
-/// Field names rendered on the first record line of a compact list block,
-/// in default order. The remaining printable fields each get their own line.
-const COMPACT_FIRST_LINE_FIELDS: &[&str] =
+/// Field names rendered on the first record line of a compact list block, in
+/// default order (no `--fields`). The remaining default fields each get their
+/// own line. These are the *token-efficient default* — the full renderable set
+/// is larger (see `COMPACT_FIRST_LINE_CAPABLE`/`COMPACT_LINE_CAPABLE`), so
+/// `--fields` can surface flat fields that the default omits for brevity.
+const COMPACT_FIRST_LINE_DEFAULT: &[&str] =
     &["id", "status", "priority", "kind", "urgency", "blocked_by"];
-const COMPACT_LINE_FIELDS: &[&str] = &[
+const COMPACT_LINE_DEFAULT: &[&str] = &[
     "tags",
     "files",
     "skills",
@@ -613,26 +677,52 @@ const COMPACT_LINE_FIELDS: &[&str] = &[
     "acceptance",
     "parent_id",
 ];
+/// Every flat field the compact renderer can place on the first record line vs
+/// on its own line. A `--fields` request is routed to a tier by membership
+/// here, so parity with `get` holds for any flat field the user asks for.
+const COMPACT_FIRST_LINE_CAPABLE: &[&str] = &[
+    "id",
+    "status",
+    "priority",
+    "kind",
+    "urgency",
+    "blocked_by",
+    "blocks",
+];
+const COMPACT_LINE_CAPABLE: &[&str] = &[
+    "tags",
+    "files",
+    "skills",
+    "assigned_to",
+    "title",
+    "context",
+    "acceptance",
+    "parent_id",
+    "close_reason",
+    "created_at",
+    "updated_at",
+];
 
 fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
     let fields = get_fields_filter();
     // With --fields, honor the requested order within each structural tier
-    // (record line vs per-field lines); without it, keep the default order.
+    // (record line vs per-field lines) over the full capable set; without it,
+    // keep the curated default order.
     let first_line_fields: Vec<&str> = match fields {
         Some(ref fs) => fs
             .iter()
             .map(String::as_str)
-            .filter(|f| COMPACT_FIRST_LINE_FIELDS.contains(f))
+            .filter(|f| COMPACT_FIRST_LINE_CAPABLE.contains(f))
             .collect(),
-        None => COMPACT_FIRST_LINE_FIELDS.to_vec(),
+        None => COMPACT_FIRST_LINE_DEFAULT.to_vec(),
     };
     let line_fields: Vec<&str> = match fields {
         Some(ref fs) => fs
             .iter()
             .map(String::as_str)
-            .filter(|f| COMPACT_LINE_FIELDS.contains(f))
+            .filter(|f| COMPACT_LINE_CAPABLE.contains(f))
             .collect(),
-        None => COMPACT_LINE_FIELDS.to_vec(),
+        None => COMPACT_LINE_DEFAULT.to_vec(),
     };
     issues
         .iter()
@@ -648,6 +738,15 @@ fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
                     "blocked_by" if !i.blocked_by.is_empty() => first_parts.push(format!(
                         "BLOCKED_BY:{}",
                         i.blocked_by
+                            .iter()
+                            .map(std::string::ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    )),
+                    // Mirror of BLOCKED_BY; matches `get`'s first-line BLOCKS:.
+                    "blocks" if !i.blocks.is_empty() => first_parts.push(format!(
+                        "BLOCKS:{}",
+                        i.blocks
                             .iter()
                             .map(std::string::ToString::to_string)
                             .collect::<Vec<_>>()
@@ -672,16 +771,28 @@ fn format_issue_list_compact(issues: &[IssueSummary]) -> String {
                         lines.push(format!("ASSIGNED:{}", escape_line_value(&i.assigned_to)));
                     }
                     "title" => lines.push(format!("TITLE: {}", escape_line_value(&i.title))),
+                    // The following flat fields mirror `get`'s compact lines so
+                    // `list --fields X` reads identically to `get --fields X`.
+                    "context" if !i.context.is_empty() => {
+                        lines.push(format!("CONTEXT: {}", escape_line_value(&i.context)));
+                    }
                     "acceptance" if !i.acceptance.is_empty() => {
                         lines.push(format!("ACCEPTANCE: {}", escape_line_value(&i.acceptance)));
                     }
-                    // Mirror `get`'s compact `PARENT: N` line so both views agree
-                    // (#216). Only rendered when the issue has a parent.
+                    // Only rendered when the issue has a parent (matches `get`).
                     "parent_id" => {
                         if let Some(pid) = i.parent_id {
                             lines.push(format!("PARENT: {pid}"));
                         }
                     }
+                    "close_reason" if !i.close_reason.is_empty() => {
+                        lines.push(format!(
+                            "CLOSE_REASON: {}",
+                            escape_line_value(&i.close_reason)
+                        ));
+                    }
+                    "created_at" => lines.push(format!("CREATED: {}", i.created_at)),
+                    "updated_at" => lines.push(format!("UPDATED: {}", i.updated_at)),
                     _ => {}
                 }
             }
@@ -708,7 +819,11 @@ const PRETTY_LIST_COLS: &[(&str, &str, usize, bool)] = &[
     ("tags", "Tags", 16, false),
     ("files", "Files", 20, false),
     ("skills", "Skills", 12, false),
+    ("context", "Context", 30, false),
     ("acceptance", "Acceptance", 30, false),
+    ("parent_id", "Parent", 6, true),
+    ("blocks", "Blocks", 8, false),
+    ("close_reason", "Close Reason", 20, false),
     ("created_at", "Created", 20, false),
     ("updated_at", "Updated", 20, false),
 ];
@@ -792,7 +907,16 @@ fn format_issue_list_pretty(issues: &[IssueSummary]) -> String {
                     "tags" => truncate_with_ellipsis(&i.tags.join(","), 16),
                     "files" => truncate_with_ellipsis(&i.files.join(","), 20),
                     "skills" => truncate_with_ellipsis(&i.skills.join(","), 12),
+                    "context" => truncate_with_ellipsis(&i.context, 30),
                     "acceptance" => truncate_with_ellipsis(&i.acceptance, 30),
+                    "parent_id" => i.parent_id.map(|p| p.to_string()).unwrap_or_default(),
+                    "blocks" => i
+                        .blocks
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    "close_reason" => truncate_with_ellipsis(&i.close_reason, 20),
                     "created_at" => i.created_at.clone(),
                     "updated_at" => i.updated_at.clone(),
                     _ => String::new(),
@@ -1803,7 +1927,10 @@ mod tests {
             files: vec![],
             skills: vec![],
             acceptance: String::new(),
+            context: String::new(),
             parent_id: None,
+            close_reason: String::new(),
+            blocks: vec![],
             assigned_to: String::new(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
