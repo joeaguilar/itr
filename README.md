@@ -145,6 +145,11 @@ itr stats
   conventions.
 - [Known limitations and roadmap](docs/limitations.md) - intentional constraints,
   compatibility coverage, and future directions.
+- [Rust best practices](docs/rust-best-practices.md) - the ownership, error
+  handling, API design, and tooling reference this codebase is written against.
+- [Design specs](docs/specs/) - historical design records for shipped work
+  ([agent-ergonomics residuals](docs/specs/agent-ergonomics-residuals.md),
+  [control-plane DB addressing](docs/specs/control-plane-db-addressing.md)).
 - [Changelog](CHANGELOG.md) - release history and upgrade notes.
 
 ## Output Formats

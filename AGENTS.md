@@ -114,6 +114,20 @@ This repo uses `itr` itself for project issues. Before filing an issue, search f
 
 Set `ITR_AGENT=<name>` when claiming, noting, or closing work if attribution matters.
 
+## Documentation
+
+Reference docs live in `docs/`. The ones agents reach for most:
+
+- [docs/command-contracts.md](docs/command-contracts.md) - stable command behavior, aliases, output formats, exit rules.
+- [docs/architecture.md](docs/architecture.md) - CLI flow, DB boundaries, formatting, UI server.
+- [docs/schema.md](docs/schema.md) - SQLite tables, migrations, FTS, audit/event behavior.
+- [docs/environment.md](docs/environment.md) - every `ITR_*` variable and `--db` / `ITR_DB_PATH` precedence.
+- [docs/soft_fallbacks.md](docs/soft_fallbacks.md) - inventory of validation points and their recovery behavior.
+- [docs/rust-best-practices.md](docs/rust-best-practices.md) - the Rust reference this codebase is written against (see Style below).
+- [docs/specs/](docs/specs/) - design records for shipped work; historical context, not active plans.
+
+The full list is in [README.md](README.md#documentation).
+
 ## Style
 
 Follow existing Rust style and project constraints:
@@ -123,3 +137,8 @@ Follow existing Rust style and project constraints:
 - Use `rusqlite` with bundled SQLite; avoid system SQLite assumptions.
 - Avoid unrelated refactors while touching command handlers or DB code.
 - Keep generated or embedded assets ASCII unless the surrounding file already requires otherwise.
+
+For broader Rust idiom questions — ownership vs cloning, `thiserror` vs `anyhow`,
+newtypes, collection choice, clippy configuration — see
+[docs/rust-best-practices.md](docs/rust-best-practices.md). Project constraints
+above win where the two disagree.

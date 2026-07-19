@@ -97,3 +97,13 @@ When adding new validation, ask: "Can this recover with a default?" If yes, do t
 ## Dependencies
 
 Minimal: `clap` (derive), `rusqlite` (bundled SQLite), `serde`/`serde_json`, `chrono`, `thiserror`. No async runtime, no Node toolchain, and no desktop/webview framework. The UI server uses the Rust standard library.
+
+## Documentation
+
+Reference docs live in `docs/` — see [AGENTS.md](AGENTS.md#documentation) for the
+agent-facing shortlist and [README.md](README.md#documentation) for the full index.
+
+Two worth calling out:
+
+- [docs/rust-best-practices.md](docs/rust-best-practices.md) — the Rust idiom reference this codebase is written against (ownership, `thiserror` vs `anyhow`, newtypes, collections, clippy config). The project constraints in this file and in AGENTS.md win where the two disagree.
+- [docs/specs/](docs/specs/) — design records for **already-shipped** work. Useful for "why is it built this way", not a source of open tasks. Open work lives in `itr`, not here.
