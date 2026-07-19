@@ -18,3 +18,10 @@ Thumbs.db
 
 # Tooling caches
 .kgr-cache.json
+
+# Agent harness config — machine-specific, do not commit.
+# These hold absolute paths to a local wisphive-hook binary and local
+# permission allowlists; they are per-developer, not project settings.
+.claude/settings.json
+.claude/settings.local.json
+.codex/hooks.json
