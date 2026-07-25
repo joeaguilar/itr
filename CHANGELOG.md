@@ -39,6 +39,26 @@ All notable user-facing changes are recorded here.
 
 ### Release notes
 
+- Added: `itr ui` search pulls up an issue named by number — `42`, `#42`,
+  `id:42`, or `ID=42` in the search box puts that issue in row one (badged
+  `MATCH`) ahead of substring hits, even when the current filters would hide
+  it, and it survives the result limit.
+- Added: `itr ui` table columns are all sortable — click any header to sort,
+  click again to reverse, with the direction arrow driven by `aria-sort`.
+  Sorting runs server-side (`sort=` plus a new `dir=` parameter on
+  `GET /api/issues`) so it orders the whole result set, not just the fetched
+  page.
+- Fixed: `sort=priority` and `sort=status` on the UI API now order
+  semantically (`critical → low`, `in-progress → wontfix`) instead of
+  alphabetically, with issue id ascending as the tiebreak in both directions.
+- Fixed: releases are published draft-first, so
+  `github.com/joeaguilar/itr/releases/latest` — which `install.sh` and
+  `install.ps1` follow to resolve the version — never points at a release
+  whose assets are still uploading. Previously the redirect went live ~3
+  minutes before the last artifact landed, and a `curl … | bash` install in
+  that window failed outright instead of getting the previous version. A
+  failed build target now leaves the release an unpublished draft rather than
+  a half-populated "latest".
 - Added: multi-ID mutating verbs — `close`, `note`, `relate`, and `depend` now
   accept repeated IDs, comma lists, and inclusive `A-B` ranges (e.g.
   `itr close 12,14,17 "fixed"`, `itr relate 124-132 --to 53`) in one

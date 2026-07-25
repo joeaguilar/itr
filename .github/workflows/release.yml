@@ -18,12 +18,22 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # Create the release once, up front. The build matrix only uploads assets:
-  # concurrent matrix jobs racing to create the same release lose with a
-  # validation conflict (bit ccq's v0.1.1, where 2 of 7 uploads failed).
+  # Create the release once, up front, as a DRAFT. The build matrix only
+  # uploads assets: concurrent matrix jobs racing to create the same release
+  # lose with a validation conflict (bit ccq's v0.1.1, where 2 of 7 uploads
+  # failed).
+  #
+  # Draft-first closes the window where a published-but-empty release is
+  # already the "latest" one (#221). GitHub excludes drafts from
+  # /releases/latest, so while the matrix builds — measured at ~3 minutes on
+  # v3.1.0 — that redirect still resolves to the previous COMPLETE release.
+  # install.sh and install.ps1 both derive the version from it, so users
+  # installing mid-build get the previous version instead of a 404.
   create-release:
-    name: Create Release
+    name: Create Draft Release
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.name }}
     steps:
       - name: Resolve release tag
         id: tag
@@ -35,11 +45,12 @@ jobs:
             echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Ensure release exists
+      - name: Ensure draft release exists
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.name }}
           generate_release_notes: true
+          draft: true
 
   build:
     name: ${{ matrix.target }}
@@ -150,7 +161,10 @@ jobs:
           "ASSET=$staging.zip"           | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "CHECKSUM=$staging.zip.sha256" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Upload to release
+      # No `draft:` input here on purpose: action-gh-release carries the
+      # existing release's draft flag forward when updating, so every matrix
+      # target uploads into the draft created above.
+      - name: Upload to draft release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.name }}
@@ -158,3 +172,23 @@ jobs:
             ${{ env.ASSET }}
             ${{ env.CHECKSUM }}
           fail_on_unmatched_files: true
+
+  # The only step that makes a release publicly resolvable. `needs: build`
+  # means one failed target leaves the release an unpublished draft rather
+  # than a half-populated "latest" — /releases/latest keeps pointing at the
+  # last complete release until someone re-runs the workflow for this tag.
+  publish:
+    name: Publish Release
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish draft and mark it latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
+        run: |
+          # --draft=false publishes; --latest sets it as the release
+          # /releases/latest redirects to. Editing the draft flag alone leaves
+          # the generated release notes untouched.
+          gh release edit "$TAG" --draft=false --latest --repo "$GITHUB_REPOSITORY"
+          echo "Published $TAG"
