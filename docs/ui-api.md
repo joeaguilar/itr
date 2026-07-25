@@ -183,7 +183,8 @@ Query parameters:
 | `ready` | Boolean: `1`, `true`, `yes`, or `on`. Excludes blocked and closed issues. |
 | `blocked` | Boolean: only blocked issues. |
 | `all` | Boolean: include closed issues when no status filter is set. |
-| `sort` | `urgency` (default), `created`, `updated`, `id`, or `priority`. |
+| `sort` | Column to sort by: `urgency` (default), `id`, `status`, `priority`, `kind`, `title`, `tags`, `assignee`, `created`, `updated`, or `blocked`. |
+| `dir` | `asc` or `desc`. Omitted (or unrecognized) means each column's natural default. |
 | `limit` | Maximum result count. |
 
 `assigned_to` is matched as an exact string. Passing an empty string
@@ -191,23 +192,35 @@ Query parameters:
 assignee is the empty string" — to find unassigned issues, omit the parameter
 and filter client-side, or use the raw SQL endpoint.
 
-`sort=priority` sorts by the priority string in **ascending alphabetic order**,
-with issue id as a tiebreaker. Because the four priority values do not sort
-into severity order alphabetically, the actual sequence is:
+Unknown `sort` and `dir` values are soft fallbacks: the listing comes back
+sorted by the default (`urgency`, highest first) rather than erroring.
 
-1. `critical`
-2. `high`
-3. `low`
-4. `medium`
+Sorting notes:
 
-This is unrelated to severity — high-severity issues should usually be
-surfaced via the default `sort=urgency`.
+- `priority` and `status` sort **semantically**, not alphabetically:
+  `critical → high → medium → low`, and `in-progress → open → done → wontfix`.
+- `urgency`, `created`, `updated`, and `blocked` default to `desc` (highest /
+  newest / blocked first); every other column defaults to `asc`.
+- Issue id ascending is the tiebreaker in both directions, so rows with equal
+  values keep a stable order instead of flipping with the direction.
+- An empty `assignee` sorts after populated ones in ascending order.
+
+#### Search by issue number
+
+When `q` names an issue by number — `42`, `#42`, `id:42`, or `ID=42`, as the
+first such token anywhere in the query — that issue is placed first in
+`issues` and reported as `pinned_id`. The pin is applied **after** sorting and
+**before** `limit`, and it ignores the other filters: naming a closed issue by
+number surfaces it even though the default listing hides closed issues. If no
+issue has that id, `pinned_id` is `null` and the number is treated as ordinary
+search text.
 
 Response:
 
 ```json
 {
   "total": 1,
+  "pinned_id": null,
   "issues": [
     {
       "$ref": "IssueSummary"

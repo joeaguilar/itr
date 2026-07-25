@@ -5,7 +5,13 @@ const state = {
   current: null,
   selected: new Set(),
   lastBulk: [],
+  sort: { key: "urgency", dir: "desc" },
+  pinnedId: null,
 };
+
+// Columns whose first click should show the biggest/newest first. Mirrors
+// SortKey::default_dir on the server so the arrow always matches the data.
+const DESC_FIRST_SORTS = new Set(["urgency", "updated", "created", "blocked"]);
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -45,6 +51,8 @@ function paramsFromFilters() {
   if ($("#ready").checked) params.set("ready", "true");
   if ($("#blocked").checked) params.set("blocked", "true");
   if ($("#all").checked) params.set("all", "true");
+  params.set("sort", state.sort.key);
+  params.set("dir", state.sort.dir);
   params.set("limit", "500");
   return params.toString();
 }
@@ -92,6 +100,7 @@ async function loadIssues(keepCurrent = true) {
   const query = paramsFromFilters();
   const data = await api(`/api/issues?${query}`);
   state.issues = data.issues;
+  state.pinnedId = data.pinned_id ?? null;
   $("#resultCount").textContent = `${data.total} issue${data.total === 1 ? "" : "s"}`;
   renderRows();
   renderSelection();
@@ -108,9 +117,11 @@ function renderRows() {
     const row = document.createElement("tr");
     row.dataset.id = issue.id;
     if (state.current && state.current.id === issue.id) row.classList.add("active");
+    const pinned = state.pinnedId === issue.id;
+    if (pinned) row.classList.add("pinned");
     row.innerHTML = `
       <td><input type="checkbox" ${state.selected.has(issue.id) ? "checked" : ""}></td>
-      <td>#${issue.id}</td>
+      <td>#${issue.id}${pinned ? ' <span class="pill match" title="Exact ID match for your search">match</span>' : ""}</td>
       <td>${issue.urgency.toFixed(1)}</td>
       <td>${escapeHtml(issue.status)}</td>
       <td>${escapeHtml(issue.priority)}</td>
@@ -131,6 +142,36 @@ function renderRows() {
       selectIssue(issue.id).catch((error) => toast(error.message));
     });
     rows.append(row);
+  }
+}
+
+function wireSorting() {
+  for (const header of document.querySelectorAll("th.sortable")) {
+    const activate = () => {
+      const key = header.dataset.sort;
+      if (state.sort.key === key) {
+        state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
+      } else {
+        state.sort = { key, dir: DESC_FIRST_SORTS.has(key) ? "desc" : "asc" };
+      }
+      renderSortIndicators();
+      loadIssues(false).catch((error) => toast(error.message));
+    };
+    header.addEventListener("click", activate);
+    header.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        activate();
+      }
+    });
+  }
+  renderSortIndicators();
+}
+
+function renderSortIndicators() {
+  for (const header of document.querySelectorAll("th.sortable")) {
+    const active = header.dataset.sort === state.sort.key;
+    header.setAttribute("aria-sort", active ? (state.sort.dir === "asc" ? "ascending" : "descending") : "none");
   }
 }
 
@@ -522,6 +563,7 @@ async function init() {
     await loadBootstrap();
     wireDetailAutosave();
     wireActions();
+    wireSorting();
     await loadIssues(false);
   } catch (error) {
     toast(error.message);

@@ -512,10 +512,11 @@ fn route_request(
                     "missing": missing,
                 }))
             } else {
-                let issues = list_issue_summaries(conn, &request.query)?;
+                let listing = list_issue_summaries(conn, &request.query)?;
                 json_response(json!({
-                    "total": issues.len(),
-                    "issues": issues,
+                    "total": listing.issues.len(),
+                    "issues": listing.issues,
+                    "pinned_id": listing.pinned_id,
                 }))
             }
         }
@@ -1123,18 +1124,38 @@ fn resolve_issue(
     }))
 }
 
+/// Result of a UI issue listing. `pinned_id` is the issue the search box named
+/// by number (#217) and that was hoisted to the front of `issues`; the client
+/// uses it to badge that row as the exact match.
+struct IssueListing {
+    issues: Vec<IssueSummary>,
+    pinned_id: Option<i64>,
+}
+
 fn list_issue_summaries(
     conn: &Connection,
     query: &HashMap<String, String>,
-) -> Result<Vec<IssueSummary>, ItrError> {
+) -> Result<IssueListing, ItrError> {
     let config = UrgencyConfig::load(conn);
     let all = query_bool(query, "all");
     let ready = query_bool(query, "ready");
     let blocked_only = query_bool(query, "blocked");
-    let terms: Vec<String> = query
-        .get("q")
-        .map(|q| q.split_whitespace().map(str::to_lowercase).collect())
-        .unwrap_or_default();
+    let raw_query = query.get("q").map_or("", String::as_str);
+    let terms: Vec<String> = raw_query
+        .split_whitespace()
+        .map(str::to_lowercase)
+        .collect();
+    // #217: a search that names an issue by number pulls that issue up, even
+    // when the text filter or the default open/in-progress filter would drop
+    // it. Looked up once here so a missing issue simply leaves `pinned` None.
+    let pinned = match search_id_token(raw_query) {
+        Some(id) => match db::get_issue(conn, id) {
+            Ok(issue) => Some(issue),
+            Err(ItrError::NotFound(_)) => None,
+            Err(err) => return Err(err),
+        },
+        None => None,
+    };
     let statuses = query_list(query, "status");
     let priorities = query_list(query, "priority");
     let kinds = query_list(query, "kind");
@@ -1184,18 +1205,175 @@ fn list_issue_summaries(
         summaries.push(build_issue_summary(conn, &issue, &config));
     }
 
-    match query.get("sort").map_or("urgency", String::as_str) {
-        "created" => summaries.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
-        "updated" => summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
-        "id" => summaries.sort_by(|a, b| a.id.cmp(&b.id)),
-        "priority" => summaries.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.id.cmp(&b.id))),
-        _ => sort_by_urgency_desc(&mut summaries),
-    }
+    let sort_key = SortKey::parse(query.get("sort").map_or("", String::as_str));
+    let direction = SortDir::parse(query.get("dir").map_or("", String::as_str))
+        .unwrap_or_else(|| sort_key.default_dir());
+    sort_summaries(&mut summaries, sort_key, direction);
+
+    // Pin after sorting and before truncation so the exact-ID match is row one
+    // and survives the limit no matter how large the result set is.
+    let pinned_id = pinned.map(|issue| {
+        summaries.retain(|summary| summary.id != issue.id);
+        summaries.insert(0, build_issue_summary(conn, &issue, &config));
+        issue.id
+    });
 
     if let Some(limit) = query.get("limit").and_then(|v| v.parse::<usize>().ok()) {
         summaries.truncate(limit);
     }
-    Ok(summaries)
+    Ok(IssueListing {
+        issues: summaries,
+        pinned_id,
+    })
+}
+
+/// Pull an explicit issue number out of a free-text search query (#217).
+/// Accepts a bare `42` as well as the `#42` / `id:42` / `ID=42` forms agents
+/// and humans type. Only the first such token counts; anything non-numeric is
+/// left to the normal substring search.
+fn search_id_token(query: &str) -> Option<i64> {
+    query.split_whitespace().find_map(|token| {
+        let token = token.to_lowercase();
+        let digits = token
+            .strip_prefix("id:")
+            .or_else(|| token.strip_prefix("id="))
+            .unwrap_or(&token);
+        digits
+            .strip_prefix('#')
+            .unwrap_or(digits)
+            .parse::<i64>()
+            .ok()
+            .filter(|id| *id > 0)
+    })
+}
+
+/// Column the UI table is sorted by (#218). Every displayed column is
+/// sortable; unknown keys fall back to urgency rather than erroring, per the
+/// project's soft-fallback rule.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SortKey {
+    Id,
+    Urgency,
+    Status,
+    Priority,
+    Kind,
+    Title,
+    Tags,
+    Assignee,
+    Created,
+    Updated,
+    Blocked,
+}
+
+impl SortKey {
+    fn parse(value: &str) -> Self {
+        match value.trim().to_lowercase().as_str() {
+            "id" => Self::Id,
+            "status" => Self::Status,
+            "priority" | "pri" => Self::Priority,
+            "kind" | "type" => Self::Kind,
+            "title" => Self::Title,
+            "tags" | "tag" => Self::Tags,
+            "assignee" | "assigned_to" => Self::Assignee,
+            "created" | "created_at" => Self::Created,
+            "updated" | "updated_at" => Self::Updated,
+            "blocked" | "is_blocked" => Self::Blocked,
+            _ => Self::Urgency,
+        }
+    }
+
+    /// Direction a first click on this column should use: newest/highest first
+    /// for scores, dates and flags, A-Z for text.
+    fn default_dir(self) -> SortDir {
+        match self {
+            Self::Urgency | Self::Created | Self::Updated | Self::Blocked => SortDir::Desc,
+            _ => SortDir::Asc,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SortDir {
+    Asc,
+    Desc,
+}
+
+impl SortDir {
+    fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_lowercase().as_str() {
+            "asc" | "ascending" => Some(Self::Asc),
+            "desc" | "descending" => Some(Self::Desc),
+            _ => None,
+        }
+    }
+}
+
+fn sort_summaries(summaries: &mut [IssueSummary], key: SortKey, dir: SortDir) {
+    if key == SortKey::Urgency && dir == SortDir::Desc {
+        sort_by_urgency_desc(summaries);
+        return;
+    }
+    summaries.sort_by(|a, b| {
+        let ordering = compare_summaries(a, b, key);
+        let ordering = if dir == SortDir::Desc {
+            ordering.reverse()
+        } else {
+            ordering
+        };
+        // Ascending id is the tiebreak in both directions so equal rows keep a
+        // stable, predictable order instead of flipping with the arrow.
+        ordering.then(a.id.cmp(&b.id))
+    });
+}
+
+fn compare_summaries(a: &IssueSummary, b: &IssueSummary, key: SortKey) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match key {
+        SortKey::Id => a.id.cmp(&b.id),
+        SortKey::Urgency => a.urgency.partial_cmp(&b.urgency).unwrap_or(Ordering::Equal),
+        SortKey::Status => status_rank(&a.status).cmp(&status_rank(&b.status)),
+        SortKey::Priority => priority_rank(&a.priority).cmp(&priority_rank(&b.priority)),
+        SortKey::Kind => text_key(&a.kind).cmp(&text_key(&b.kind)),
+        SortKey::Title => text_key(&a.title).cmp(&text_key(&b.title)),
+        SortKey::Tags => text_key(&a.tags.join(",")).cmp(&text_key(&b.tags.join(","))),
+        SortKey::Assignee => blank_last(&a.assigned_to).cmp(&blank_last(&b.assigned_to)),
+        SortKey::Created => a.created_at.cmp(&b.created_at),
+        SortKey::Updated => a.updated_at.cmp(&b.updated_at),
+        SortKey::Blocked => a.is_blocked.cmp(&b.is_blocked),
+    }
+}
+
+/// Lifecycle order, not alphabetical: what an agent is working on first, what
+/// is abandoned last.
+fn status_rank(status: &str) -> u8 {
+    match status {
+        "in-progress" => 0,
+        "open" => 1,
+        "done" => 2,
+        "wontfix" => 3,
+        _ => 4,
+    }
+}
+
+/// Severity order, not alphabetical (which would put `low` before `medium`).
+fn priority_rank(priority: &str) -> u8 {
+    match priority {
+        "critical" => 0,
+        "high" => 1,
+        "medium" => 2,
+        "low" => 3,
+        _ => 4,
+    }
+}
+
+fn text_key(value: &str) -> String {
+    value.to_lowercase()
+}
+
+/// Sort empty values after populated ones in ascending order, so "unassigned"
+/// does not crowd out the rows the user clicked the column to see.
+fn blank_last(value: &str) -> (bool, String) {
+    (value.trim().is_empty(), value.to_lowercase())
 }
 
 /// Resolve a comma-separated `ids` query value into full issue details
@@ -2005,5 +2183,263 @@ mod tests {
         );
         let health = health_check(addr);
         assert!(health.starts_with("HTTP/1.1 200"));
+    }
+
+    // --- Search-by-ID pinning (#217) and column sorting (#218) ---
+
+    fn query_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect()
+    }
+
+    fn listed_ids(conn: &Connection, pairs: &[(&str, &str)]) -> Vec<i64> {
+        list_issue_summaries(conn, &query_map(pairs))
+            .expect("list issues")
+            .issues
+            .iter()
+            .map(|issue| issue.id)
+            .collect()
+    }
+
+    #[test]
+    fn search_id_token_recognizes_common_forms() {
+        assert_eq!(search_id_token("42"), Some(42));
+        assert_eq!(search_id_token("#42"), Some(42));
+        assert_eq!(search_id_token("id:42"), Some(42));
+        assert_eq!(search_id_token("ID=42"), Some(42));
+        assert_eq!(search_id_token("crash in #42 login"), Some(42));
+        assert_eq!(search_id_token("login crash"), None);
+        assert_eq!(search_id_token("v2.1"), None);
+        assert_eq!(search_id_token("0"), None);
+        assert_eq!(search_id_token("-3"), None);
+        assert_eq!(search_id_token(""), None);
+    }
+
+    #[test]
+    fn search_by_number_pins_that_issue_first() {
+        let conn = test_db();
+        let first = insert_test_issue(&conn, "unrelated");
+        let target = insert_test_issue(&conn, "target issue");
+        let mentions = insert_test_issue(&conn, &format!("mentions {} in the title", target));
+
+        let ids = listed_ids(&conn, &[("q", &target.to_string())]);
+        assert_eq!(
+            ids.first(),
+            Some(&target),
+            "exact ID match must be row one, got {:?}",
+            ids
+        );
+        assert!(
+            ids.contains(&mentions),
+            "substring matches must still be listed, got {:?}",
+            ids
+        );
+        assert!(
+            !ids.contains(&first),
+            "non-matching issues must stay filtered out, got {:?}",
+            ids
+        );
+    }
+
+    #[test]
+    fn search_by_number_pins_issue_the_filters_would_hide() {
+        let conn = test_db();
+        let target = insert_test_issue(&conn, "already finished");
+        patch_issue(&conn, target, &json!({ "status": "done" })).expect("close issue");
+
+        // Default listing hides done issues...
+        assert!(!listed_ids(&conn, &[]).contains(&target));
+
+        // ...but naming it by number pulls it up anyway.
+        let listing = list_issue_summaries(&conn, &query_map(&[("q", &target.to_string())]))
+            .expect("list issues");
+        assert_eq!(listing.pinned_id, Some(target));
+        assert_eq!(
+            listing.issues.first().map(|issue| issue.id),
+            Some(target),
+            "pinned issue must be first even when filtered out"
+        );
+    }
+
+    #[test]
+    fn pinned_issue_survives_the_result_limit() {
+        let conn = test_db();
+        let mut last = 0;
+        for index in 0..5 {
+            last = insert_test_issue(&conn, &format!("issue {}", index));
+        }
+        let ids = listed_ids(&conn, &[("q", &last.to_string()), ("limit", "1")]);
+        assert_eq!(ids, vec![last], "limit must not truncate the pinned row");
+    }
+
+    #[test]
+    fn unknown_search_number_leaves_the_listing_alone() {
+        let conn = test_db();
+        insert_test_issue(&conn, "issue 999 mentioned here");
+        let listing =
+            list_issue_summaries(&conn, &query_map(&[("q", "999")])).expect("list issues");
+        assert_eq!(listing.pinned_id, None, "no such issue -> nothing pinned");
+        assert_eq!(listing.issues.len(), 1, "substring match still applies");
+    }
+
+    #[test]
+    fn priority_sorts_by_severity_not_alphabetically() {
+        let conn = test_db();
+        let mut by_priority = HashMap::new();
+        for priority in ["low", "critical", "medium", "high"] {
+            let id = insert_test_issue(&conn, priority);
+            patch_issue(&conn, id, &json!({ "priority": priority })).expect("set priority");
+            by_priority.insert(priority, id);
+        }
+        let ids = listed_ids(&conn, &[("sort", "priority"), ("dir", "asc")]);
+        assert_eq!(
+            ids,
+            vec![
+                by_priority["critical"],
+                by_priority["high"],
+                by_priority["medium"],
+                by_priority["low"],
+            ],
+            "ascending priority must run critical -> low, not alphabetical"
+        );
+
+        let reversed = listed_ids(&conn, &[("sort", "priority"), ("dir", "desc")]);
+        assert_eq!(
+            reversed,
+            vec![
+                by_priority["low"],
+                by_priority["medium"],
+                by_priority["high"],
+                by_priority["critical"],
+            ],
+            "descending priority must mirror ascending"
+        );
+    }
+
+    #[test]
+    fn every_column_sorts_in_both_directions() {
+        let conn = test_db();
+        let alpha = insert_test_issue(&conn, "alpha");
+        let zulu = insert_test_issue(&conn, "zulu");
+        patch_issue(
+            &conn,
+            alpha,
+            &json!({ "kind": "feature", "tags": ["z-tag"] }),
+        )
+        .expect("patch alpha");
+        patch_issue(&conn, zulu, &json!({ "kind": "bug", "tags": ["a-tag"] })).expect("patch zulu");
+
+        for (key, ascending) in [
+            ("id", vec![alpha, zulu]),
+            ("title", vec![alpha, zulu]),
+            ("kind", vec![zulu, alpha]),
+            ("tags", vec![zulu, alpha]),
+            ("urgency", vec![alpha, zulu]),
+        ] {
+            let asc = listed_ids(&conn, &[("sort", key), ("dir", "asc")]);
+            assert_eq!(asc, ascending, "ascending sort by {} wrong", key);
+            let mut expected_desc = ascending.clone();
+            expected_desc.reverse();
+            let desc = listed_ids(&conn, &[("sort", key), ("dir", "desc")]);
+            assert_eq!(desc, expected_desc, "descending sort by {} wrong", key);
+        }
+    }
+
+    /// Timestamps are second-resolution, so two issues touched in the same
+    /// test tick tie. Backdate one row to get a real ordering.
+    #[test]
+    fn date_columns_sort_in_both_directions() {
+        let conn = test_db();
+        let stale = insert_test_issue(&conn, "stale");
+        let fresh = insert_test_issue(&conn, "fresh");
+        // trg_issues_updated_at re-stamps updated_at on every UPDATE, so the
+        // backdate below only sticks with the trigger out of the way.
+        conn.execute_batch("DROP TRIGGER trg_issues_updated_at")
+            .expect("drop updated_at trigger");
+        conn.execute(
+            "UPDATE issues SET created_at = '2020-01-01T00:00:00Z', updated_at = '2020-01-02T00:00:00Z' WHERE id = ?1",
+            [stale],
+        )
+        .expect("backdate stale issue");
+
+        for key in ["updated", "created"] {
+            assert_eq!(
+                listed_ids(&conn, &[("sort", key), ("dir", "asc")]),
+                vec![stale, fresh],
+                "ascending {} must run oldest first",
+                key
+            );
+            assert_eq!(
+                listed_ids(&conn, &[("sort", key), ("dir", "desc")]),
+                vec![fresh, stale],
+                "descending {} must run newest first",
+                key
+            );
+        }
+    }
+
+    #[test]
+    fn status_sorts_by_lifecycle_and_ties_break_on_id() {
+        let conn = test_db();
+        let open_first = insert_test_issue(&conn, "open one");
+        let open_second = insert_test_issue(&conn, "open two");
+        let working = insert_test_issue(&conn, "working");
+        let finished = insert_test_issue(&conn, "finished");
+        patch_issue(&conn, working, &json!({ "status": "in-progress" })).expect("start");
+        patch_issue(&conn, finished, &json!({ "status": "done" })).expect("finish");
+
+        let ids = listed_ids(
+            &conn,
+            &[("sort", "status"), ("dir", "asc"), ("all", "true")],
+        );
+        assert_eq!(
+            ids,
+            vec![working, open_first, open_second, finished],
+            "status must sort by lifecycle, with equal statuses tied on id"
+        );
+
+        // Reversing the arrow reverses the column, but equal rows keep their
+        // ascending-id order rather than flipping with it.
+        let reversed = listed_ids(
+            &conn,
+            &[("sort", "status"), ("dir", "desc"), ("all", "true")],
+        );
+        assert_eq!(
+            reversed,
+            vec![finished, open_first, open_second, working],
+            "ties must stay id-ascending in both directions"
+        );
+    }
+
+    #[test]
+    fn sort_falls_back_to_urgency_for_unknown_keys() {
+        let conn = test_db();
+        let low = insert_test_issue(&conn, "low");
+        let critical = insert_test_issue(&conn, "critical");
+        patch_issue(&conn, low, &json!({ "priority": "low" })).expect("set low");
+        patch_issue(&conn, critical, &json!({ "priority": "critical" })).expect("set critical");
+
+        // Unknown sort key and unknown direction both soft-fall-back to the
+        // default listing order (urgency, highest first) instead of erroring.
+        let ids = listed_ids(&conn, &[("sort", "bogus"), ("dir", "sideways")]);
+        assert_eq!(ids, vec![critical, low]);
+        assert_eq!(listed_ids(&conn, &[]), vec![critical, low]);
+    }
+
+    #[test]
+    fn assignee_sort_puts_unassigned_last() {
+        let conn = test_db();
+        let unassigned = insert_test_issue(&conn, "nobody");
+        let assigned = insert_test_issue(&conn, "somebody");
+        patch_issue(&conn, assigned, &json!({ "assigned_to": "zoe" })).expect("assign");
+
+        let ids = listed_ids(&conn, &[("sort", "assignee"), ("dir", "asc")]);
+        assert_eq!(
+            ids,
+            vec![assigned, unassigned],
+            "blank assignee must sort after real ones"
+        );
     }
 }

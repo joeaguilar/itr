@@ -272,8 +272,49 @@ th {
   text-transform: uppercase;
 }
 
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+th.sortable:hover,
+th.sortable:focus-visible {
+  color: #2b3a29;
+  background: #e2e8dc;
+}
+
+/* Direction arrow is driven by aria-sort so the accessible state and the
+   visible state can never disagree. */
+th.sortable::after {
+  content: " \2195";
+  opacity: 0.25;
+}
+
+th.sortable[aria-sort="ascending"]::after {
+  content: " \25B2";
+  opacity: 1;
+}
+
+th.sortable[aria-sort="descending"]::after {
+  content: " \25BC";
+  opacity: 1;
+}
+
 tr {
   cursor: pointer;
+}
+
+tr.pinned td {
+  background: #f3f7ec;
+  box-shadow: inset 3px 0 0 #7f9c63;
+}
+
+.pill.match {
+  background: #7f9c63;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 tr:hover td,
