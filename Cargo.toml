@@ -5,7 +5,7 @@ name = "itr"
 # release versions come from `git describe` via build.rs; this field is the
 # fallback for source builds without git metadata and what cargo itself reports
 # ("Compiling itr vX.Y.Z", `cargo install --list`). See CHANGELOG.md "Versioning".
-version = "3.0.1"
+version = "3.0.2"
 edition = "2021"
 description = "Agent-first issue tracker CLI"
 license = "MIT"
