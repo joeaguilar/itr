@@ -1,0 +1,57 @@
+name: Installer
+
+# Deliberately narrow, because this is the only Windows job in the repo and it
+# downloads a real release on every run:
+#   - paths filter, so it fires only when the installer itself changes
+#   - pull_request only (no push), so a merge does not re-run what the PR just
+#     proved; use the manual trigger if you need it on a branch
+#   - one job running both shells as steps, not a two-leg matrix, so a single
+#     runner does the work instead of two
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'install.ps1'
+      - '.github/installer-smoke.ps1'
+      - '.github/workflows/installer.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Installer Smoke
+    # windows-latest ships both shells: `powershell` is Windows PowerShell 5.1,
+    # `pwsh` is PowerShell 7.x. No setup step needed for either.
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      # Cheapest check here and the highest value: Windows PowerShell 5.1
+      # decodes a BOM-less UTF-8 script as CP1252, and a decoded U+201D counts
+      # as a string delimiter, which has silently broken this installer before.
+      # A parse check does NOT catch it -- the parser decodes UTF-8 correctly,
+      # so the damage only appears when 5.1 executes the file.
+      - name: install.ps1 is ASCII-only
+        shell: powershell
+        run: |
+          $bad = @([IO.File]::ReadAllBytes('install.ps1') | Where-Object { $_ -gt 127 })
+          if ($bad.Count) {
+            Write-Host "::error file=install.ps1::Found $($bad.Count) non-ASCII byte(s). Windows PowerShell 5.1 decodes this file as CP1252, where a decoded U+201D terminates a string and breaks parsing. Use ASCII equivalents."
+            exit 1
+          }
+          Write-Host 'install.ps1 is ASCII-only'
+
+      - name: Windows PowerShell 5.1
+        shell: powershell
+        run: .\.github\installer-smoke.ps1 -Tool itr
+
+      - name: PowerShell 7
+        shell: pwsh
+        run: .\.github\installer-smoke.ps1 -Tool itr
