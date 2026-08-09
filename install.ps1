@@ -67,6 +67,78 @@ function Write-Ok      { param([string]$m) Write-Host "+ $m" -ForegroundColor Gr
 function Write-Warn    { param([string]$m) Write-Host "! $m" -ForegroundColor Yellow }
 function Write-Err     { param([string]$m) Write-Host "x $m" -ForegroundColor Red }
 
+function Get-ItrPowerShellRuntime {
+    $major = [int]$PSVersionTable.PSVersion.Major
+    $minor = [int]$PSVersionTable.PSVersion.Minor
+    if ($major -lt 5 -or ($major -eq 5 -and $minor -lt 1)) {
+        throw "PowerShell 5.1 or newer is required. Current version: $($PSVersionTable.PSVersion)"
+    }
+    if ($major -ge 7) {
+        return 'powershell-7'
+    }
+    return 'windows-powershell-5.1'
+}
+
+function Initialize-ItrPowerShellRuntime {
+    param([string]$Runtime)
+    if ($Runtime -eq 'windows-powershell-5.1') {
+        # Windows PowerShell 5.1 can default to older TLS settings on some hosts.
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    }
+}
+
+function Invoke-ItrWebRequestWindowsPowerShell51 {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [string]$OutFile,
+        [int]$MaximumRedirection = -1,
+        [switch]$AllowHttpErrorStatus
+    )
+    $params = @{
+        Uri = $Uri
+        UseBasicParsing = $true
+        ErrorAction = if ($AllowHttpErrorStatus) { 'SilentlyContinue' } else { 'Stop' }
+    }
+    if ($OutFile) { $params.OutFile = $OutFile }
+    if ($MaximumRedirection -ge 0) { $params.MaximumRedirection = $MaximumRedirection }
+    return Invoke-WebRequest @params
+}
+
+function Invoke-ItrWebRequestPowerShell7 {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [string]$OutFile,
+        [int]$MaximumRedirection = -1,
+        [switch]$AllowHttpErrorStatus
+    )
+    $params = @{
+        Uri = $Uri
+        ErrorAction = if ($AllowHttpErrorStatus) { 'SilentlyContinue' } else { 'Stop' }
+    }
+    if ($OutFile) { $params.OutFile = $OutFile }
+    if ($MaximumRedirection -ge 0) { $params.MaximumRedirection = $MaximumRedirection }
+    return Invoke-WebRequest @params
+}
+
+function Invoke-ItrWebRequest {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [string]$OutFile,
+        [int]$MaximumRedirection = -1,
+        [switch]$AllowHttpErrorStatus
+    )
+    $params = @{
+        Uri = $Uri
+        MaximumRedirection = $MaximumRedirection
+        AllowHttpErrorStatus = $AllowHttpErrorStatus
+    }
+    if ($OutFile) { $params.OutFile = $OutFile }
+    if ($script:ItrPowerShellRuntime -eq 'powershell-7') {
+        return Invoke-ItrWebRequestPowerShell7 @params
+    }
+    return Invoke-ItrWebRequestWindowsPowerShell51 @params
+}
+
 function Get-Target {
     $arch = $env:PROCESSOR_ARCHITECTURE
     if (-not $arch) { $arch = (Get-CimInstance Win32_Processor).Architecture }
@@ -83,19 +155,46 @@ function Resolve-LatestTag {
     param([string]$Repo)
     # Follow the /releases/latest redirect to avoid the API rate limit.
     $url = "https://github.com/$Repo/releases/latest"
-    $resp = Invoke-WebRequest -Uri $url -MaximumRedirection 0 -ErrorAction SilentlyContinue
     $tag = $null
-    if ($resp.StatusCode -ne 302 -and $resp.StatusCode -ne 301) {
-        # PowerShell 7 may have followed the redirect; pull from the final URI.
-        if ($resp.BaseResponse.RequestMessage.RequestUri) {
-            $final = $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
-            $tag = ($final -split '/')[-1]
-        } else {
+
+    # HttpWebRequest with redirects disabled is the one mechanism that behaves
+    # identically on Windows PowerShell 5.1 and PowerShell 7+. Invoke-WebRequest
+    # cannot cover both here: 5.1 needs -UseBasicParsing to avoid the IE parser,
+    # while 7+ throws "Response status code does not indicate success: 302
+    # (Found)" on -MaximumRedirection 0 unless given -SkipHttpErrorCheck -- a
+    # parameter that does not exist on 5.1. -ErrorAction does not suppress it.
+    try {
+        $req = [System.Net.HttpWebRequest]::Create($url)
+        $req.AllowAutoRedirect = $false
+        $req.UserAgent = 'itr-installer'
+        $resp = $req.GetResponse()
+        try {
+            $location = $resp.Headers['Location']
+            if ($location) { $tag = ($location -split '/')[-1] }
+        } finally {
+            $resp.Close()
+        }
+    } catch {
+        $tag = $null
+    }
+
+    # Fallback: follow the redirect and read the final URI. BaseResponse is an
+    # HttpWebResponse on 5.1 (ResponseUri) but an HttpResponseMessage on 7+
+    # (RequestMessage.RequestUri), so probe for both rather than assuming.
+    if (-not $tag) {
+        $resp = Invoke-ItrWebRequest -Uri $url
+        $requestUri = $null
+        if ($resp.BaseResponse) {
+            if ($resp.BaseResponse | Get-Member -Name RequestMessage -MemberType Property) {
+                $requestUri = $resp.BaseResponse.RequestMessage.RequestUri
+            } elseif ($resp.BaseResponse | Get-Member -Name ResponseUri -MemberType Property) {
+                $requestUri = $resp.BaseResponse.ResponseUri
+            }
+        }
+        if (-not $requestUri) {
             throw "Could not resolve latest release tag from $url"
         }
-    } else {
-        $location = $resp.Headers.Location
-        $tag = ($location -split '/')[-1]
+        $tag = ($requestUri.AbsoluteUri -split '/')[-1]
     }
     # When a repo has no published releases, GitHub redirects /releases/latest
     # to /releases, so the last URL segment is the literal string "releases"
@@ -107,23 +206,41 @@ function Resolve-LatestTag {
     return $tag
 }
 
-function Add-ToUserPath {
-    param([string]$Dir)
-    $current = [Environment]::GetEnvironmentVariable('Path', 'User')
-    if (-not $current) { $current = '' }
-    $parts = $current -split ';' | Where-Object { $_ -ne '' }
-    if ($parts -contains $Dir) { return $false }
-    $new = (@($Dir) + $parts) -join ';'
-    [Environment]::SetEnvironmentVariable('Path', $new, 'User')
-    # Make it visible to the current session too.
-    $env:Path = "$Dir;$env:Path"
-    return $true
+function Get-PathEntries {
+    param([string]$Scope)
+    $v = [Environment]::GetEnvironmentVariable('Path', $Scope)
+    if (-not $v) { return @() }
+    return @($v -split ';' | Where-Object { $_ -ne '' })
 }
 
-function Test-InPath {
+# Compare against both User and Machine PATH so a directory already on the
+# system PATH is never duplicated into the user scope. Entries are matched
+# case-insensitively and ignoring a trailing separator.
+function Test-OnPersistentPath {
     param([string]$Dir)
-    $parts = $env:Path -split ';' | Where-Object { $_ -ne '' }
-    return ($parts -contains $Dir)
+    $target = $Dir.TrimEnd('\')
+    foreach ($e in (@(Get-PathEntries 'User') + @(Get-PathEntries 'Machine'))) {
+        if ($e.TrimEnd('\') -ieq $target) { return $true }
+    }
+    return $false
+}
+
+# Make itr resolvable for the rest of this session as well.
+function Add-ToSessionPath {
+    param([string]$Dir)
+    $target = $Dir.TrimEnd('\')
+    foreach ($e in ($env:Path -split ';' | Where-Object { $_ -ne '' })) {
+        if ($e.TrimEnd('\') -ieq $target) { return }
+    }
+    $env:Path = "$Dir;$env:Path"
+}
+
+function Add-ToUserPath {
+    param([string]$Dir)
+    if (Test-OnPersistentPath $Dir) { return $false }
+    [Environment]::SetEnvironmentVariable(
+        'Path', ((@($Dir) + (Get-PathEntries 'User')) -join ';'), 'User')
+    return $true
 }
 
 function Get-ExistingItrPath {
@@ -195,10 +312,14 @@ if ($Action) {
 # ---- Main ------------------------------------------------------------------
 
 Write-Host ''
+$script:ItrPowerShellRuntime = Get-ItrPowerShellRuntime
+Initialize-ItrPowerShellRuntime -Runtime $script:ItrPowerShellRuntime
+Write-Info "PowerShell runtime: $script:ItrPowerShellRuntime ($($PSVersionTable.PSVersion))"
+
 if ($ActionMode -eq 'update') {
-    Write-Info 'Updating itr — the zero-config issue tracker CLI'
+    Write-Info 'Updating itr - the zero-config issue tracker CLI'
 } else {
-    Write-Info 'Installing itr — the zero-config issue tracker CLI'
+    Write-Info 'Installing itr - the zero-config issue tracker CLI'
 }
 Write-Host ''
 
@@ -221,7 +342,7 @@ if (-not $InstallDir) {
     if ($existingItr) {
         $InstallDir = Split-Path -Parent $existingItr
         if ($ActionMode -eq 'install') {
-            Write-Info "Existing itr.exe found on PATH — installing alongside it at $InstallDir"
+            Write-Info "Existing itr.exe found on PATH - installing alongside it at $InstallDir"
         }
     } else {
         $InstallDir = Join-Path $env:LOCALAPPDATA 'Programs\itr'
@@ -236,16 +357,23 @@ $sumUrl    = "$zipUrl.sha256"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 
+# Rendering the progress bar throttles Invoke-WebRequest badly on Windows
+# PowerShell 5.1, so suppress it for the transfer. The caller's value is
+# restored below: `iwr | iex` runs this in the user's own session, and leaving
+# progress disabled there would be a surprising side effect.
+$prevProgress = $ProgressPreference
+$ProgressPreference = 'SilentlyContinue'
+
 try {
     $zipPath = Join-Path $tmp "$assetBase.zip"
     $sumPath = Join-Path $tmp "$assetBase.zip.sha256"
 
     Write-Info "Downloading $assetBase.zip"
-    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+    Invoke-ItrWebRequest -Uri $zipUrl -OutFile $zipPath
 
     $hasChecksum = $true
     try {
-        Invoke-WebRequest -Uri $sumUrl -OutFile $sumPath -UseBasicParsing -ErrorAction Stop
+        Invoke-ItrWebRequest -Uri $sumUrl -OutFile $sumPath
     } catch {
         $statusCode = $null
         if ($_.Exception.Response -and $_.Exception.Response.StatusCode) {
@@ -253,7 +381,7 @@ try {
         }
         if ($statusCode -eq 404) {
             $hasChecksum = $false
-            Write-Warn "Checksum file not available (HTTP 404) — skipping verification."
+            Write-Warn "Checksum file not available (HTTP 404) - skipping verification."
         } else {
             throw
         }
@@ -268,7 +396,7 @@ try {
         Write-Ok 'Checksum verified.'
     }
 
-    Write-Info 'Extracting…'
+    Write-Info 'Extracting...'
     Expand-Archive -Path $zipPath -DestinationPath $tmp -Force
 
     $binSrc = Join-Path $tmp "$assetBase\itr.exe"
@@ -296,18 +424,15 @@ try {
         Write-Ok "Installed $binDst"
     }
 
-    if (-not (Test-InPath $InstallDir)) {
-        $added = Add-ToUserPath -Dir $InstallDir
-        if ($added) {
-            Write-Ok "Added $InstallDir to your User PATH (restart your shell to pick it up)."
-        } else {
-            Write-Warn "$InstallDir is not in PATH; add it manually if needed."
-        }
+    if (Add-ToUserPath -Dir $InstallDir) {
+        Write-Ok "Added $InstallDir to your User PATH (restart your shell to pick it up)."
     }
+    Add-ToSessionPath -Dir $InstallDir
 
     Write-Host ''
     try { & $binDst --version } catch { }
 } finally {
+    $ProgressPreference = $prevProgress
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 
