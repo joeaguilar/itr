@@ -21,6 +21,9 @@ pub enum ItrError {
     #[error("Database error: {0}")]
     Db(#[from] rusqlite::Error),
 
+    #[error("database is read-only and needs migration; reopen it writable")]
+    ReadOnlyNeedsMigration,
+
     #[error("JSON parse error: {0}")]
     Parse(#[from] serde_json::Error),
 
@@ -32,6 +35,14 @@ pub enum ItrError {
 
     #[error("At least one filter is required for bulk operations")]
     NoFilters,
+
+    #[error("Database schema generation {db} was written by {written_by}; this itr ({current}) only supports generation {supported}. Update itr: .\\install.ps1 -Update (Windows), install.sh --update (Unix), or 'itr upgrade' from a source checkout")]
+    NewerSchema {
+        db: i32,
+        supported: i32,
+        written_by: String,
+        current: String,
+    },
 }
 
 impl ItrError {
@@ -42,10 +53,12 @@ impl ItrError {
             ItrError::InvalidValue { .. } => 1,
             ItrError::NoDatabase => 1,
             ItrError::Db(_) => 1,
+            ItrError::ReadOnlyNeedsMigration => 1,
             ItrError::Parse(_) => 1,
             ItrError::Io(_) => 1,
             ItrError::UpgradeFailed(_) => 1,
             ItrError::NoFilters => 1,
+            ItrError::NewerSchema { .. } => 1,
         }
     }
 
@@ -55,11 +68,12 @@ impl ItrError {
             ItrError::CycleDetected(_) => "CYCLE_DETECTED",
             ItrError::InvalidValue { .. } => "INVALID_VALUE",
             ItrError::NoDatabase => "NO_DATABASE",
-            ItrError::Db(_) => "DB_ERROR",
+            ItrError::Db(_) | ItrError::ReadOnlyNeedsMigration => "DB_ERROR",
             ItrError::Parse(_) => "PARSE_ERROR",
             ItrError::Io(_) => "IO_ERROR",
             ItrError::UpgradeFailed(_) => "UPGRADE_FAILED",
             ItrError::NoFilters => "NO_FILTERS",
+            ItrError::NewerSchema { .. } => "NEWER_SCHEMA",
         }
     }
 }

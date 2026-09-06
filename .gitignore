@@ -25,3 +25,8 @@ Thumbs.db
 .claude/settings.json
 .claude/settings.local.json
 .codex/hooks.json
+
+# SQLite sidecars and repair backups (itr uses WAL mode; sidecars must never be committed)
+.itr.db-wal
+.itr.db-shm
+.itr.db.corrupt-*
