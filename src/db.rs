@@ -185,9 +185,17 @@ fn resolve_override_db(
 /// `contentless_delete=1` FTS index); files older than this guard carry 0.
 pub const SCHEMA_VERSION: i32 = 1;
 
-/// `config` key recording the itr version that last opened the database.
+/// `config` key recording the itr release that last opened the database.
 /// Surfaced in the `NewerSchema` error so the message can name the writer.
 pub const WRITER_VERSION_KEY: &str = "last_writer_version";
+
+/// The release core of this binary's version (`v3.2.0`, never
+/// `v3.2.0-5-gabc1234-dirty`), so dev builds do not rewrite a git-tracked
+/// database on every open.
+pub fn writer_stamp() -> &'static str {
+    let full = env!("ITR_VERSION");
+    full.split('-').next().unwrap_or(full)
+}
 
 pub fn open_db(path: &Path) -> Result<Connection, ItrError> {
     let conn = Connection::open(path)?;
@@ -233,7 +241,7 @@ fn stamp_schema_version(conn: &Connection) -> Result<(), ItrError> {
     if read_user_version(conn)? < SCHEMA_VERSION {
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
     }
-    let current = env!("ITR_VERSION");
+    let current = writer_stamp();
     if config_get(conn, WRITER_VERSION_KEY)?.as_deref() != Some(current) {
         config_set(conn, WRITER_VERSION_KEY, current)?;
     }
@@ -1749,7 +1757,7 @@ mod tests {
         let path = schema_test_db_path("init");
         let conn = init_db(&path).unwrap();
         assert_eq!(user_version(&conn), SCHEMA_VERSION);
-        assert_eq!(writer_version(&conn).as_deref(), Some(env!("ITR_VERSION")));
+        assert_eq!(writer_version(&conn).as_deref(), Some(writer_stamp()));
     }
 
     #[test]
@@ -1767,7 +1775,7 @@ mod tests {
         }
         let conn = open_db(&path).unwrap();
         assert_eq!(user_version(&conn), SCHEMA_VERSION);
-        assert_eq!(writer_version(&conn).as_deref(), Some(env!("ITR_VERSION")));
+        assert_eq!(writer_version(&conn).as_deref(), Some(writer_stamp()));
     }
 
     #[test]

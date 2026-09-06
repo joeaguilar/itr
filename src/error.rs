@@ -33,9 +33,7 @@ pub enum ItrError {
     #[error("At least one filter is required for bulk operations")]
     NoFilters,
 
-    #[error(
-        "Database schema generation {db} was written by {written_by}; this itr ({current}) only supports generation {supported}.          Update itr: install.ps1 -Update (Windows), install.sh --update (Unix), or 'itr upgrade' from a source checkout"
-    )]
+    #[error("Database schema generation {db} was written by {written_by}; this itr ({current}) only supports generation {supported}. Update itr: install.ps1 -Update (Windows), install.sh --update (Unix), or 'itr upgrade' from a source checkout")]
     NewerSchema {
         db: i32,
         supported: i32,

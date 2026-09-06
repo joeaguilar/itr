@@ -40,7 +40,7 @@ All notable user-facing changes are recorded here.
 ### Release notes
 
 - Added: `.itr.db` now carries a schema generation in `PRAGMA user_version`
-  (currently 1) and records the itr version that last opened it under the
+  (currently 1) and records the itr release that last opened it under the
   `last_writer_version` config key. Opening a database stamped by a newer itr
   fails with `NEWER_SCHEMA` before any migration runs, naming both
   generations, the recorded writer, and the update commands, so a stale
