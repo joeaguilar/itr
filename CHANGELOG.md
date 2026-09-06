@@ -41,11 +41,14 @@ All notable user-facing changes are recorded here.
 
 - Added: `.itr.db` now carries a schema generation in `PRAGMA user_version`
   (currently 1) and records the itr release that last opened it under the
-  `last_writer_version` config key. Opening a database stamped by a newer itr
-  fails with `NEWER_SCHEMA` before any migration runs, naming both
-  generations, the recorded writer, and the update commands, so a stale
-  install can no longer rewrite a newer schema (e.g. an old `itr reindex`
-  recreating the legacy FTS table under the new sync triggers).
+  `last_writer_version` config key. Opening a database with a higher schema
+  generation than the binary supports fails with `NEWER_SCHEMA` before any
+  itr migration or command mutation is applied, naming both generations,
+  the recorded writer, and the update commands. Newer releases that share
+  generation 1 remain compatible. Binaries older than this guard cannot
+  see the stamp and do not provide this protection. Migration and stamping
+  share a write transaction; advisory stamps tolerate read-only or locked
+  databases, normalize development versions, and survive config reset.
 - Added: `itr ui` search pulls up an issue named by number — `42`, `#42`,
   `id:42`, or `ID=42` in the search box puts that issue in row one (badged
   `MATCH`) ahead of substring hits, even when the current filters would hide
@@ -110,10 +113,10 @@ All notable user-facing changes are recorded here.
 ### Upgrade notes
 
 - The first open by this version stamps the database (generation 1 plus the
-  writer version); a read-only command on an already stamped file performs no
-  write. Binaries older than this release cannot see the stamp, so bring every
-  install up to date (`install.ps1 -Update`, `install.sh --update`, or
-  `itr upgrade`) before relying on the guard.
+  writer version); a read-only command on a file already stamped by the same
+  release performs no write. Binaries older than this release cannot see the
+  stamp, so bring every install up to date (`.\install.ps1 -Update`,
+  `install.sh --update`, or `itr upgrade`) before relying on the guard.
 - No database migration or CLI action is required for the documented changes.
 - After the next tagged release, installers can fetch prebuilt archives. Source
   installs continue to work.

@@ -36,7 +36,13 @@ pub fn run_list(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
         }
         _ => {
             for (key, val, is_custom) in &entries {
-                let marker = if *is_custom { " *" } else { "" };
+                let marker = if key == db::WRITER_VERSION_KEY {
+                    " (managed)"
+                } else if *is_custom {
+                    " *"
+                } else {
+                    ""
+                };
                 println!("{}={}{}", key, val, marker);
             }
         }
@@ -97,8 +103,15 @@ struct SetValidation {
 /// - unknown key: skip the write and warn with a "did you mean" suggestion
 ///   derived from [`UrgencyConfig::defaults_map`].
 ///
-/// Non-urgency keys are stored verbatim with no checks.
+/// Non-urgency keys are stored verbatim, except for itr's reserved writer stamp.
 fn validate_set(conn: &Connection, key: &str, value: &str) -> Result<SetValidation, ItrError> {
+    if key == db::WRITER_VERSION_KEY {
+        return Err(ItrError::InvalidValue {
+            field: key.to_string(),
+            value: value.to_string(),
+            valid: "reserved key, managed by itr".to_string(),
+        });
+    }
     if !key.starts_with("urgency.") {
         return Ok(SetValidation {
             store_value: Some(value.to_string()),
@@ -212,6 +225,32 @@ mod tests {
     }
 
     // --- #183: validate urgency.* keys and values at set time ---
+
+    #[test]
+    fn run_set_rejects_managed_writer_stamp() {
+        let conn = test_conn();
+        db::config_set(&conn, db::WRITER_VERSION_KEY, "v3.2.0").unwrap();
+        let err = run_set(&conn, db::WRITER_VERSION_KEY, "junk", Format::Json).unwrap_err();
+        assert_eq!(err.error_code(), "INVALID_VALUE");
+        match err {
+            ItrError::InvalidValue {
+                field,
+                value,
+                valid,
+            } => {
+                assert_eq!(field, db::WRITER_VERSION_KEY);
+                assert_eq!(value, "junk");
+                assert_eq!(valid, "reserved key, managed by itr");
+            }
+            other => panic!("expected InvalidValue, got {other:?}"),
+        }
+        assert_eq!(
+            db::config_get(&conn, db::WRITER_VERSION_KEY)
+                .unwrap()
+                .as_deref(),
+            Some("v3.2.0")
+        );
+    }
 
     #[test]
     fn bogus_value_for_known_urgency_key_warns_and_falls_back_to_default() {

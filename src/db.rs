@@ -4,10 +4,12 @@ use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use std::env;
 use std::path::{Path, PathBuf};
 
-const SCHEMA: &str = r"
+const SCHEMA_PRAGMAS: &str = r"
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
+";
 
+const SCHEMA: &str = r"
 CREATE TABLE IF NOT EXISTS issues (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     title           TEXT NOT NULL,
@@ -192,38 +194,112 @@ pub const WRITER_VERSION_KEY: &str = "last_writer_version";
 /// The release core of this binary's version (`v3.2.0`, never
 /// `v3.2.0-5-gabc1234-dirty`), so dev builds do not rewrite a git-tracked
 /// database on every open.
-pub fn writer_stamp() -> &'static str {
-    let full = env!("ITR_VERSION");
-    full.split('-').next().unwrap_or(full)
+pub fn writer_stamp() -> String {
+    normalize_writer_stamp(env!("ITR_VERSION"))
+}
+
+fn normalize_writer_stamp(full: &str) -> String {
+    let core = full.strip_prefix('v').unwrap_or(full);
+    let core = core.split(['-', '+']).next().unwrap_or_default();
+    let parts: Vec<_> = core.split('.').collect();
+    let valid = parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    format!(
+        "v{}",
+        if valid {
+            core
+        } else {
+            env!("CARGO_PKG_VERSION")
+        }
+    )
 }
 
 pub fn open_db(path: &Path) -> Result<Connection, ItrError> {
+    open_schema_db(path, false)
+}
+
+fn open_schema_db(path: &Path, initialize: bool) -> Result<Connection, ItrError> {
     let conn = Connection::open(path)?;
     // busy_timeout makes concurrent writers (e.g. parallel `itr claim`) wait
     // for the write lock instead of failing immediately with SQLITE_BUSY.
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
-    )?;
+    conn.execute_batch("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;")?;
     check_schema_version(&conn)?;
-    migrate_current_schema(&conn)?;
-    try_create_fts(&conn);
-    stamp_schema_version(&conn)?;
+    if !initialize
+        && !schema_needs_migration(&conn)?
+        && !schema_needs_stamp(&conn)?
+        && !fts_needs_work(&conn)
+    {
+        // Deliberately skip journal_mode=WAL: this path must perform zero
+        // writes, and any database itr created is already WAL.
+        return Ok(conn);
+    }
+    // Read-only handles cannot migrate or stamp, but can still serve reads.
+    // In particular, BEGIN IMMEDIATE itself would fail on these handles.
+    if !initialize && conn.is_readonly(rusqlite::DatabaseName::Main)? {
+        if schema_needs_migration(&conn)? {
+            return Err(ItrError::ReadOnlyNeedsMigration);
+        }
+        // Advisory stamps and FTS-only differences can wait for a writable open.
+        return Ok(conn);
+    }
+    conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+    migrate_and_stamp_schema(&conn, initialize)?;
     Ok(conn)
+}
+
+/// Structural work that only a writable handle can do.
+fn schema_needs_migration(conn: &Connection) -> Result<bool, ItrError> {
+    Ok(!has_issue_column(conn, "skills")?
+        || !has_issue_column(conn, "assigned_to")?
+        || !has_schema_table(conn, "events")?
+        || !has_schema_table(conn, "relations")?)
+}
+
+/// Advisory stamp work (generation pragma and writer config row).
+fn schema_needs_stamp(conn: &Connection) -> Result<bool, ItrError> {
+    Ok(read_user_version(conn)? != SCHEMA_VERSION
+        || config_get(conn, WRITER_VERSION_KEY)? != Some(writer_stamp()))
+}
+
+fn fts_needs_work(conn: &Connection) -> bool {
+    // Without FTS5, a missing index still retries creation under the write
+    // lock on every writable open, matching the existing fallback behavior.
+    !has_fts(conn) || fts_is_legacy(conn)
+}
+
+fn migrate_and_stamp_schema(conn: &Connection, initialize: bool) -> Result<(), ItrError> {
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    // Another writer may have advanced the generation since the first check.
+    // Hold the write lock until migrations and both advisory stamps finish.
+    check_schema_version(&tx)?;
+    if initialize {
+        tx.execute_batch(SCHEMA)?;
+    }
+    migrate_current_schema(&tx)?;
+    try_create_fts(&tx);
+    stamp_schema_version(&tx)?;
+    tx.commit()?;
+    Ok(())
 }
 
 fn read_user_version(conn: &Connection) -> Result<i32, ItrError> {
     Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?)
 }
 
-/// Refuse a database stamped by a newer itr. Runs before any migration so a
-/// refused file is left byte-for-byte untouched.
+/// Refuse a database with a higher schema generation before WAL setup and
+/// again under the write lock. No itr migration or command mutation is applied.
 fn check_schema_version(conn: &Connection) -> Result<(), ItrError> {
     let db = read_user_version(conn)?;
     if db > SCHEMA_VERSION {
         let written_by = config_get(conn, WRITER_VERSION_KEY)
             .ok()
             .flatten()
-            .map_or_else(|| "a newer itr".to_string(), |v| format!("itr {v}"));
+            .map_or_else(
+                || "an unknown itr release".to_string(),
+                |v| format!("itr {v}"),
+            );
         return Err(ItrError::NewerSchema {
             db,
             supported: SCHEMA_VERSION,
@@ -235,17 +311,27 @@ fn check_schema_version(conn: &Connection) -> Result<(), ItrError> {
 }
 
 /// Record this binary's schema generation and version after a successful
-/// open. Both writes are skipped when already current, so a read-only command
-/// on an up-to-date database performs no write at all.
+/// open. Both writes are skipped when already current. The stamp is advisory:
+/// read-only databases must not fail an open just to refresh it.
 fn stamp_schema_version(conn: &Connection) -> Result<(), ItrError> {
-    if read_user_version(conn)? < SCHEMA_VERSION {
-        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+    let result = (|| {
+        if read_user_version(conn)? < SCHEMA_VERSION {
+            conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+        }
+        let current = writer_stamp();
+        if config_get(conn, WRITER_VERSION_KEY)?.as_deref() != Some(current.as_str()) {
+            config_set(conn, WRITER_VERSION_KEY, &current)?;
+        }
+        Ok(())
+    })();
+    match result {
+        Err(ItrError::Db(rusqlite::Error::SqliteFailure(err, _)))
+            if err.code == rusqlite::ErrorCode::ReadOnly =>
+        {
+            Ok(())
+        }
+        result => result,
     }
-    let current = writer_stamp();
-    if config_get(conn, WRITER_VERSION_KEY)?.as_deref() != Some(current) {
-        config_set(conn, WRITER_VERSION_KEY, current)?;
-    }
-    Ok(())
 }
 
 fn migrate_current_schema(conn: &Connection) -> Result<(), ItrError> {
@@ -256,35 +342,38 @@ fn migrate_current_schema(conn: &Connection) -> Result<(), ItrError> {
     Ok(())
 }
 
+fn has_issue_column(conn: &Connection, column: &str) -> Result<bool, ItrError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('issues') WHERE name = ?1)",
+        params![column],
+        |row| row.get(0),
+    )?)
+}
+
+fn has_schema_table(conn: &Connection, table: &str) -> Result<bool, ItrError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?1)",
+        params![table],
+        |row| row.get(0),
+    )?)
+}
+
 fn migrate_add_skills(conn: &Connection) -> Result<(), ItrError> {
-    let has_skills: bool = conn
-        .prepare("PRAGMA table_info(issues)")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .any(|col| col.as_deref() == Ok("skills"));
-    if !has_skills {
+    if !has_issue_column(conn, "skills")? {
         conn.execute_batch("ALTER TABLE issues ADD COLUMN skills TEXT NOT NULL DEFAULT '[]';")?;
     }
     Ok(())
 }
 
 fn migrate_add_assigned_to(conn: &Connection) -> Result<(), ItrError> {
-    let has_col: bool = conn
-        .prepare("PRAGMA table_info(issues)")?
-        .query_map([], |row| row.get::<_, String>(1))?
-        .any(|col| col.as_deref() == Ok("assigned_to"));
-    if !has_col {
+    if !has_issue_column(conn, "assigned_to")? {
         conn.execute_batch("ALTER TABLE issues ADD COLUMN assigned_to TEXT NOT NULL DEFAULT '';")?;
     }
     Ok(())
 }
 
 fn migrate_add_events(conn: &Connection) -> Result<(), ItrError> {
-    let has_table: bool = conn.query_row(
-        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='events'",
-        [],
-        |row| row.get(0),
-    )?;
-    if !has_table {
+    if !has_schema_table(conn, "events")? {
         conn.execute_batch(
             "CREATE TABLE events (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -305,12 +394,7 @@ fn migrate_add_events(conn: &Connection) -> Result<(), ItrError> {
 }
 
 fn migrate_add_relations(conn: &Connection) -> Result<(), ItrError> {
-    let has_table: bool = conn.query_row(
-        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='relations'",
-        [],
-        |row| row.get(0),
-    )?;
-    if !has_table {
+    if !has_schema_table(conn, "relations")? {
         conn.execute_batch(
             "CREATE TABLE relations (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -330,17 +414,13 @@ fn migrate_add_relations(conn: &Connection) -> Result<(), ItrError> {
 }
 
 pub fn init_db(path: &Path) -> Result<Connection, ItrError> {
-    let conn = Connection::open(path)?;
-    check_schema_version(&conn)?;
-    conn.execute_batch(SCHEMA)?;
-    migrate_current_schema(&conn)?;
-    try_create_fts(&conn);
-    stamp_schema_version(&conn)?;
-    Ok(conn)
+    open_schema_db(path, true)
 }
 
 pub fn get_schema_sql() -> &'static str {
-    SCHEMA
+    static FULL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    FULL.get_or_init(|| format!("{SCHEMA_PRAGMAS}{SCHEMA}"))
+        .as_str()
 }
 
 // --- Issue CRUD ---
@@ -1159,7 +1239,10 @@ pub fn config_list(conn: &Connection) -> Result<Vec<(String, String)>, ItrError>
 }
 
 pub fn config_reset(conn: &Connection) -> Result<(), ItrError> {
-    conn.execute("DELETE FROM config", [])?;
+    conn.execute(
+        "DELETE FROM config WHERE key != ?1",
+        params![WRITER_VERSION_KEY],
+    )?;
     Ok(())
 }
 
@@ -1580,7 +1663,7 @@ pub fn fts_search(conn: &Connection, query: &str) -> Result<Vec<i64>, ItrError> 
 #[cfg(test)]
 pub(crate) fn open_test_db() -> Connection {
     let conn = Connection::open_in_memory().expect("open in-memory db");
-    conn.execute_batch(SCHEMA).expect("apply schema");
+    conn.execute_batch(get_schema_sql()).expect("apply schema");
     migrate_current_schema(&conn).expect("apply migrations");
     try_create_fts(&conn);
     stamp_schema_version(&conn).expect("stamp schema version");
@@ -1730,7 +1813,7 @@ mod tests {
         assert_eq!(fts_count, 1);
     }
 
-    fn schema_test_db_path(name: &str) -> PathBuf {
+    fn schema_test_db_path(name: &str) -> (PathBuf, PathBuf) {
         let dir = std::env::temp_dir().join(format!(
             "itr-schema-{}-{}-{}",
             name,
@@ -1741,7 +1824,8 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        dir.join(".itr.db")
+        let path = dir.join(".itr.db");
+        (dir, path)
     }
 
     fn user_version(conn: &Connection) -> i32 {
@@ -1754,15 +1838,17 @@ mod tests {
 
     #[test]
     fn init_stamps_schema_generation_and_writer() {
-        let path = schema_test_db_path("init");
+        let (dir, path) = schema_test_db_path("init");
         let conn = init_db(&path).unwrap();
         assert_eq!(user_version(&conn), SCHEMA_VERSION);
-        assert_eq!(writer_version(&conn).as_deref(), Some(writer_stamp()));
+        assert_eq!(writer_version(&conn), Some(writer_stamp()));
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn unstamped_db_is_stamped_on_open() {
-        let path = schema_test_db_path("unstamped");
+        let (dir, path) = schema_test_db_path("unstamped");
         {
             // A file written before the guard existed: generation 0, no writer.
             let conn = init_db(&path).unwrap();
@@ -1775,12 +1861,14 @@ mod tests {
         }
         let conn = open_db(&path).unwrap();
         assert_eq!(user_version(&conn), SCHEMA_VERSION);
-        assert_eq!(writer_version(&conn).as_deref(), Some(writer_stamp()));
+        assert_eq!(writer_version(&conn), Some(writer_stamp()));
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn newer_schema_is_refused_before_migrating() {
-        let path = schema_test_db_path("newer");
+        let (dir, path) = schema_test_db_path("newer");
         {
             let conn = init_db(&path).unwrap();
             conn.execute_batch(&format!("PRAGMA user_version = {};", SCHEMA_VERSION + 1))
@@ -1788,6 +1876,7 @@ mod tests {
             config_set(&conn, WRITER_VERSION_KEY, "v99.0.0").unwrap();
             // If migrations ran on the refused file they would recreate this.
             conn.execute_batch("DROP TABLE events;").unwrap();
+            conn.execute_batch("PRAGMA journal_mode=DELETE;").unwrap();
         }
 
         let err = open_db(&path).unwrap_err();
@@ -1806,13 +1895,20 @@ mod tests {
             "names this binary: {msg}"
         );
         assert!(
-            msg.contains("install.ps1 -Update"),
+            msg.contains(r".\install.ps1 -Update"),
             "tells how to update: {msg}"
         );
+        assert_eq!(msg.lines().count(), 1, "error must stay on one line");
+        assert!(matches!(init_db(&path), Err(ItrError::NewerSchema { .. })));
 
-        // The file was left untouched: stamp intact, migration not applied.
+        // No itr migration or command mutation was applied; WAL was not enabled.
         let raw = Connection::open(&path).unwrap();
         assert_eq!(user_version(&raw), SCHEMA_VERSION + 1);
+        assert_eq!(writer_version(&raw).as_deref(), Some("v99.0.0"));
+        let journal_mode: String = raw
+            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(journal_mode, "delete");
         let has_events: bool = raw
             .query_row(
                 "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='events'",
@@ -1821,33 +1917,329 @@ mod tests {
             )
             .unwrap();
         assert!(!has_events, "migrations must not run on a refused database");
+        drop(raw);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn up_to_date_open_performs_no_write() {
-        let path = schema_test_db_path("readonly");
-        {
-            init_db(&path).unwrap();
+        for journal_mode in ["WAL", "DELETE"] {
+            let (dir, path) = schema_test_db_path("current");
+            let conn = init_db(&path).unwrap();
+            conn.execute_batch(&format!("PRAGMA journal_mode={journal_mode};"))
+                .unwrap();
+            drop(conn);
+            let before = std::fs::read(&path).unwrap();
+            drop(open_db(&path).unwrap());
+            let after = std::fs::read(&path).unwrap();
+            assert_eq!(
+                before, after,
+                "opening a current database must not modify it ({journal_mode})"
+            );
+            assert!(
+                !path.with_extension("db-wal").exists(),
+                "no WAL sidecar after a clean read-only open"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
         }
-        let before = std::fs::read(&path).unwrap();
-        {
-            open_db(&path).unwrap();
+    }
+
+    #[test]
+    fn writer_stamp_normalizes_release_core() {
+        for full in [
+            "v3.2.0",
+            "v3.2.0-8-gabc1234",
+            "v3.2.0-8-gabc1234-dirty",
+            "3.2.0+abc1234",
+            "3.2.0+abc1234-dirty",
+            "3.2.0",
+        ] {
+            assert_eq!(normalize_writer_stamp(full), "v3.2.0", "{full}");
         }
-        let after = std::fs::read(&path).unwrap();
+        for full in [
+            "", "abc1234", "v3.2", "3.2.0.1", "3.x.0", "3..0", " 3.2.0", "vv3.2.0",
+        ] {
+            assert_eq!(
+                normalize_writer_stamp(full),
+                format!("v{}", env!("CARGO_PKG_VERSION")),
+                "{full}"
+            );
+        }
+    }
+
+    #[test]
+    fn config_reset_preserves_writer_stamp() {
+        let conn = test_conn();
+        config_set(&conn, "default_priority", "high").unwrap();
+        config_set(&conn, WRITER_VERSION_KEY, "v99.0.0").unwrap();
+        config_reset(&conn).unwrap();
         assert_eq!(
-            before, after,
-            "opening a current database must not modify it"
+            config_list(&conn).unwrap(),
+            vec![(WRITER_VERSION_KEY.to_string(), "v99.0.0".to_string())]
         );
-        assert!(
-            !path.with_extension("db-wal").exists(),
-            "no WAL sidecar after a clean read-only open"
+    }
+
+    #[test]
+    fn readonly_db_with_different_writer_opens() {
+        let (dir, path) = schema_test_db_path("readonly");
+        let conn = init_db(&path).unwrap();
+        config_set(&conn, WRITER_VERSION_KEY, "v0.0.1").unwrap();
+        // Cover read-only files that would otherwise require a WAL mode write.
+        conn.execute_batch("PRAGMA journal_mode=DELETE;").unwrap();
+        drop(conn);
+
+        let permissions = std::fs::metadata(&path).unwrap().permissions();
+        let mut readonly = permissions.clone();
+        readonly.set_readonly(true);
+        std::fs::set_permissions(&path, readonly).unwrap();
+        let opened = open_db(&path);
+        // Restore the original permissions even if open failed (Windows cleanup).
+        std::fs::set_permissions(&path, permissions).unwrap();
+        let conn = opened.unwrap();
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
+        if conn.is_readonly(rusqlite::DatabaseName::Main).unwrap() {
+            assert_eq!(
+                writer_version(&conn).as_deref(),
+                Some("v0.0.1"),
+                "read-only open must preserve the existing writer stamp"
+            );
+        } else {
+            assert_eq!(
+                writer_version(&conn),
+                Some(writer_stamp()),
+                "writable open must update the writer stamp to this binary's stamp"
+            );
+        }
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // Each historical migration must be detected even when the stamp is current.
+    const STRUCTURAL_MIGRATION_GAPS: [&str; 4] = [
+        "ALTER TABLE issues DROP COLUMN skills;",
+        "ALTER TABLE issues DROP COLUMN assigned_to;",
+        "DROP TABLE events;",
+        "DROP TABLE relations;",
+    ];
+
+    #[test]
+    fn writable_open_applies_each_structural_migration() {
+        for gap in STRUCTURAL_MIGRATION_GAPS {
+            let (dir, path) = schema_test_db_path("migrate");
+            let conn = init_db(&path).unwrap();
+            conn.execute_batch(FTS_DROP).unwrap();
+            conn.execute_batch(gap).unwrap();
+            drop(conn);
+
+            let conn = open_db(&path).unwrap();
+            assert!(has_issue_column(&conn, "skills").unwrap(), "{gap}");
+            assert!(has_issue_column(&conn, "assigned_to").unwrap(), "{gap}");
+            assert!(has_schema_table(&conn, "events").unwrap(), "{gap}");
+            assert!(has_schema_table(&conn, "relations").unwrap(), "{gap}");
+            assert!(has_fts(&conn));
+            drop(conn);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    fn readonly_uri(path: &Path) -> PathBuf {
+        // URI mode enforces a read-only handle even when tests run as root.
+        PathBuf::from(format!(
+            "file:{}?mode=ro",
+            path.to_string_lossy().replace('\\', "/")
+        ))
+    }
+
+    #[test]
+    fn readonly_db_needing_structural_migration_is_refused() {
+        for gap in STRUCTURAL_MIGRATION_GAPS {
+            let (dir, path) = schema_test_db_path("readonly-migration");
+            let conn = init_db(&path).unwrap();
+            conn.execute_batch(FTS_DROP).unwrap();
+            conn.execute_batch(gap).unwrap();
+            conn.execute_batch("PRAGMA user_version=0; PRAGMA journal_mode=DELETE;")
+                .unwrap();
+            drop(conn);
+            let before = std::fs::read(&path).unwrap();
+
+            let err = open_db(&readonly_uri(&path)).unwrap_err();
+            assert!(
+                matches!(err, ItrError::ReadOnlyNeedsMigration),
+                "{gap}: {err}"
+            );
+            assert_eq!(err.error_code(), "DB_ERROR");
+            assert_eq!(
+                err.to_string(),
+                "database is read-only and needs migration; reopen it writable"
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn readonly_db_with_fts_only_differences_opens() {
+        for legacy in [false, true] {
+            let (dir, path) = schema_test_db_path("readonly-fts");
+            let conn = init_db(&path).unwrap();
+            conn.execute_batch(FTS_DROP).unwrap();
+            if legacy {
+                conn.execute_batch(
+                    "CREATE VIRTUAL TABLE issues_fts USING fts5(title, content='');",
+                )
+                .unwrap();
+            }
+            conn.execute_batch("PRAGMA user_version=0; PRAGMA journal_mode=DELETE;")
+                .unwrap();
+            config_set(&conn, WRITER_VERSION_KEY, "v0.0.1").unwrap();
+            drop(conn);
+            let before = std::fs::read(&path).unwrap();
+
+            let conn = open_db(&readonly_uri(&path)).unwrap();
+            assert!(conn.is_readonly(rusqlite::DatabaseName::Main).unwrap());
+            assert_eq!(user_version(&conn), 0);
+            assert_eq!(writer_version(&conn).as_deref(), Some("v0.0.1"));
+            assert_eq!(has_fts(&conn), legacy);
+            assert_eq!(fts_is_legacy(&conn), legacy);
+            drop(conn);
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn writable_open_repairs_fts_with_current_stamp() {
+        for legacy in [false, true] {
+            let (dir, path) = schema_test_db_path("repair-fts");
+            let conn = init_db(&path).unwrap();
+            let issue = add(&conn, "searchable migration");
+            conn.execute_batch(FTS_DROP).unwrap();
+            if legacy {
+                conn.execute_batch(
+                    "CREATE VIRTUAL TABLE issues_fts USING fts5(title, content='');",
+                )
+                .unwrap();
+            }
+            drop(conn);
+
+            let conn = open_db(&path).unwrap();
+            assert!(has_fts(&conn));
+            assert!(!fts_is_legacy(&conn));
+            assert_eq!(fts_search(&conn, "searchable").unwrap(), vec![issue.id]);
+            drop(conn);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    #[test]
+    fn readonly_stamp_writes_are_advisory() {
+        for generation in [0, SCHEMA_VERSION] {
+            let conn = test_conn();
+            config_set(&conn, WRITER_VERSION_KEY, "v0.0.1").unwrap();
+            conn.execute_batch(&format!(
+                "PRAGMA user_version={generation}; PRAGMA query_only=ON;"
+            ))
+            .unwrap();
+            stamp_schema_version(&conn).unwrap();
+            assert_eq!(user_version(&conn), generation);
+            assert_eq!(writer_version(&conn).as_deref(), Some("v0.0.1"));
+        }
+    }
+
+    #[test]
+    fn up_to_date_open_succeeds_under_write_lock() {
+        let (dir, path) = schema_test_db_path("busy-open");
+        drop(init_db(&path).unwrap());
+        let other = Connection::open(&path).unwrap();
+        other.execute_batch("BEGIN IMMEDIATE;").unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let wal_path = path.with_extension("db-wal");
+        let wal_before = std::fs::read(&wal_path).unwrap();
+
+        let conn = open_db(&path).expect("current readers must not wait for a writer");
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
+        assert_eq!(writer_version(&conn), Some(writer_stamp()));
+        let changes: i64 = conn
+            .query_row("SELECT total_changes()", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(changes, 0);
+        drop(conn);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(std::fs::read(&wal_path).unwrap(), wal_before);
+        other.execute_batch("ROLLBACK;").unwrap();
+        drop(other);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn schema_generation_is_rechecked_under_write_lock() {
+        for initialize in [false, true] {
+            let (dir, path) = schema_test_db_path("recheck");
+            let conn = init_db(&path).unwrap();
+            check_schema_version(&conn).unwrap();
+            // A concurrent writer advances the generation after our first check.
+            let other = Connection::open(&path).unwrap();
+            other
+                .execute_batch(&format!(
+                    "BEGIN IMMEDIATE; PRAGMA user_version={}; DROP TABLE events; COMMIT;",
+                    SCHEMA_VERSION + 1
+                ))
+                .unwrap();
+            assert!(matches!(
+                migrate_and_stamp_schema(&conn, initialize),
+                Err(ItrError::NewerSchema { .. })
+            ));
+            assert_eq!(user_version(&conn), SCHEMA_VERSION + 1);
+            assert!(conn.prepare("SELECT * FROM events").is_err());
+            drop(other);
+            drop(conn);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    // Pair the stable FNV-1a fingerprint with its schema generation.
+    const SCHEMA_FINGERPRINT: (i32, u64) = (1, 0xc22d_a286_ef3a_52f4);
+
+    #[test]
+    fn fresh_schema_matches_generation_fingerprint() {
+        let conn = init_db(Path::new(":memory:")).unwrap();
+        let mut stmt = conn
+            .prepare(
+                r"SELECT sql FROM sqlite_master
+             WHERE type IN ('table', 'index', 'trigger', 'view') AND sql IS NOT NULL
+               AND NOT (type='table' AND name LIKE 'issues\_fts\_%' ESCAPE '\')
+               AND name NOT LIKE 'sqlite\_%' ESCAPE '\'",
+            )
+            .unwrap();
+        let mut definitions: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .map(|sql| {
+                sql.unwrap()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect();
+        // Keep the virtual table and FTS triggers, excluding SQLite-generated DDL.
+        definitions.sort_unstable();
+        let fingerprint = definitions
+            .join("\n")
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+                (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+            });
+        assert_eq!(
+            (SCHEMA_VERSION, fingerprint),
+            SCHEMA_FINGERPRINT,
+            "schema changed: bump SCHEMA_VERSION in src/db.rs and update SCHEMA_FINGERPRINT (observed {fingerprint:#018x}) (or the bundled SQLite changed its generated shadow-table DDL)"
         );
     }
 
     #[test]
     fn fts_legacy_contentless_table_is_migrated() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(SCHEMA).unwrap();
+        conn.execute_batch(get_schema_sql()).unwrap();
         migrate_current_schema(&conn).unwrap();
         // Recreate the legacy index design and its stale-token failure mode.
         conn.execute_batch(

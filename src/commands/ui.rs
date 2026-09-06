@@ -1528,6 +1528,7 @@ fn error_response_for_itr(err: ItrError) -> HttpResponse {
         ItrError::CycleDetected(_) => 409,
         ItrError::NoDatabase
         | ItrError::Db(_)
+        | ItrError::ReadOnlyNeedsMigration
         | ItrError::Io(_)
         | ItrError::UpgradeFailed(_)
         | ItrError::NewerSchema { .. } => 500,

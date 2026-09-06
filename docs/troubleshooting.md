@@ -359,7 +359,11 @@ stderr. In `-f json` mode the message is wrapped as
 | `IO_ERROR`       | Filesystem error reading or writing a file (permissions, missing path).        | Check the path and permissions reported in the error.                       |
 | `UPGRADE_FAILED` | `itr upgrade` could not build, locate source, or overwrite the binary.        | See [`itr upgrade` Fails](#itr-upgrade-fails) above.                        |
 | `NO_FILTERS`     | A `bulk` command was invoked with no filter (would touch every issue).         | Add at least one filter (`--status`, `--tag`, etc.) or use `batch`.         |
-| `NEWER_SCHEMA`   | The database was stamped by a newer itr than the one running; nothing was touched. | Update itr (`install.ps1 -Update`, `install.sh --update`, or `itr upgrade`). |
+| `NEWER_SCHEMA`   | The database has a higher schema generation than this binary supports; no itr migration or command mutation is applied. | Update itr (`.\install.ps1 -Update`, `install.sh --update`, or `itr upgrade`). |
+
+Schema generations describe database compatibility, not release age. Newer itr
+releases sharing generation 1 remain compatible with this guard. Binaries older
+than the guard cannot see the stamp and do not refuse higher generations.
 
 All errors exit `1`. Use the `code` field in JSON output to dispatch
 recoverable conditions in scripts rather than parsing the human-readable
