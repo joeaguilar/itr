@@ -359,6 +359,7 @@ stderr. In `-f json` mode the message is wrapped as
 | `IO_ERROR`       | Filesystem error reading or writing a file (permissions, missing path).        | Check the path and permissions reported in the error.                       |
 | `UPGRADE_FAILED` | `itr upgrade` could not build, locate source, or overwrite the binary.        | See [`itr upgrade` Fails](#itr-upgrade-fails) above.                        |
 | `NO_FILTERS`     | A `bulk` command was invoked with no filter (would touch every issue).         | Add at least one filter (`--status`, `--tag`, etc.) or use `batch`.         |
+| `NEWER_SCHEMA`   | The database was stamped by a newer itr than the one running; nothing was touched. | Update itr (`install.ps1 -Update`, `install.sh --update`, or `itr upgrade`). |
 
 All errors exit `1`. Use the `code` field in JSON output to dispatch
 recoverable conditions in scripts rather than parsing the human-readable

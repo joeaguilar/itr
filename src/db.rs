@@ -176,6 +176,19 @@ fn resolve_override_db(
     }
 }
 
+/// Schema generation this binary understands, stored in `PRAGMA user_version`.
+/// Bump it whenever `migrate_current_schema` gains a step or the FTS design
+/// changes. A file stamped with a higher generation was written by a newer
+/// itr, and `open_db` refuses it: an out-of-date install must never rewrite
+/// (e.g. `itr reindex`) a schema it does not understand. Generation 1 is the
+/// v3.2 schema (skills, `assigned_to`, events, relations, and the
+/// `contentless_delete=1` FTS index); files older than this guard carry 0.
+pub const SCHEMA_VERSION: i32 = 1;
+
+/// `config` key recording the itr version that last opened the database.
+/// Surfaced in the `NewerSchema` error so the message can name the writer.
+pub const WRITER_VERSION_KEY: &str = "last_writer_version";
+
 pub fn open_db(path: &Path) -> Result<Connection, ItrError> {
     let conn = Connection::open(path)?;
     // busy_timeout makes concurrent writers (e.g. parallel `itr claim`) wait
@@ -183,9 +196,48 @@ pub fn open_db(path: &Path) -> Result<Connection, ItrError> {
     conn.execute_batch(
         "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
     )?;
+    check_schema_version(&conn)?;
     migrate_current_schema(&conn)?;
     try_create_fts(&conn);
+    stamp_schema_version(&conn)?;
     Ok(conn)
+}
+
+fn read_user_version(conn: &Connection) -> Result<i32, ItrError> {
+    Ok(conn.query_row("PRAGMA user_version", [], |row| row.get(0))?)
+}
+
+/// Refuse a database stamped by a newer itr. Runs before any migration so a
+/// refused file is left byte-for-byte untouched.
+fn check_schema_version(conn: &Connection) -> Result<(), ItrError> {
+    let db = read_user_version(conn)?;
+    if db > SCHEMA_VERSION {
+        let written_by = config_get(conn, WRITER_VERSION_KEY)
+            .ok()
+            .flatten()
+            .map_or_else(|| "a newer itr".to_string(), |v| format!("itr {v}"));
+        return Err(ItrError::NewerSchema {
+            db,
+            supported: SCHEMA_VERSION,
+            written_by,
+            current: env!("ITR_VERSION").to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Record this binary's schema generation and version after a successful
+/// open. Both writes are skipped when already current, so a read-only command
+/// on an up-to-date database performs no write at all.
+fn stamp_schema_version(conn: &Connection) -> Result<(), ItrError> {
+    if read_user_version(conn)? < SCHEMA_VERSION {
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+    }
+    let current = env!("ITR_VERSION");
+    if config_get(conn, WRITER_VERSION_KEY)?.as_deref() != Some(current) {
+        config_set(conn, WRITER_VERSION_KEY, current)?;
+    }
+    Ok(())
 }
 
 fn migrate_current_schema(conn: &Connection) -> Result<(), ItrError> {
@@ -271,9 +323,11 @@ fn migrate_add_relations(conn: &Connection) -> Result<(), ItrError> {
 
 pub fn init_db(path: &Path) -> Result<Connection, ItrError> {
     let conn = Connection::open(path)?;
+    check_schema_version(&conn)?;
     conn.execute_batch(SCHEMA)?;
     migrate_current_schema(&conn)?;
     try_create_fts(&conn);
+    stamp_schema_version(&conn)?;
     Ok(conn)
 }
 
@@ -1521,6 +1575,7 @@ pub(crate) fn open_test_db() -> Connection {
     conn.execute_batch(SCHEMA).expect("apply schema");
     migrate_current_schema(&conn).expect("apply migrations");
     try_create_fts(&conn);
+    stamp_schema_version(&conn).expect("stamp schema version");
     conn
 }
 
@@ -1665,6 +1720,120 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM issues_fts", [], |row| row.get(0))
             .unwrap();
         assert_eq!(fts_count, 1);
+    }
+
+    fn schema_test_db_path(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "itr-schema-{}-{}-{}",
+            name,
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(".itr.db")
+    }
+
+    fn user_version(conn: &Connection) -> i32 {
+        read_user_version(conn).unwrap()
+    }
+
+    fn writer_version(conn: &Connection) -> Option<String> {
+        config_get(conn, WRITER_VERSION_KEY).unwrap()
+    }
+
+    #[test]
+    fn init_stamps_schema_generation_and_writer() {
+        let path = schema_test_db_path("init");
+        let conn = init_db(&path).unwrap();
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
+        assert_eq!(writer_version(&conn).as_deref(), Some(env!("ITR_VERSION")));
+    }
+
+    #[test]
+    fn unstamped_db_is_stamped_on_open() {
+        let path = schema_test_db_path("unstamped");
+        {
+            // A file written before the guard existed: generation 0, no writer.
+            let conn = init_db(&path).unwrap();
+            conn.execute_batch("PRAGMA user_version = 0;").unwrap();
+            conn.execute(
+                "DELETE FROM config WHERE key = ?1",
+                params![WRITER_VERSION_KEY],
+            )
+            .unwrap();
+        }
+        let conn = open_db(&path).unwrap();
+        assert_eq!(user_version(&conn), SCHEMA_VERSION);
+        assert_eq!(writer_version(&conn).as_deref(), Some(env!("ITR_VERSION")));
+    }
+
+    #[test]
+    fn newer_schema_is_refused_before_migrating() {
+        let path = schema_test_db_path("newer");
+        {
+            let conn = init_db(&path).unwrap();
+            conn.execute_batch(&format!("PRAGMA user_version = {};", SCHEMA_VERSION + 1))
+                .unwrap();
+            config_set(&conn, WRITER_VERSION_KEY, "v99.0.0").unwrap();
+            // If migrations ran on the refused file they would recreate this.
+            conn.execute_batch("DROP TABLE events;").unwrap();
+        }
+
+        let err = open_db(&path).unwrap_err();
+        match &err {
+            ItrError::NewerSchema { db, supported, .. } => {
+                assert_eq!(*db, SCHEMA_VERSION + 1);
+                assert_eq!(*supported, SCHEMA_VERSION);
+            }
+            other => panic!("expected NewerSchema, got {other:?}"),
+        }
+        assert_eq!(err.error_code(), "NEWER_SCHEMA");
+        let msg = err.to_string();
+        assert!(msg.contains("itr v99.0.0"), "names the writer: {msg}");
+        assert!(
+            msg.contains(env!("ITR_VERSION")),
+            "names this binary: {msg}"
+        );
+        assert!(
+            msg.contains("install.ps1 -Update"),
+            "tells how to update: {msg}"
+        );
+
+        // The file was left untouched: stamp intact, migration not applied.
+        let raw = Connection::open(&path).unwrap();
+        assert_eq!(user_version(&raw), SCHEMA_VERSION + 1);
+        let has_events: bool = raw
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='events'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!has_events, "migrations must not run on a refused database");
+    }
+
+    #[test]
+    fn up_to_date_open_performs_no_write() {
+        let path = schema_test_db_path("readonly");
+        {
+            init_db(&path).unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        {
+            open_db(&path).unwrap();
+        }
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(
+            before, after,
+            "opening a current database must not modify it"
+        );
+        assert!(
+            !path.with_extension("db-wal").exists(),
+            "no WAL sidecar after a clean read-only open"
+        );
     }
 
     #[test]

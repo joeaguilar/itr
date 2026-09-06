@@ -690,7 +690,7 @@ HTTP status mapping:
 | `403` | `DANGEROUS_SQL_DISABLED` |
 | `404` | `NOT_FOUND` |
 | `409` | `CYCLE_DETECTED` |
-| `500` | `INTERNAL_ERROR`, `NO_DATABASE`, `DB_ERROR`, `IO_ERROR`, `UPGRADE_FAILED` |
+| `500` | `INTERNAL_ERROR`, `NO_DATABASE`, `DB_ERROR`, `IO_ERROR`, `UPGRADE_FAILED`, `NEWER_SCHEMA` |
 
 `DANGEROUS_SQL_DISABLED` is returned by `POST /api/sql` when the server was
 started without `--allow-dangerous`. Restart `itr ui --allow-dangerous` to

@@ -1526,9 +1526,11 @@ fn error_response_for_itr(err: ItrError) -> HttpResponse {
         ItrError::NotFound(_) => 404,
         ItrError::InvalidValue { .. } | ItrError::Parse(_) | ItrError::NoFilters => 400,
         ItrError::CycleDetected(_) => 409,
-        ItrError::NoDatabase | ItrError::Db(_) | ItrError::Io(_) | ItrError::UpgradeFailed(_) => {
-            500
-        }
+        ItrError::NoDatabase
+        | ItrError::Db(_)
+        | ItrError::Io(_)
+        | ItrError::UpgradeFailed(_)
+        | ItrError::NewerSchema { .. } => 500,
     };
     let code = err.error_code();
     error_response(status, &err.to_string(), code)

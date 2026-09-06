@@ -32,6 +32,16 @@ pub enum ItrError {
 
     #[error("At least one filter is required for bulk operations")]
     NoFilters,
+
+    #[error(
+        "Database schema generation {db} was written by {written_by}; this itr ({current}) only supports generation {supported}.          Update itr: install.ps1 -Update (Windows), install.sh --update (Unix), or 'itr upgrade' from a source checkout"
+    )]
+    NewerSchema {
+        db: i32,
+        supported: i32,
+        written_by: String,
+        current: String,
+    },
 }
 
 impl ItrError {
@@ -46,6 +56,7 @@ impl ItrError {
             ItrError::Io(_) => 1,
             ItrError::UpgradeFailed(_) => 1,
             ItrError::NoFilters => 1,
+            ItrError::NewerSchema { .. } => 1,
         }
     }
 
@@ -60,6 +71,7 @@ impl ItrError {
             ItrError::Io(_) => "IO_ERROR",
             ItrError::UpgradeFailed(_) => "UPGRADE_FAILED",
             ItrError::NoFilters => "NO_FILTERS",
+            ItrError::NewerSchema { .. } => "NEWER_SCHEMA",
         }
     }
 }
