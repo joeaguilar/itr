@@ -60,7 +60,7 @@ const BATCH_NOTE_KNOWN_KEYS: &[&str] = &["id", "text", "agent"];
 
 /// REVIEW notes for any keys of `value` not in `known_keys` — the shared
 /// "never silently swallow input" check behind every batch verb (#150, #212).
-fn unknown_key_notes(value: &serde_json::Value, known_keys: &[&str]) -> Vec<String> {
+pub(crate) fn unknown_key_notes(value: &serde_json::Value, known_keys: &[&str]) -> Vec<String> {
     let Some(map) = value.as_object() else {
         return vec![];
     };

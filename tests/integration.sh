@@ -2195,6 +2195,196 @@ rm -rf "$UI_DIR"
 
 # ─────────────────────────────────────────────
 echo ""
+echo "--- ui write-path integrity (#255 #258 #270 #274) ---"
+# ─────────────────────────────────────────────
+# Malformed data through the UI JSON API: create goes through the CLI
+# `add --stdin-json` path (atomic, soft parent fallback, alias/unknown-key
+# parity), PATCH validates types and mirrors CLI close semantics, notes and
+# bulk resolve are atomic, and UI stats agree with `itr stats`.
+
+UIW_DIR=$(mktemp -d)
+UIW_DB="$UIW_DIR/.itr.db"
+$ITR init --db "$UIW_DB" > /dev/null
+UIW_OUT="$UIW_DIR/ui.out"
+UIW_ERR="$UIW_DIR/ui.err"
+# ITR_AGENT proves UI notes use the CLI's agent fallback. UI_PID is reused so
+# the suite-level EXIT trap reaps this server too.
+ITR_AGENT=ui-env-agent $ITR --db "$UIW_DB" ui --port 0 --no-open -f json > "$UIW_OUT" 2> "$UIW_ERR" &
+UI_PID=$!
+
+UIW_PORT=""
+for _ in {1..50}; do
+    UIW_PORT="$(sed -nE 's#.*http://127\.0\.0\.1:([0-9]+)/.*#\1#p' "$UIW_OUT" 2>/dev/null | head -1)"
+    if [ -n "$UIW_PORT" ]; then
+        break
+    fi
+    if ! kill -0 "$UI_PID" 2>/dev/null; then
+        break
+    fi
+    sleep 0.1
+done
+
+if [ -z "$UIW_PORT" ] || ! kill -0 "$UI_PID" 2>/dev/null; then
+    fail "ui write-path: server starts" "no startup banner/port; stderr: $(cat "$UIW_ERR" 2>/dev/null)"
+else
+    UIW_TOKEN=$(python3 - "$UIW_OUT" <<'PY'
+import json, sys, urllib.parse
+with open(sys.argv[1], encoding="utf-8") as f:
+    data = json.load(f)
+print(urllib.parse.parse_qs(urllib.parse.urlparse(data["url"]).query)["token"][0])
+PY
+)
+    UIW_RESULT=$(python3 - "$UIW_PORT" "$UIW_TOKEN" 2>&1 <<'PY'
+import http.client
+import json
+import sys
+
+port = int(sys.argv[1])
+token = sys.argv[2]
+failures = []
+
+def call(method, path, body=None):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    payload = json.dumps(body).encode() if body is not None else None
+    headers = {"X-ITR-Token": token}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    conn.request(method, path, body=payload, headers=headers)
+    resp = conn.getresponse()
+    raw = resp.read().decode()
+    conn.close()
+    return resp.status, (json.loads(raw) if raw else {})
+
+def check(name, cond, detail=""):
+    if not cond:
+        failures.append(f"{name}: {detail}")
+
+def total_issues():
+    return call("GET", "/api/issues?all=true")[1]["total"]
+
+# --- create: parity with `add --stdin-json` ---
+st, a = call("POST", "/api/issues", {"title": "blocker A"})
+check("create A", st == 200, a)
+a_id = a["issue"]["id"]
+check("clean create has empty review_notes", a.get("review_notes") == [], a)
+
+# #270: an empty Blocked-by field is [] and creates cleanly.
+st, e = call("POST", "/api/issues", {"title": "empty blocked_by", "blocked_by": []})
+check("#270 empty blocked_by", st == 200 and e["issue"]["blocked_by"] == [], (st, e))
+
+# #255: a missing blocker is a 404 and NOTHING is committed.
+before = total_issues()
+st, err = call("POST", "/api/issues", {"title": "orphan?", "priority": "bogus", "blocked_by": [9999]})
+check("#255 missing blocker is 404", st == 404 and err.get("code") == "NOT_FOUND", (st, err))
+check("#255 missing blocker commits nothing", total_issues() == before, total_issues())
+st, err = call("POST", "/api/issues", {"title": "zero blocker", "blocked_by": [0]})
+check("#270 blocked_by [0] rolls back", st == 404 and total_issues() == before, (st, err))
+
+# #258: a missing parent is a soft fallback, not a 500 FK error.
+st, orphan = call("POST", "/api/issues", {"title": "orphan child", "parent_id": 9999})
+check("#258 missing parent is 200", st == 200, (st, orphan))
+if st == 200:
+    check("#258 parentless", orphan["issue"]["parent_id"] is None, orphan)
+    check("#258 review note", any("parent 9999" in n for n in orphan["review_notes"]), orphan)
+    check("#258 _needs_review", "_needs_review" in orphan["issue"]["tags"], orphan)
+
+# AW-6: `parent` alias, unknown keys, and string blocked_by match stdin-json.
+st, alias = call("POST", "/api/issues", {
+    "title": "alias child", "parent": a_id, "priorty": "high", "blocked_by": [str(a_id)],
+})
+check("AW-6 alias create 200", st == 200, (st, alias))
+if st == 200:
+    check("AW-6 parent alias links", alias["issue"]["parent_id"] == a_id, alias)
+    check("AW-6 string blocked_by", alias["issue"]["blocked_by"] == [a_id], alias)
+    check("AW-6 unknown key reported", any("priorty" in n for n in alias["review_notes"]), alias)
+    child_id = alias["issue"]["id"]
+
+st, err = call("POST", "/api/issues", {"title": "   "})
+check("blank title stays 400", st == 400 and err.get("code") == "INVALID_VALUE", (st, err))
+
+# --- PATCH ---
+# #274: status done via PATCH cleans blocker edges and reports unblocked.
+st, done = call("PATCH", f"/api/issues/{a_id}", {"status": "done"})
+check("#274 patch done 200", st == 200, (st, done))
+check("#274 unblocked reported", [u["id"] for u in done.get("unblocked", [])] == [child_id], done)
+st, child = call("GET", f"/api/issues/{child_id}")
+check("#274 edge removed", child["issue"]["blocked_by"] == [], child)
+
+# #228: an unrecognized status keeps a closed issue closed (+ REVIEW note).
+st, kept = call("PATCH", f"/api/issues/{a_id}", {"status": "bogus"})
+check("#228 unknown status 200", st == 200, (st, kept))
+check("#228 stays done", kept["issue"]["status"] == "done", kept)
+check("#228 review note", any("kept 'done'" in n for n in kept.get("review_notes", [])), kept)
+
+# AW-17: wrong-typed values are a 400 naming the fields; nothing applied.
+st, err = call("PATCH", f"/api/issues/{child_id}", {"title": None, "context": 123, "status": "done"})
+check("AW-17 wrong types 400", st == 400 and err.get("code") == "INVALID_VALUE", (st, err))
+check("AW-17 names title", "title" in err.get("error", ""), err)
+check("AW-17 names context", "context" in err.get("error", ""), err)
+st, child = call("GET", f"/api/issues/{child_id}")
+check("AW-17 nothing applied", child["issue"]["status"] == "open", child)
+st, err = call("PATCH", f"/api/issues/{child_id}", {"parent_id": "abc"})
+check("AW-5 non-numeric parent is 400", st == 400, (st, err))
+st, child = call("GET", f"/api/issues/{child_id}")
+check("AW-5 parent not cleared", child["issue"]["parent_id"] == a_id, child)
+
+# --- notes ---
+st, err = call("POST", f"/api/issues/{child_id}/notes", {"content": "   "})
+check("AW-8 blank note 400", st == 400 and err.get("code") == "INVALID_VALUE", (st, err))
+st, note = call("POST", f"/api/issues/{child_id}/notes", {"content": "from ui"})
+check("note add 200", st == 200, (st, note))
+check("note uses ITR_AGENT fallback", note["note"]["agent"] == "ui-env-agent", note)
+st, err = call("PATCH", f"/api/notes/{note['note']['id']}", {"content": ""})
+check("AW-8 blank note update 400", st == 400, (st, err))
+
+# --- AW-4: bulk resolve is all-or-nothing ---
+st, b = call("POST", "/api/issues", {"title": "bulk B"})
+b_id = b["issue"]["id"]
+st, err = call("POST", "/api/bulk/resolve/apply", {"ids": [b_id, 99999]})
+check("AW-4 missing id 404", st == 404, (st, err))
+st, b = call("GET", f"/api/issues/{b_id}")
+check("AW-4 nothing resolved", b["issue"]["status"] == "open", b)
+
+# --- SQ-3: closed issue with an open blocker is not "blocked" ---
+st, x = call("POST", "/api/issues", {"title": "open blocker X"})
+st, y = call("POST", "/api/issues", {"title": "blocked Y", "blocked_by": [x["issue"]["id"]]})
+st, _ = call("POST", f"/api/issues/{y['issue']['id']}/close", {"reason": "done anyway"})
+stats = call("GET", "/api/bootstrap")[1]["stats"]
+print(json.dumps({"failures": failures, "blocked": stats["blocked"], "ready": stats["ready"]}))
+PY
+) || true
+    UIW_CLI_STATS=$($ITR --db "$UIW_DB" stats -f json)
+    UIW_CHECK=$(python3 - "$UIW_RESULT" "$UIW_CLI_STATS" <<'PY' 2>&1 || true
+import json, sys
+try:
+    ui = json.loads(sys.argv[1].strip().splitlines()[-1])
+except Exception:
+    print("could not parse UI result: " + sys.argv[1])
+    raise SystemExit(0)
+cli = json.loads(sys.argv[2])
+failures = list(ui["failures"])
+if (ui["blocked"], ui["ready"]) != (cli["blocked"], cli["ready"]):
+    failures.append(f"SQ-3 UI stats blocked/ready {ui['blocked']}/{ui['ready']} != CLI {cli['blocked']}/{cli['ready']}")
+print("ok" if not failures else "; ".join(failures))
+PY
+)
+    if [ "$UIW_CHECK" = "ok" ]; then
+        pass "ui write-path: atomic create/notes/bulk, PATCH type+status parity, stats parity"
+    else
+        fail "ui write-path: atomic create/notes/bulk, PATCH type+status parity, stats parity" "$UIW_CHECK"
+    fi
+    UIW_DOCTOR_EXIT=0
+    $ITR --db "$UIW_DB" doctor > /dev/null 2>&1 || UIW_DOCTOR_EXIT=$?
+    assert_eq "ui write-path: doctor finds no done_blocker after PATCH status done (#274)" "0" "$UIW_DOCTOR_EXIT"
+fi
+
+kill "$UI_PID" >/dev/null 2>&1 || true
+wait "$UI_PID" 2>/dev/null || true
+UI_PID=""
+rm -rf "$UIW_DIR"
+
+# ─────────────────────────────────────────────
+echo ""
 echo "--- update --parent / --no-parent ---"
 # ─────────────────────────────────────────────
 

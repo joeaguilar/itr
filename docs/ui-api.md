@@ -9,6 +9,11 @@ The browser receives a per-session token in the root URL. API callers must send
 that token as `X-ITR-Token: <token>` or as a `token=<token>` query parameter.
 Request bodies and responses are JSON unless noted.
 
+Every mutating route (create, PATCH, close, notes, dependencies, relations,
+bulk resolve) runs in a single `BEGIN IMMEDIATE` transaction: a failure at any
+step rolls the whole request back, including its audit events, and concurrent
+CLI writers wait on the lock instead of failing with `database is locked`.
+
 Raw SQL is disabled unless the server starts with `itr ui --allow-dangerous`.
 When disabled, `POST /api/sql` returns `403` with
 `DANGEROUS_SQL_DISABLED`.
@@ -164,6 +169,10 @@ Response:
 }
 ```
 
+`blocked` and `ready` partition `active` (open + in-progress) with the same
+definition `itr stats` uses: a done or wontfix issue is never counted as
+blocked, even if an open issue still has an edge to it.
+
 ### `GET /api/issues`
 
 Token required. No request body.
@@ -274,7 +283,10 @@ Request body:
 ```
 
 Query responses include column names, rows as arrays, total rows stepped, a
-truncation marker for displayed rows, and the connection change count:
+truncation marker for displayed rows, and `changes`: the number of rows the
+submitted statement(s) inserted, updated, or deleted at top level. Rows touched
+by triggers (the `updated_at` touch, full-text index sync) are not counted, and
+a multi-statement batch reports the sum across its statements:
 
 ```json
 {
@@ -325,18 +337,38 @@ Request body:
 }
 ```
 
-Defaults: `priority` defaults to `medium`, `kind` defaults to `task`, strings
-default to empty, arrays default to empty, and `parent_id` defaults to `null`.
-Unknown priority or kind values are soft-normalized to defaults and add
-`_needs_review` plus review notes.
+The body is parsed and inserted by the same code as
+`itr add --stdin-json`, so the two paths behave identically:
 
-Response:
+- Defaults: `priority` defaults to `medium`, `kind` defaults to `task`, strings
+  default to empty, arrays default to empty, and `parent_id` defaults to `null`.
+- `parent` is accepted as an alias for `parent_id`.
+- `blocked_by` entries may be integers or numeric strings (`[2, "3"]`). Other
+  tokens are skipped with a REVIEW note.
+- Unknown keys are not silently dropped: each produces a REVIEW note.
+- Unknown priority or kind values fall back to the defaults with a REVIEW
+  note.
+- A `parent_id` that does not exist creates the issue without a parent and
+  adds a REVIEW note (not a `500` foreign-key error).
+- A `blocked_by` id that does not exist is a `404 NOT_FOUND`. The whole create
+  rolls back, so no issue, notes, or edges are left behind.
+
+Any REVIEW note tags the issue `_needs_review` and is stored as an `itr` note.
+
+The UI adds some normalization on top. The title is trimmed, and an empty or
+whitespace-only title is a `400 INVALID_VALUE`. `files`, `tags`, and `skills`
+are trimmed and deduplicated, and `skills` are lowercased. A body that is not
+UTF-8 JSON, or that has a wrong-typed field such as `"title": 5`, is a `400`.
+
+Response. `review_notes` lists the REVIEW notes this create produced, and is
+empty for a clean create:
 
 ```json
 {
   "issue": {
     "$ref": "IssueDetail"
-  }
+  },
+  "review_notes": ["REVIEW: parent 9999 not found; issue created without a parent"]
 }
 ```
 
@@ -377,13 +409,26 @@ Request body is a partial object. Supported fields:
 }
 ```
 
-`parent_id` must be an integer issue id or `null`. Invalid `status`,
-`priority`, and `kind` values fall back to `open`, `medium`, and `task`.
+Type checking runs before any write. The request is a `400 INVALID_VALUE` that
+names every offending field, and applies nothing, when any of these hold:
 
-Patching `status` to `done` or `wontfix` **does not** remove dependency edges
-or report newly unblocked issues. It only updates the status field. To close
-an issue and unblock its dependents in one step, use
-`POST /api/issues/{id}/close` instead.
+- A text or enum field is not a string (`{"title": null, "context": 123}`).
+- `title` is empty or whitespace-only. Titles are trimmed, as on create.
+- `files`, `tags`, or `skills` is not an array of strings.
+- `parent_id` is not an integer, a numeric string such as `"12"`, or `null`.
+  `null` clears the parent, and anything else, such as `"abc"`, never clears it.
+
+`parent` is accepted as an alias for `parent_id`. Other unknown keys are
+ignored with a REVIEW note.
+
+Invalid `status`, `priority`, and `kind` values follow the CLI update soft
+fallback. The current value is **kept**, a REVIEW note is added, and the issue
+is tagged `_needs_review`. An unrecognized status never reopens a closed
+issue.
+
+Patching `status` to `done` or `wontfix` behaves like `itr close`. It removes
+dependency edges where this issue was the blocker and reports the newly
+unblocked issues in `unblocked`.
 
 Patching `assigned_to` to an empty string clears the assignee for that issue;
 this is distinct from the `assigned_to=` query parameter on
@@ -395,7 +440,14 @@ Response:
 {
   "issue": {
     "$ref": "IssueDetail"
-  }
+  },
+  "unblocked": [
+    {
+      "id": 2,
+      "title": "string"
+    }
+  ],
+  "review_notes": []
 }
 ```
 
@@ -446,7 +498,10 @@ Request body:
 }
 ```
 
-`agent` defaults to empty.
+`content` must be non-empty after trimming. Otherwise the request is a
+`400 INVALID_VALUE`. As with `itr note`, an empty `agent` falls back to the
+`ITR_AGENT` environment variable of the `itr ui` process, and then to empty.
+The note and its `note_added` audit event commit together.
 
 Response:
 
@@ -479,6 +534,9 @@ Request body:
 ```
 
 Only `content` is persisted; `agent` is accepted by the input shape but ignored.
+`content` must be non-empty after trimming (`400 INVALID_VALUE`). The update
+and its `note_updated` event commit together, and a delete commits together
+with its `note_deleted` event.
 
 Response:
 
@@ -651,6 +709,10 @@ Request body:
 ```
 
 Applies the same close behavior as `POST /api/issues/{id}/close` to each id.
+The request is all-or-nothing. Every id is checked before anything is written,
+and all resolves share one transaction. A single missing id is a
+`404 NOT_FOUND`, and several missing ids are a `400 INVALID_VALUE` that lists
+them. In both cases no issue is resolved. Duplicate ids are resolved once.
 
 Response:
 
