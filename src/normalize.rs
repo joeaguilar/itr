@@ -32,6 +32,8 @@
 /// assert_eq!(normalize_priority("Bogus"), "bogus");
 /// ```
 pub fn normalize_priority(p: &str) -> String {
+    // Surrounding whitespace is never meaningful (`" high "` is `high`).
+    let p = p.trim();
     match p.to_lowercase().as_str() {
         "critical" | "high" | "medium" | "low" => p.to_lowercase(),
         "urgent" | "p0" | "highest" => "critical".to_string(),
@@ -59,6 +61,7 @@ pub fn normalize_priority(p: &str) -> String {
 /// assert_eq!(normalize_kind("chore"), "task");
 /// ```
 pub fn normalize_kind(k: &str) -> String {
+    let k = k.trim();
     match k.to_lowercase().as_str() {
         "bug" | "feature" | "task" | "epic" => k.to_lowercase(),
         "enhancement" | "feat" | "story" => "feature".to_string(),
@@ -87,12 +90,15 @@ pub fn normalize_kind(k: &str) -> String {
 /// assert_eq!(normalize_status("cancelled"), "wontfix");
 /// ```
 pub fn normalize_status(s: &str) -> String {
+    let s = s.trim();
     match s.to_lowercase().as_str() {
         "open" | "in-progress" | "done" | "wontfix" => s.to_lowercase(),
         "todo" | "new" | "backlog" => "open".to_string(),
         "closed" | "resolved" | "fixed" => "done".to_string(),
         "cancelled" | "canceled" => "wontfix".to_string(),
-        "wip" | "started" | "progress" | "in_progress" | "inprogress" => "in-progress".to_string(),
+        "wip" | "started" | "progress" | "in_progress" | "inprogress" | "in progress" => {
+            "in-progress".to_string()
+        }
         _ => s.to_lowercase(),
     }
 }

@@ -104,14 +104,21 @@ These are the per-command surfaces of the project-wide pattern documented in
 - Status synonyms normalize before validation: `todo`, `new`, `backlog` to
   `open`; `closed`, `resolved`, `fixed` to `done`; `cancelled`, `canceled` to
   `wontfix`; `wip`, `started`, `progress`, `in_progress`, `inprogress` to
-  `in-progress`.
+  `in-progress`, `in progress`. Surrounding whitespace is ignored everywhere
+  (`" high "` is `high`).
 - `add` invalid priority/kind defaults to `medium`/`task`, adds
   `_needs_review`, creates an `itr` note, and exits 0.
-- `update` invalid priority/kind defaults to `medium`/`task`, adds
-  `_needs_review`, creates an `itr` note, and exits 0. An invalid status keeps
-  the issue's current status (it is never reset to `open` — a typo must not
-  reopen a closed issue), adds `_needs_review`, creates an `itr` note, and
-  exits 0, matching `batch update` (#163).
+- `update` invalid status/priority/kind keeps the issue's current value (a typo
+  must never reopen a closed issue or clobber a field the caller did not mean
+  to change, #163/#222), adds `_needs_review`, creates an `itr` note, and exits
+  0, matching `batch update`, `bulk update`, and the UI.
+- Titles are required: surrounding whitespace is trimmed and line breaks /
+  control characters are removed on every write path. `add` with an empty
+  title exits 1 (`INVALID_VALUE`); `batch add` reports it as that item's
+  `error`; `update --title ""` keeps the current title with a REVIEW note.
+- `files` / `tags` / `skills` are cleaned identically on every write path:
+  elements are trimmed, empty and duplicate elements are dropped, and skills
+  are lowercased. Note content must be non-empty after trimming.
 - `batch add` invalid priority/kind defaults to `medium`/`task`, marks the item
   `review`, adds `_needs_review`, and exits 0.
 - `batch update` invalid status/priority/kind keeps the existing value, marks

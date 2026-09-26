@@ -1,3 +1,4 @@
+use crate::commands::update::persist_list_field;
 use crate::db;
 use crate::error::ItrError;
 use crate::format::Format;
@@ -209,14 +210,11 @@ fn run_update_core(
                 db::update_issue_field(&tx, *id, "priority", p)?;
             }
             if let Some(ref new_tag) = add_tag {
-                let mut current_tags = old_issue.tags.clone();
-                if !current_tags.contains(new_tag) {
-                    let old_json = serde_json::to_string(&current_tags)?;
-                    current_tags.push(new_tag.clone());
-                    let new_json = serde_json::to_string(&current_tags)?;
-                    db::record_event(&tx, *id, "tags", &old_json, &new_json)?;
-                    db::update_issue_field(&tx, *id, "tags", &new_json)?;
-                }
+                // Same cleaning and audit shape as `update --add-tag`: an
+                // empty or already-present tag is a no-op, not a phantom edit.
+                let mut updated = old_issue.tags.clone();
+                updated.push(new_tag.clone());
+                persist_list_field(&tx, *id, "tags", &old_issue.tags, &updated)?;
             }
             if cleanup_blockers {
                 let unblocked = db::get_newly_unblocked(&tx, *id)?;

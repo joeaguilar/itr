@@ -6,6 +6,7 @@ mod error;
 mod format;
 mod models;
 mod normalize;
+mod sanitize;
 mod urgency;
 mod util;
 

@@ -5,6 +5,7 @@ use crate::format::Format;
 use crate::models::IssueDetail;
 use crate::normalize;
 use crate::normalize::{validate_kind, validate_priority, validate_status};
+use crate::sanitize;
 use crate::urgency::UrgencyConfig;
 use crate::util;
 use rusqlite::Connection;
@@ -48,8 +49,16 @@ pub(crate) fn persist_list_field(
     old: &[String],
     new: &[String],
 ) -> Result<(), ItrError> {
+    // Compare and audit the cleaned list that will actually be stored, so a
+    // whitespace-only or duplicate edit is a no-op rather than a phantom
+    // event (see `sanitize::clean_list`).
+    let cleaned = if field == "skills" {
+        sanitize::clean_skills(new)
+    } else {
+        sanitize::clean_list(new)
+    };
     let old_json = serde_json::to_string(old)?;
-    let new_json = serde_json::to_string(new)?;
+    let new_json = serde_json::to_string(&cleaned)?;
     if old_json != new_json {
         db::record_event(tx, id, field, &old_json, &new_json)?;
         db::update_issue_field(tx, id, field, &new_json)?;
@@ -180,12 +189,13 @@ pub(crate) fn run_core(
                 db::update_issue_field(&tx, id, "priority", p)?;
             }
             Err(_) => {
+                // Soft fallback (#222): keep the current priority. Resetting
+                // to 'medium' would clobber a value the caller never asked
+                // to change. Matches `batch update`, `bulk update`, and the UI.
                 review_notes.push(format!(
-                    "REVIEW: priority '{}' not recognized, defaulted to 'medium'. Valid: critical, high, medium, low",
-                    p
+                    "REVIEW: priority '{}' not recognized, kept '{}'. Valid: critical, high, medium, low",
+                    p, old_issue.priority
                 ));
-                db::record_event(&tx, id, "priority", &old_issue.priority, "medium")?;
-                db::update_issue_field(&tx, id, "priority", "medium")?;
             }
         }
     }
@@ -196,30 +206,43 @@ pub(crate) fn run_core(
                 db::update_issue_field(&tx, id, "kind", k)?;
             }
             Err(_) => {
+                // Soft fallback (#222): keep the current kind (see priority).
                 review_notes.push(format!(
-                    "REVIEW: kind '{}' not recognized, defaulted to 'task'. Valid: bug, feature, task, epic",
-                    k
+                    "REVIEW: kind '{}' not recognized, kept '{}'. Valid: bug, feature, task, epic",
+                    k, old_issue.kind
                 ));
-                db::record_event(&tx, id, "kind", &old_issue.kind, "task")?;
-                db::update_issue_field(&tx, id, "kind", "task")?;
             }
         }
     }
     if let Some(ref t) = title {
-        db::record_event(&tx, id, "title", &old_issue.title, t)?;
-        db::update_issue_field(&tx, id, "title", t)?;
+        // Soft fallback: an empty title keeps the current one (a title is
+        // required, and a typo must not blank it). Matches `batch update`.
+        match db::require_title(t) {
+            Ok(clean) => {
+                db::record_event(&tx, id, "title", &old_issue.title, &clean)?;
+                db::update_issue_field(&tx, id, "title", &clean)?;
+            }
+            Err(_) => review_notes.push(format!(
+                "REVIEW: title '{}' is empty after cleaning, kept '{}'",
+                t, old_issue.title
+            )),
+        }
     }
+    // Events record the cleaned value that is actually stored.
     if let Some(ref c) = context {
-        db::record_event(&tx, id, "context", &old_issue.context, c)?;
-        db::update_issue_field(&tx, id, "context", c)?;
+        let c = sanitize::clean_text(c);
+        db::record_event(&tx, id, "context", &old_issue.context, &c)?;
+        db::update_issue_field(&tx, id, "context", &c)?;
     }
     if let Some(ref a) = acceptance {
-        db::record_event(&tx, id, "acceptance", &old_issue.acceptance, a)?;
-        db::update_issue_field(&tx, id, "acceptance", a)?;
+        let a = sanitize::clean_text(a);
+        db::record_event(&tx, id, "acceptance", &old_issue.acceptance, &a)?;
+        db::update_issue_field(&tx, id, "acceptance", &a)?;
     }
     if let Some(ref a) = assigned_to {
-        db::record_event(&tx, id, "assigned_to", &old_issue.assigned_to, a)?;
-        db::update_issue_field(&tx, id, "assigned_to", a)?;
+        let a = sanitize::clean_assignee(a);
+        db::record_event(&tx, id, "assigned_to", &old_issue.assigned_to, &a)?;
+        db::update_issue_field(&tx, id, "assigned_to", &a)?;
     }
 
     // List fields (files/tags/skills). The replace form is applied first;

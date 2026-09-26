@@ -9,6 +9,7 @@ use crate::models::{
 };
 use crate::normalize;
 use crate::normalize::{validate_kind, validate_priority, validate_status};
+use crate::sanitize;
 use crate::urgency::UrgencyConfig;
 use crate::util;
 use rusqlite::Connection;
@@ -193,7 +194,13 @@ fn run_add_core(conn: &Connection, input: &str, dry_run: bool) -> Result<BatchRe
     let mut parsed: Vec<Result<(BatchAddInput, Vec<String>), String>> = values
         .iter()
         .enumerate()
-        .map(|(idx, value)| parse_add_item(value).map_err(|e| format!("item {idx}: {e}")))
+        .map(|(idx, value)| {
+            let (item, notes) = parse_add_item(value).map_err(|e| format!("item {idx}: {e}"))?;
+            // An empty title would fail the insert and abort the whole
+            // batch; report it as this item's error instead (#164).
+            db::require_title(&item.title).map_err(|e| format!("item {idx}: {e}"))?;
+            Ok((item, notes))
+        })
         .collect();
 
     // Use a transaction
@@ -594,20 +601,30 @@ fn run_update_core(conn: &Connection, input: &str, dry_run: bool) -> Result<Batc
 
         // Handle title
         if let Some(ref t) = item.title {
-            db::record_event(&tx, item.id, "title", &issue.title, t)?;
-            db::update_issue_field(&tx, item.id, "title", t)?;
+            match db::require_title(t) {
+                Ok(clean) => {
+                    db::record_event(&tx, item.id, "title", &issue.title, &clean)?;
+                    db::update_issue_field(&tx, item.id, "title", &clean)?;
+                }
+                Err(_) => review_notes.push(format!(
+                    "title '{}' is empty after cleaning, kept '{}'",
+                    t, issue.title
+                )),
+            }
         }
 
-        // Handle context
+        // Handle context (events record the cleaned, stored value)
         if let Some(ref c) = item.context {
-            db::record_event(&tx, item.id, "context", &issue.context, c)?;
-            db::update_issue_field(&tx, item.id, "context", c)?;
+            let c = sanitize::clean_text(c);
+            db::record_event(&tx, item.id, "context", &issue.context, &c)?;
+            db::update_issue_field(&tx, item.id, "context", &c)?;
         }
 
         // Handle assigned_to
         if let Some(ref a) = item.assigned_to {
-            db::record_event(&tx, item.id, "assigned_to", &issue.assigned_to, a)?;
-            db::update_issue_field(&tx, item.id, "assigned_to", a)?;
+            let a = sanitize::clean_assignee(a);
+            db::record_event(&tx, item.id, "assigned_to", &issue.assigned_to, &a)?;
+            db::update_issue_field(&tx, item.id, "assigned_to", &a)?;
         }
 
         // Handle add_tags / remove_tags (audited in JSON-array format, #187)

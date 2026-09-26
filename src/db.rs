@@ -1,5 +1,6 @@
 use crate::error::ItrError;
 use crate::models::{Event, Issue, Note, Relation};
+use crate::sanitize;
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 use std::env;
 use std::path::{Path, PathBuf};
@@ -483,9 +484,15 @@ pub fn insert_issue(
     parent_id: Option<i64>,
     assigned_to: &str,
 ) -> Result<Issue, ItrError> {
-    let files_json = serde_json::to_string(files)?;
-    let tags_json = serde_json::to_string(tags)?;
-    let skills_json = serde_json::to_string(skills)?;
+    // Last line of defense: every creation path (add, batch, UI, bulk
+    // helpers) stores the same cleaned shape. See `sanitize`.
+    let title = require_title(title)?;
+    let context = sanitize::clean_text(context);
+    let acceptance = sanitize::clean_text(acceptance);
+    let assigned_to = sanitize::clean_assignee(assigned_to);
+    let files_json = serde_json::to_string(&sanitize::clean_list(files))?;
+    let tags_json = serde_json::to_string(&sanitize::clean_list(tags))?;
+    let skills_json = serde_json::to_string(&sanitize::clean_skills(skills))?;
 
     conn.execute(
         "INSERT INTO issues (title, priority, kind, context, files, tags, skills, acceptance, parent_id, assigned_to)
@@ -497,6 +504,59 @@ pub fn insert_issue(
     let issue = get_issue(conn, id)?;
     fts_index_issue(conn, &issue);
     Ok(issue)
+}
+
+/// Clean a title and reject it when nothing is left: a title is the one
+/// field with no meaningful default.
+pub fn require_title(raw: &str) -> Result<String, ItrError> {
+    let title = sanitize::clean_title(raw);
+    if title.is_empty() {
+        return Err(ItrError::InvalidValue {
+            field: "title".to_string(),
+            value: raw.to_string(),
+            valid: "non-empty text".to_string(),
+        });
+    }
+    Ok(title)
+}
+
+/// Clean note content and reject it when nothing is left.
+fn require_note_content(raw: &str) -> Result<String, ItrError> {
+    let content = sanitize::clean_text(raw);
+    if content.trim().is_empty() {
+        return Err(ItrError::InvalidValue {
+            field: "content".to_string(),
+            value: raw.to_string(),
+            valid: "non-empty string".to_string(),
+        });
+    }
+    Ok(content)
+}
+
+/// Clean one column value for [`update_issue_field`]. JSON-array columns
+/// must hold a JSON array of strings; anything else is rejected rather than
+/// written, because readers could not parse it back.
+fn clean_field_value(field: &str, value: &str) -> Result<String, ItrError> {
+    Ok(match field {
+        "title" => require_title(value)?,
+        "context" | "acceptance" | "close_reason" => sanitize::clean_text(value),
+        "assigned_to" => sanitize::clean_assignee(value),
+        "files" | "tags" | "skills" => {
+            let items: Vec<String> =
+                serde_json::from_str(value).map_err(|_| ItrError::InvalidValue {
+                    field: field.to_string(),
+                    value: value.to_string(),
+                    valid: "a JSON array of strings".to_string(),
+                })?;
+            let cleaned = if field == "skills" {
+                sanitize::clean_skills(&items)
+            } else {
+                sanitize::clean_list(&items)
+            };
+            serde_json::to_string(&cleaned)?
+        }
+        _ => value.to_string(),
+    })
 }
 
 pub fn get_issue(conn: &Connection, id: i64) -> Result<Issue, ItrError> {
@@ -521,8 +581,63 @@ pub fn issue_exists(conn: &Connection, id: i64) -> Result<bool, ItrError> {
     Ok(count > 0)
 }
 
-fn parse_json_array(s: String) -> Vec<String> {
-    serde_json::from_str(&s).unwrap_or_default()
+/// Decode a JSON-array TEXT column (`files`, `tags`, `skills`).
+///
+/// Every writer stores a JSON array of strings, but a hand-edited or
+/// corrupted row must never be silently read back as `[]` (that is how an
+/// export would lose it for good, #242). Salvage what can be salvaged and
+/// say so on stderr:
+/// - an array of non-string scalars keeps each element as its JSON text;
+/// - anything else that is not blank is kept verbatim as a single element.
+fn parse_json_array(issue_id: i64, column: &str, raw: String) -> Vec<String> {
+    if let Ok(items) = serde_json::from_str::<Vec<String>>(&raw) {
+        return items;
+    }
+    if raw.trim().is_empty() {
+        return Vec::new();
+    }
+    let salvaged: Vec<String> = match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(serde_json::Value::Array(items)) => items
+            .into_iter()
+            .map(|item| match item {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            })
+            .collect(),
+        _ => vec![raw.clone()],
+    };
+    eprintln!(
+        "REVIEW: issue #{issue_id} column '{column}' is not a JSON array of strings ({raw}); \
+         read as {salvaged:?}. Rewrite it (e.g. `itr update {issue_id} --{column} ...`) to repair the row"
+    );
+    salvaged
+}
+
+/// Read a TEXT column without failing the whole query on one bad cell.
+///
+/// Invalid UTF-8 or a BLOB (only reachable through raw SQL or file
+/// corruption) is decoded lossily with a `REVIEW:` note naming the row, so
+/// `list` / `export` still work and the damage is visible instead of fatal.
+fn text_col(
+    row: &rusqlite::Row,
+    idx: usize,
+    table: &str,
+    column: &str,
+) -> rusqlite::Result<String> {
+    use rusqlite::types::ValueRef;
+    let (text, problem) = match row.get_ref(idx)? {
+        ValueRef::Text(bytes) => match std::str::from_utf8(bytes) {
+            Ok(s) => return Ok(s.to_string()),
+            Err(_) => (String::from_utf8_lossy(bytes).into_owned(), "invalid UTF-8"),
+        },
+        ValueRef::Blob(bytes) => (String::from_utf8_lossy(bytes).into_owned(), "a BLOB"),
+        ValueRef::Null => (String::new(), "NULL"),
+        ValueRef::Integer(n) => return Ok(n.to_string()),
+        ValueRef::Real(f) => return Ok(f.to_string()),
+    };
+    let row_id: i64 = row.get(0).unwrap_or_default();
+    eprintln!("REVIEW: {table} row {row_id} column '{column}' holds {problem}; read as {text:?}");
+    Ok(text)
 }
 
 /// Append an `AND column IN (?, ?, ...)` clause to the SQL string,
@@ -545,44 +660,48 @@ fn append_in_clause(
 }
 
 fn row_to_issue(row: &rusqlite::Row) -> rusqlite::Result<Issue> {
+    let id: i64 = row.get(0)?;
+    let t = |idx: usize, column: &str| text_col(row, idx, "issues", column);
     Ok(Issue {
-        id: row.get(0)?,
-        title: row.get(1)?,
-        status: row.get(2)?,
-        priority: row.get(3)?,
-        kind: row.get(4)?,
-        context: row.get(5)?,
-        files: parse_json_array(row.get::<_, String>(6)?),
-        tags: parse_json_array(row.get::<_, String>(7)?),
-        skills: parse_json_array(row.get::<_, String>(8)?),
-        acceptance: row.get(9)?,
+        id,
+        title: t(1, "title")?,
+        status: t(2, "status")?,
+        priority: t(3, "priority")?,
+        kind: t(4, "kind")?,
+        context: t(5, "context")?,
+        files: parse_json_array(id, "files", t(6, "files")?),
+        tags: parse_json_array(id, "tags", t(7, "tags")?),
+        skills: parse_json_array(id, "skills", t(8, "skills")?),
+        acceptance: t(9, "acceptance")?,
         parent_id: row.get(10)?,
-        close_reason: row.get(11)?,
-        created_at: row.get(12)?,
-        updated_at: row.get(13)?,
-        assigned_to: row.get(14)?,
+        close_reason: t(11, "close_reason")?,
+        created_at: t(12, "created_at")?,
+        updated_at: t(13, "updated_at")?,
+        assigned_to: t(14, "assigned_to")?,
     })
 }
 
 fn row_to_note(row: &rusqlite::Row) -> rusqlite::Result<Note> {
+    let t = |idx: usize, column: &str| text_col(row, idx, "notes", column);
     Ok(Note {
         id: row.get(0)?,
         issue_id: row.get(1)?,
-        content: row.get(2)?,
-        agent: row.get(3)?,
-        created_at: row.get(4)?,
+        content: t(2, "content")?,
+        agent: t(3, "agent")?,
+        created_at: t(4, "created_at")?,
     })
 }
 
 fn row_to_event(row: &rusqlite::Row) -> rusqlite::Result<Event> {
+    let t = |idx: usize, column: &str| text_col(row, idx, "events", column);
     Ok(Event {
         id: row.get(0)?,
         issue_id: row.get(1)?,
-        field: row.get(2)?,
-        old_value: row.get(3)?,
-        new_value: row.get(4)?,
-        agent: row.get(5)?,
-        created_at: row.get(6)?,
+        field: t(2, "field")?,
+        old_value: t(3, "old_value")?,
+        new_value: t(4, "new_value")?,
+        agent: t(5, "agent")?,
+        created_at: t(6, "created_at")?,
     })
 }
 
@@ -591,8 +710,8 @@ fn row_to_relation(row: &rusqlite::Row) -> rusqlite::Result<Relation> {
         id: row.get(0)?,
         source_id: row.get(1)?,
         target_id: row.get(2)?,
-        relation_type: row.get(3)?,
-        created_at: row.get(4)?,
+        relation_type: text_col(row, 3, "relations", "relation_type")?,
+        created_at: text_col(row, 4, "relations", "created_at")?,
     })
 }
 
@@ -725,6 +844,7 @@ pub fn update_issue_field(
     if !issue_exists(conn, id)? {
         return Err(ItrError::NotFound(id));
     }
+    let value = clean_field_value(field, value)?;
     let sql = format!("UPDATE issues SET {} = ?1 WHERE id = ?2", field);
     conn.execute(&sql, params![value, id])?;
 
@@ -1060,6 +1180,9 @@ pub fn add_note(
     if !issue_exists(conn, issue_id)? {
         return Err(ItrError::NotFound(issue_id));
     }
+    let content = require_note_content(content)?;
+    let agent = sanitize::clean_line(agent);
+    let content = content.as_str();
     conn.execute(
         "INSERT INTO notes (issue_id, content, agent) VALUES (?1, ?2, ?3)",
         params![issue_id, content, agent],
@@ -1106,6 +1229,7 @@ pub fn delete_note(conn: &Connection, note_id: i64) -> Result<Note, ItrError> {
 
 pub fn update_note(conn: &Connection, note_id: i64, content: &str) -> Result<Note, ItrError> {
     let _existing = get_note(conn, note_id)?;
+    let content = require_note_content(content)?;
     conn.execute(
         "UPDATE notes SET content = ?1 WHERE id = ?2",
         params![content, note_id],
@@ -2972,5 +3096,116 @@ mod tests {
             vec!["2026-01-03T00:00:00Z", "2026-01-02T00:00:00Z"],
             "limit must keep the newest matches, newest first"
         );
+    }
+
+    // --- Write choke points and read-side salvage (review 2026-09-26) ---
+
+    #[test]
+    fn insert_issue_stores_the_cleaned_shape() {
+        let conn = test_conn();
+        let files = vec![" a.rs ".to_string(), "a.rs".to_string(), String::new()];
+        let tags = vec!["A".to_string(), "A".to_string(), " ".to_string()];
+        let skills = vec!["Rust".to_string(), " rust ".to_string()];
+        let issue = insert_issue(
+            &conn,
+            "  title\u{1b}[31m\n  ",
+            "medium",
+            "task",
+            "ctx\u{0}\r\n",
+            &files,
+            &tags,
+            &skills,
+            "",
+            None,
+            "  bob ",
+        )
+        .unwrap();
+        assert_eq!(issue.title, "title[31m");
+        assert_eq!(issue.context, "ctx");
+        assert_eq!(issue.files, vec!["a.rs"]);
+        assert_eq!(issue.tags, vec!["A"]);
+        assert_eq!(issue.skills, vec!["rust"]);
+        assert_eq!(issue.assigned_to, "bob");
+    }
+
+    #[test]
+    fn empty_title_and_note_are_rejected_at_the_db_layer() {
+        let conn = test_conn();
+        let err = insert_issue(
+            &conn,
+            " \n ",
+            "medium",
+            "task",
+            "",
+            &[],
+            &[],
+            &[],
+            "",
+            None,
+            "",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ItrError::InvalidValue { ref field, .. } if field == "title"));
+        let issue = add(&conn, "real");
+        assert!(update_issue_field(&conn, issue.id, "title", "   ").is_err());
+        assert_eq!(get_issue(&conn, issue.id).unwrap().title, "real");
+        assert!(add_note(&conn, issue.id, "  \n ", "a").is_err());
+        let note = add_note(&conn, issue.id, "ok", "a").unwrap();
+        assert!(update_note(&conn, note.id, "").is_err());
+    }
+
+    #[test]
+    fn update_issue_field_rejects_non_array_list_values() {
+        let conn = test_conn();
+        let issue = add(&conn, "lists");
+        for bad in ["[\"a\", broken", "\"rust\"", "[1,2]", "{}"] {
+            assert!(
+                update_issue_field(&conn, issue.id, "tags", bad).is_err(),
+                "{bad} must not be stored"
+            );
+        }
+        update_issue_field(&conn, issue.id, "skills", "[\"Go\",\"go\",\" \"]").unwrap();
+        assert_eq!(get_issue(&conn, issue.id).unwrap().skills, vec!["go"]);
+    }
+
+    /// #242: a malformed JSON-array cell is salvaged, never read back as [].
+    #[test]
+    fn malformed_list_cells_are_salvaged_not_dropped() {
+        assert_eq!(
+            parse_json_array(1, "tags", "[\"a\",\"b\"]".into()),
+            vec!["a", "b"]
+        );
+        assert_eq!(parse_json_array(1, "files", "[1,2]".into()), vec!["1", "2"]);
+        assert_eq!(
+            parse_json_array(1, "skills", "\"rust\"".into()),
+            vec!["\"rust\""]
+        );
+        assert_eq!(
+            parse_json_array(1, "tags", "[\"keepme\", broken".into()),
+            vec!["[\"keepme\", broken"]
+        );
+        assert!(parse_json_array(1, "tags", "  ".into()).is_empty());
+    }
+
+    /// IE-10: one corrupt cell no longer aborts every read of the table.
+    #[test]
+    fn invalid_utf8_and_blob_cells_read_lossily() {
+        let conn = test_conn();
+        let issue = add(&conn, "bytes");
+        conn.execute(
+            "UPDATE issues SET context = CAST(x'61ff62' AS TEXT) WHERE id = ?1",
+            params![issue.id],
+        )
+        .unwrap();
+        let note = add_note(&conn, issue.id, "x", "a").unwrap();
+        conn.execute(
+            "UPDATE notes SET content = x'00ff' WHERE id = ?1",
+            params![note.id],
+        )
+        .unwrap();
+        let read = get_issue(&conn, issue.id).unwrap();
+        assert_eq!(read.context, "a\u{fffd}b");
+        assert_eq!(all_issues(&conn).unwrap().len(), 1);
+        assert_eq!(get_notes(&conn, issue.id).unwrap().len(), 1);
     }
 }
