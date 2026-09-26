@@ -76,7 +76,7 @@ fn ready_summaries(
     let mut summaries: Vec<IssueSummary> = issues
         .into_iter()
         .map(|i| build_issue_summary_owned(conn, i, &config))
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     // Sort by urgency descending
     sort_by_urgency_desc(&mut summaries);

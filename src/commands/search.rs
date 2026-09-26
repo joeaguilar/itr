@@ -145,8 +145,8 @@ fn run_core(
         let issue = db::get_issue(conn, *id)?;
         let notes = db::get_notes(conn, *id)?;
         let urg = urgency::compute_urgency(&issue, &config, conn);
-        let blocked_by = db::get_blockers(conn, *id).unwrap_or_default();
-        let is_blocked = db::is_blocked(conn, *id).unwrap_or(false);
+        let blocked_by = db::get_blockers(conn, *id)?;
+        let is_blocked = db::is_blocked(conn, *id)?;
         let (matched_fields, context_snippets) =
             compute_matched_fields_with_snippets(terms, &issue, &notes);
 

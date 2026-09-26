@@ -66,10 +66,10 @@ fn collect_summaries(
     // Consume issues by value so build_issue_summary_owned can move each
     // Issue's string/vec fields directly into the resulting IssueSummary
     // rather than cloning them.
-    Ok(issues
+    issues
         .into_iter()
         .map(|i| build_issue_summary_owned(conn, i, &config))
-        .collect())
+        .collect()
 }
 
 /// Sort summaries in place by the requested key.

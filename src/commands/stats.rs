@@ -42,7 +42,7 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
         *by_kind.entry(issue.kind.clone()).or_insert(0) += 1;
 
         if issue.status != "done" && issue.status != "wontfix" {
-            let is_blocked = db::is_blocked(conn, issue.id).unwrap_or(false);
+            let is_blocked = db::is_blocked(conn, issue.id)?;
             if is_blocked {
                 blocked_count += 1;
             } else {

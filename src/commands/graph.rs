@@ -27,16 +27,16 @@ pub fn run(conn: &Connection, all: bool, fmt: Format) -> Result<(), ItrError> {
         .iter()
         .map(|i| {
             let urg = urgency::compute_urgency(i, &config, conn);
-            let is_blocked = db::is_blocked(conn, i.id).unwrap_or(false);
-            GraphNode {
+            let is_blocked = db::is_blocked(conn, i.id)?;
+            Ok(GraphNode {
                 id: i.id,
                 title: i.title.clone(),
                 status: i.status.clone(),
                 urgency: urg,
                 is_blocked,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, ItrError>>()?;
 
     let mut edges: Vec<GraphEdge> = deps
         .iter()

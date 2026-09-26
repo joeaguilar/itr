@@ -1,4 +1,4 @@
-use super::build_issue_summary;
+use super::try_build_issue_summary;
 use crate::db;
 use crate::error::{self, ItrError};
 use crate::format::{self, Format};
@@ -33,8 +33,8 @@ fn fetch_detail(conn: &Connection, id: i64) -> Result<IssueDetail, ItrError> {
         )?;
         let child_summaries: Vec<IssueSummary> = child_issues
             .iter()
-            .map(|i| build_issue_summary(conn, i, &config))
-            .collect();
+            .map(|i| try_build_issue_summary(conn, i, &config))
+            .collect::<Result<_, _>>()?;
         if child_summaries.is_empty() {
             None
         } else {

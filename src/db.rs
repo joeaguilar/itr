@@ -698,17 +698,17 @@ pub fn list_issues(
             .collect()
     };
 
-    // Filter by blocked status
-    let issues = if filter.blocked_only {
-        issues
-            .into_iter()
-            .filter(|i| is_blocked(conn, i.id).unwrap_or(false))
-            .collect()
-    } else if !filter.include_blocked && !filter.all {
-        issues
-            .into_iter()
-            .filter(|i| !is_blocked(conn, i.id).unwrap_or(false))
-            .collect()
+    // Filter by blocked status. Query errors propagate (#240): treating a
+    // failed check as "not blocked" would make a blocked issue claimable.
+    let issues = if filter.blocked_only || (!filter.include_blocked && !filter.all) {
+        let want_blocked = filter.blocked_only;
+        let mut kept = Vec::with_capacity(issues.len());
+        for issue in issues {
+            if is_blocked(conn, issue.id)? == want_blocked {
+                kept.push(issue);
+            }
+        }
+        kept
     } else {
         issues
     };
@@ -3064,6 +3064,24 @@ mod tests {
         assert!(
             get_relations(&conn, a).unwrap().is_empty(),
             "relation must roll back"
+        );
+    }
+    // #240: dependency-query errors propagate.
+    #[test]
+    fn list_issues_propagates_blocked_check_errors() {
+        let conn = test_conn();
+        add(&conn, "a");
+        conn.execute_batch("DROP TABLE dependencies").unwrap();
+        let err = list_issues(
+            &conn,
+            &crate::models::ListFilter {
+                statuses: vec!["open".to_string()],
+                ..crate::models::ListFilter::default()
+            },
+        );
+        assert!(
+            err.is_err(),
+            "a failed is_blocked must not read as 'not blocked' (#240)"
         );
     }
 }
