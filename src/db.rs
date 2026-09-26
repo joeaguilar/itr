@@ -242,6 +242,24 @@ fn normalize_writer_stamp(full: &str) -> String {
     )
 }
 
+/// Begin a write transaction that takes the `SQLite` write lock up front
+/// (`BEGIN IMMEDIATE`).
+///
+/// Every read-then-write mutation must use this rather than
+/// `Connection::unchecked_transaction` (which is `BEGIN DEFERRED`). In WAL
+/// mode a deferred transaction pins its read snapshot at the first SELECT;
+/// if another connection commits before this one's first write, the upgrade
+/// to a write lock fails with `SQLITE_BUSY_SNAPSHOT` *without* consulting
+/// `busy_timeout`, so parallel agents see "database is locked". Taking the
+/// lock at BEGIN makes the busy handler wait instead, and guarantees the
+/// pre-reads cannot go stale before the writes land.
+pub fn write_tx(conn: &Connection) -> Result<Transaction<'_>, ItrError> {
+    Ok(Transaction::new_unchecked(
+        conn,
+        TransactionBehavior::Immediate,
+    )?)
+}
+
 pub fn open_db(path: &Path) -> Result<Connection, ItrError> {
     open_schema_db(path, false)
 }
@@ -746,7 +764,7 @@ pub fn claim_issue(
     id: i64,
     agent: Option<&str>,
 ) -> Result<ClaimOutcome, ItrError> {
-    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let tx = write_tx(conn)?;
     let (status, assigned_to): (String, String) = tx
         .query_row(
             "SELECT status, assigned_to FROM issues WHERE id = ?1",
