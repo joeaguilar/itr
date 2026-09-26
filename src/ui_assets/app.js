@@ -65,8 +65,41 @@ function parseList(value) {
   return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
+// Parse a comma-separated issue-id field (#270). An empty field is `[]`,
+// never `[0]` (Number("") === 0); tokens that are not positive integers are
+// returned in `invalid` so the caller can show a validation message instead
+// of silently dropping or zeroing them. A leading `#` is accepted.
 function parseIds(value) {
-  return value.split(",").map((item) => Number(item.trim())).filter(Number.isFinite);
+  const ids = [];
+  const invalid = [];
+  for (const raw of value.split(",")) {
+    const item = raw.trim();
+    if (!item) continue;
+    const id = parseIssueId(item);
+    if (id === null) invalid.push(item);
+    else if (!ids.includes(id)) ids.push(id);
+  }
+  return { ids, invalid };
+}
+
+// One issue id: a positive integer, optionally written `#12`. Returns null
+// for anything else so callers never send NaN (which JSON-encodes as null).
+function parseIssueId(value) {
+  const text = String(value).trim().replace(/^#/, "");
+  if (!/^[0-9]+$/.test(text)) return null;
+  const id = Number(text);
+  return Number.isSafeInteger(id) && id > 0 ? id : null;
+}
+
+// Surface server-side REVIEW notes and unblocked issues from a mutation
+// response, so soft fallbacks are never invisible in the browser.
+function reportOutcome(data) {
+  const messages = [...(data.review_notes || [])];
+  const unblocked = data.unblocked || [];
+  if (unblocked.length) {
+    messages.push(`Unblocked ${unblocked.map((item) => `#${item.id}`).join(", ")}`);
+  }
+  if (messages.length) toast(messages.join(" | "));
 }
 
 function setOptions(select, values, selected) {
@@ -226,6 +259,7 @@ async function patchCurrent(patch) {
     });
     state.current = data.issue;
     $("#saveState").textContent = "saved";
+    reportOutcome(data);
     await loadIssues(false);
   } catch (error) {
     $("#saveState").textContent = "error";
@@ -242,9 +276,23 @@ function wireDetailAutosave() {
   for (const field of ["title", "context", "acceptance", "assigned_to", "close_reason"]) {
     fields[field].addEventListener("blur", () => patchCurrent({ [field]: fields[field].value }));
   }
+  // AW-5: an unparseable parent is a validation message, never a silent
+  // clear. Only an intentionally emptied field clears an existing parent.
   fields.parent_id.addEventListener("blur", () => {
+    if (!state.current) return;
     const value = fields.parent_id.value.trim();
-    patchCurrent({ parent_id: value ? Number(value) : null });
+    const current = state.current.parent_id ?? null;
+    if (!value) {
+      if (current !== null) patchCurrent({ parent_id: null });
+      return;
+    }
+    const parentId = parseIssueId(value);
+    if (parentId === null) {
+      toast(`Parent must be an issue number (got "${value}"); parent not changed`);
+      fields.parent_id.value = current ?? "";
+      return;
+    }
+    if (parentId !== current) patchCurrent({ parent_id: parentId });
   });
   for (const field of ["files", "tags", "skills"]) {
     fields[field].addEventListener("blur", () => patchCurrent({ [field]: parseList(fields[field].value) }));
@@ -368,6 +416,7 @@ async function closeCurrent(wontfix) {
     });
     state.current = data.issue;
     renderDetail();
+    reportOutcome(data);
     await loadIssues(false);
   } catch (error) {
     toast(error.message);
@@ -391,8 +440,13 @@ async function addNote() {
 }
 
 async function addDependency() {
-  const blockerId = Number($("#blockerId").value.trim());
-  if (!Number.isFinite(blockerId) || !state.current) return;
+  const raw = $("#blockerId").value.trim();
+  if (!raw || !state.current) return;
+  const blockerId = parseIssueId(raw);
+  if (blockerId === null) {
+    toast(`Blocker must be an issue number (got "${raw}")`);
+    return;
+  }
   try {
     const data = await api(`/api/issues/${state.current.id}/dependencies`, {
       method: "POST",
@@ -408,8 +462,13 @@ async function addDependency() {
 }
 
 async function addRelation() {
-  const targetId = Number($("#relationTarget").value.trim());
-  if (!Number.isFinite(targetId) || !state.current) return;
+  const raw = $("#relationTarget").value.trim();
+  if (!raw || !state.current) return;
+  const targetId = parseIssueId(raw);
+  if (targetId === null) {
+    toast(`Relation target must be an issue number (got "${raw}")`);
+    return;
+  }
   try {
     const data = await api(`/api/issues/${state.current.id}/relations`, {
       method: "POST",
@@ -430,13 +489,19 @@ async function createIssue(event) {
   body.files = parseList(body.files || "");
   body.tags = parseList(body.tags || "");
   body.skills = parseList(body.skills || "");
-  body.blocked_by = parseIds(body.blocked_by || "");
+  const blockedBy = parseIds(body.blocked_by || "");
+  if (blockedBy.invalid.length) {
+    toast(`Blocked by: not issue numbers: ${blockedBy.invalid.join(", ")}`);
+    return;
+  }
+  body.blocked_by = blockedBy.ids;
   try {
     const data = await api("/api/issues", { method: "POST", body: JSON.stringify(body) });
     $("#newDialog").close();
     form.reset();
     await loadIssues(false);
     await selectIssue(data.issue.id);
+    reportOutcome(data);
   } catch (error) {
     toast(error.message);
   }
@@ -470,7 +535,8 @@ async function bulkApply(wontfix) {
     state.selected.clear();
     state.lastBulk = [];
     $("#bulkPreviewPanel").classList.add("hidden");
-    toast(`Resolved ${data.count} issues`);
+    const freed = data.unblocked || [];
+    toast(`Resolved ${data.count} issues${freed.length ? `; unblocked ${freed.map((item) => `#${item.id}`).join(", ")}` : ""}`);
     await loadIssues(false);
   } catch (error) {
     toast(error.message);
