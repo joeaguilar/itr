@@ -302,35 +302,27 @@ fn unflatten_issue(flat: serde_json::Map<String, Value>) -> serde_json::Map<Stri
     bundle
 }
 
-/// Normalize a timestamp field, falling back to `fallback` with a REVIEW
-/// note when it is missing or unparseable.
+/// Normalize a timestamp field, falling back to `fallback` (described by
+/// `fallback_desc` in the note) when it is missing or unparseable.
 fn timestamp_or(
     raw: Option<&str>,
-    fallback: &str,
+    (fallback, fallback_desc): (&str, &str),
     what: &str,
     id: i64,
     reviews: &mut Reviews,
 ) -> String {
-    match raw {
-        Some(value) => {
-            if let Some(ts) = sanitize::normalize_timestamp(value) {
-                ts
-            } else {
-                reviews.issue(
-                    format!("replaced unparseable {what} timestamps with the import time"),
-                    id,
-                );
-                fallback.to_string()
-            }
-        }
-        None => {
-            reviews.issue(
-                format!("set missing {what} timestamps to the import time"),
-                id,
-            );
-            fallback.to_string()
-        }
-    }
+    let problem = match raw {
+        Some(value) => match sanitize::normalize_timestamp(value) {
+            Some(ts) => return ts,
+            None => "unparseable",
+        },
+        None => "missing",
+    };
+    reviews.issue(
+        format!("replaced {problem} {what} timestamps with {fallback_desc}"),
+        id,
+    );
+    fallback.to_string()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -383,7 +375,7 @@ fn validate_record(value: Value, now: &str, reviews: &mut Reviews) -> Result<Imp
         return Err("missing the \"issue\" object".to_string());
     };
     // `parent` is accepted as an alias of `parent_id`, as in `batch add`.
-    if !issue_obj.contains_key("parent_id") {
+    if issue_obj.get("parent_id").is_none_or(Value::is_null) {
         if let Some(parent) = issue_obj.remove("parent") {
             issue_obj.insert("parent_id".to_string(), parent);
         }
@@ -477,10 +469,16 @@ fn validate_record(value: Value, now: &str, reviews: &mut Reviews) -> Result<Imp
         );
     }
 
-    let created_at = timestamp_or(raw.created_at.as_deref(), now, "created_at", id, reviews);
+    let created_at = timestamp_or(
+        raw.created_at.as_deref(),
+        (now, "the import time"),
+        "created_at",
+        id,
+        reviews,
+    );
     let updated_at = timestamp_or(
         raw.updated_at.as_deref(),
-        &created_at,
+        (&created_at, "the issue's created_at"),
         "updated_at",
         id,
         reviews,
@@ -518,7 +516,7 @@ fn validate_record(value: Value, now: &str, reviews: &mut Reviews) -> Result<Imp
                     agent: sanitize::clean_line(&note.agent),
                     created_at: timestamp_or(
                         note.created_at.as_deref(),
-                        &issue.created_at,
+                        (&issue.created_at, "the issue's created_at"),
                         "note created_at",
                         id,
                         reviews,
@@ -538,7 +536,7 @@ fn validate_record(value: Value, now: &str, reviews: &mut Reviews) -> Result<Imp
                 agent: sanitize::clean_line(&event.agent),
                 created_at: timestamp_or(
                     event.created_at.as_deref(),
-                    &issue.updated_at,
+                    (&issue.updated_at, "the issue's updated_at"),
                     "event created_at",
                     id,
                     reviews,
@@ -568,7 +566,7 @@ fn validate_record(value: Value, now: &str, reviews: &mut Reviews) -> Result<Imp
                     relation_type,
                     created_at: timestamp_or(
                         relation.created_at.as_deref(),
-                        &issue.created_at,
+                        (&issue.created_at, "the issue's created_at"),
                         "relation created_at",
                         id,
                         reviews,
@@ -1622,6 +1620,13 @@ mod tests {
             &reviews,
             "ignored unknown bundle field 'blockedby'"
         ));
+        // An explicit `"parent_id": null` (every full export has it) must not
+        // block the alias.
+        let with_null =
+            bundle(serde_json::json!({"id": 3, "title": "c", "parent_id": null, "parent": 1}));
+        let (_, reviews) = import_str(&conn, &with_null, false);
+        assert_eq!(db::get_issue(&conn, 3).unwrap().parent_id, Some(1));
+        assert!(!has_review(&reviews, "'parent'"));
         cleanup(&path);
     }
 
@@ -1650,7 +1655,10 @@ mod tests {
         assert_eq!(issue.created_at, "2026-01-01T00:00:00Z");
         assert!(crate::sanitize::normalize_timestamp(&issue.updated_at).is_some());
         assert!(has_review(&reviews, "removed control characters"));
-        assert!(has_review(&reviews, "unparseable updated_at"));
+        assert!(has_review(
+            &reviews,
+            "replaced unparseable updated_at timestamps with the issue's created_at"
+        ));
         assert!(has_review(&reviews, "cleaned files/tags/skills"));
 
         let (_, reviews) = import_str(
