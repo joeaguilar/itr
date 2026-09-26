@@ -205,12 +205,16 @@ fn resolve_override_db(
 }
 
 /// Schema generation this binary understands, stored in `PRAGMA user_version`.
-/// Bump it whenever `migrate_current_schema` gains a step or the FTS design
-/// changes. A file stamped with a higher generation was written by a newer
-/// itr, and `open_db` refuses it: an out-of-date install must never rewrite
-/// (e.g. `itr reindex`) a schema it does not understand. Generation 1 is the
-/// v3.2 schema (skills, `assigned_to`, events, relations, and the
-/// `contentless_delete=1` FTS index); files older than this guard carry 0.
+/// Bump it for any change an older binary would mishandle: a new
+/// `migrate_current_schema` step, an FTS design change, any DDL change that
+/// fails `fresh_schema_matches_generation_fingerprint`, or a data migration
+/// (see docs/migrations.md). A file stamped with a higher generation was
+/// written by a newer itr, and `open_db` refuses it: an out-of-date install
+/// must never rewrite (e.g. `itr reindex`) a schema it does not understand.
+/// Generation 1 is the shape reached in v2.10.1 (skills, `assigned_to`,
+/// events, relations, and the `contentless_delete=1` FTS index with its sync
+/// triggers); the stamp itself first shipped in v3.3.0, so files last opened
+/// by an older release carry 0.
 pub const SCHEMA_VERSION: i32 = 1;
 
 /// `config` key recording the itr release that last opened the database.
@@ -270,35 +274,28 @@ fn open_schema_db(path: &Path, initialize: bool) -> Result<Connection, ItrError>
     // for the write lock instead of failing immediately with SQLITE_BUSY.
     conn.execute_batch("PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;")?;
     check_schema_version(&conn)?;
-    if !initialize
-        && !schema_needs_migration(&conn)?
-        && !schema_needs_stamp(&conn)?
-        && !fts_needs_work(&conn)
-    {
-        // Deliberately skip journal_mode=WAL: this path must perform zero
-        // writes, and any database itr created is already WAL.
-        return Ok(conn);
-    }
-    // Read-only handles cannot migrate or stamp, but can still serve reads.
-    // In particular, BEGIN IMMEDIATE itself would fail on these handles.
-    if !initialize && conn.is_readonly(rusqlite::DatabaseName::Main)? {
-        if schema_needs_migration(&conn)? {
-            return Err(ItrError::ReadOnlyNeedsMigration);
+    if !initialize {
+        let missing = missing_schema_objects(&conn)?;
+        if missing.is_empty() && !schema_needs_stamp(&conn)? {
+            // Deliberately skip journal_mode=WAL: this path must perform zero
+            // writes, and any database itr created is already WAL.
+            return Ok(conn);
         }
-        // Advisory stamps and FTS-only differences can wait for a writable open.
-        return Ok(conn);
+        // Read-only handles cannot migrate or stamp, but can still serve
+        // reads. In particular, BEGIN IMMEDIATE itself would fail on them.
+        if conn.is_readonly(rusqlite::DatabaseName::Main)? {
+            // Only a missing table or column breaks reads. Missing indexes,
+            // triggers, FTS repairs and the advisory stamps wait for the next
+            // writable open (`itr doctor` reports them meanwhile).
+            if missing.iter().any(MissingSchemaObject::is_structural) {
+                return Err(ItrError::ReadOnlyNeedsMigration);
+            }
+            return Ok(conn);
+        }
     }
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     migrate_and_stamp_schema(&conn, initialize)?;
     Ok(conn)
-}
-
-/// Structural work that only a writable handle can do.
-fn schema_needs_migration(conn: &Connection) -> Result<bool, ItrError> {
-    Ok(!has_issue_column(conn, "skills")?
-        || !has_issue_column(conn, "assigned_to")?
-        || !has_schema_table(conn, "events")?
-        || !has_schema_table(conn, "relations")?)
 }
 
 /// Advisory stamp work (generation pragma and writer config row).
@@ -307,10 +304,166 @@ fn schema_needs_stamp(conn: &Connection) -> Result<bool, ItrError> {
         || config_get(conn, WRITER_VERSION_KEY)? != Some(writer_stamp()))
 }
 
-fn fts_needs_work(conn: &Connection) -> bool {
-    // Without FTS5, a missing index still retries creation under the write
-    // lock on every writable open, matching the existing fallback behavior.
-    !has_fts(conn) || fts_is_legacy(conn)
+/// Every schema object this binary expects, derived by executing `SCHEMA`
+/// and the FTS DDL against a private in-memory database. Deriving it keeps
+/// the fast-path check, the read-only check and `itr doctor` from drifting
+/// away from `SCHEMA`: adding a table, column, index or trigger there is
+/// enough for existing databases to be detected as needing reconciliation.
+struct ExpectedSchema {
+    /// Every table declared in `SCHEMA` with its column names.
+    tables: Vec<(String, Vec<String>)>,
+    /// `(type, name)` of every index and trigger declared in `SCHEMA`.
+    objects: Vec<(String, String)>,
+    /// Whether this build can create the FTS5 index at all.
+    fts_available: bool,
+    /// The sync triggers declared in `FTS_TRIGGERS`.
+    fts_triggers: Vec<String>,
+}
+
+fn expected_schema() -> &'static ExpectedSchema {
+    static EXPECTED: std::sync::OnceLock<ExpectedSchema> = std::sync::OnceLock::new();
+    EXPECTED.get_or_init(|| {
+        derive_expected_schema().expect("SCHEMA must apply to an empty in-memory database")
+    })
+}
+
+fn derive_expected_schema() -> rusqlite::Result<ExpectedSchema> {
+    fn names(conn: &Connection, kinds: &str) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut stmt = conn.prepare(&format!(
+            r"SELECT type, name FROM sqlite_master
+              WHERE type IN ({kinds}) AND name NOT LIKE 'sqlite\_%' ESCAPE '\'
+              ORDER BY type, name"
+        ))?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
+        rows.collect()
+    }
+
+    let mem = Connection::open_in_memory()?;
+    mem.execute_batch(SCHEMA)?;
+    let mut tables = Vec::new();
+    for (_, table) in names(&mem, "'table'")? {
+        let columns = table_columns(&mem, &table)?;
+        tables.push((table, columns));
+    }
+    let objects = names(&mem, "'index', 'trigger'")?;
+    let fts_available = mem.execute_batch(FTS_CREATE).is_ok();
+    let fts_triggers = if fts_available {
+        mem.execute_batch(FTS_TRIGGERS)?;
+        names(&mem, "'trigger'")?
+            .into_iter()
+            .map(|(_, name)| name)
+            .filter(|name| !objects.iter().any(|(_, known)| known == name))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    Ok(ExpectedSchema {
+        tables,
+        objects,
+        fts_available,
+        fts_triggers,
+    })
+}
+
+fn table_columns(conn: &Connection, table: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare_cached("SELECT name FROM pragma_table_info(?1)")?;
+    let rows = stmt.query_map(params![table], |row| row.get(0))?;
+    rows.collect()
+}
+
+/// A schema object this binary expects but the database lacks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingSchemaObject {
+    /// `table`, `column`, `index`, `trigger`, `fts_index` (the search index
+    /// is absent) or `legacy_fts_index` (it has the pre-v2.10.1 shape).
+    pub kind: &'static str,
+    /// Object name; columns are `table.column`.
+    pub name: String,
+}
+
+impl MissingSchemaObject {
+    /// Missing tables and columns break reads; everything else only degrades
+    /// write-side behavior (a stale `updated_at`, a slower query, stale FTS).
+    pub fn is_structural(&self) -> bool {
+        matches!(self.kind, "table" | "column")
+    }
+}
+
+impl std::fmt::Display for MissingSchemaObject {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            "fts_index" => write!(f, "search index {} is missing", self.name),
+            "legacy_fts_index" => write!(f, "search index {} has the pre-v2.10.1 shape", self.name),
+            kind => write!(f, "{} {} is missing", kind, self.name),
+        }
+    }
+}
+
+/// Compare the database against [`expected_schema`]. Only reads
+/// `sqlite_master` and `pragma_table_info`, so it is safe on read-only
+/// handles and on the zero-write fast path.
+pub fn missing_schema_objects(conn: &Connection) -> Result<Vec<MissingSchemaObject>, ItrError> {
+    let expected = expected_schema();
+    let mut present = std::collections::HashSet::new();
+    {
+        let mut stmt = conn.prepare_cached(
+            "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'index', 'trigger')",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for row in rows {
+            present.insert(row?);
+        }
+    }
+    let has = |kind: &str, name: &str| present.contains(&(kind.to_string(), name.to_string()));
+
+    let mut missing = Vec::new();
+    for (table, columns) in &expected.tables {
+        if !has("table", table) {
+            missing.push(MissingSchemaObject {
+                kind: "table",
+                name: table.clone(),
+            });
+            continue;
+        }
+        let actual = table_columns(conn, table)?;
+        for column in columns.iter().filter(|c| !actual.contains(c)) {
+            missing.push(MissingSchemaObject {
+                kind: "column",
+                name: format!("{table}.{column}"),
+            });
+        }
+    }
+    for (kind, name) in &expected.objects {
+        if !has(kind, name) {
+            missing.push(MissingSchemaObject {
+                kind: if kind == "index" { "index" } else { "trigger" },
+                name: name.clone(),
+            });
+        }
+    }
+    if expected.fts_available {
+        if !has("table", "issues_fts") {
+            missing.push(MissingSchemaObject {
+                kind: "fts_index",
+                name: "issues_fts".to_string(),
+            });
+        } else if fts_is_legacy(conn) {
+            missing.push(MissingSchemaObject {
+                kind: "legacy_fts_index",
+                name: "issues_fts".to_string(),
+            });
+        } else {
+            for name in expected.fts_triggers.iter().filter(|n| !has("trigger", n)) {
+                missing.push(MissingSchemaObject {
+                    kind: "trigger",
+                    name: name.clone(),
+                });
+            }
+        }
+    }
+    Ok(missing)
 }
 
 fn migrate_and_stamp_schema(conn: &Connection, initialize: bool) -> Result<(), ItrError> {
@@ -319,13 +472,32 @@ fn migrate_and_stamp_schema(conn: &Connection, initialize: bool) -> Result<(), I
     // Hold the write lock until migrations and both advisory stamps finish.
     check_schema_version(&tx)?;
     if initialize {
+        // A brand-new file has no tables for the column probes to inspect.
         tx.execute_batch(SCHEMA)?;
     }
     migrate_current_schema(&tx)?;
+    // Reconcile (#241): SCHEMA is idempotent (`IF NOT EXISTS` throughout), so
+    // re-running it lands every index and trigger it declares on existing
+    // databases, not just fresh ones. It must run after the column
+    // migrations: an index on a migrated column would fail on an old file
+    // with "no such column" if SCHEMA ran first.
+    tx.execute_batch(SCHEMA)?;
     try_create_fts(&tx);
     stamp_schema_version(&tx)?;
     tx.commit()?;
     Ok(())
+}
+
+/// Bring an already-open writable connection up to this binary's schema:
+/// the same migrate + reconcile + FTS repair + stamp transaction that
+/// `open_db` runs. Used by `itr doctor --fix`.
+pub fn reconcile_schema(conn: &Connection) -> Result<(), ItrError> {
+    migrate_and_stamp_schema(conn, false)
+}
+
+/// The schema generation stamped in `PRAGMA user_version`.
+pub fn schema_generation(conn: &Connection) -> Result<i32, ItrError> {
+    read_user_version(conn)
 }
 
 fn read_user_version(conn: &Connection) -> Result<i32, ItrError> {
@@ -1610,11 +1782,27 @@ fn fts_is_legacy(conn: &Connection) -> bool {
     .unwrap_or(false)
 }
 
+/// True when `issues_fts` exists but at least one of its sync triggers does
+/// not. Rows written while a trigger was missing left the index stale.
+fn fts_triggers_missing(conn: &Connection) -> bool {
+    has_fts(conn)
+        && expected_schema().fts_triggers.iter().any(|name| {
+            !conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND name = ?1)",
+                    params![name],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap_or(false)
+        })
+}
+
 /// Attempt to create the FTS5 virtual table and its sync triggers. Silently
 /// does nothing if FTS5 is unavailable (search falls back to LIKE). A legacy
-/// stale-token index is dropped and rebuilt in place.
+/// stale-token index, or an index that lost any sync trigger, is dropped and
+/// rebuilt in place so rows written in the meantime are reindexed.
 fn try_create_fts(conn: &Connection) {
-    if fts_is_legacy(conn) {
+    if fts_is_legacy(conn) || fts_triggers_missing(conn) {
         let _ = conn.execute_batch(FTS_DROP);
     }
     let existed = has_fts(conn);
@@ -2142,7 +2330,7 @@ mod tests {
                 matches!(err, ItrError::ReadOnlyNeedsMigration),
                 "{gap}: {err}"
             );
-            assert_eq!(err.error_code(), "DB_ERROR");
+            assert_eq!(err.error_code(), "READONLY_NEEDS_MIGRATION");
             assert_eq!(
                 err.to_string(),
                 "database is read-only and needs migration; reopen it writable"
@@ -2268,6 +2456,235 @@ mod tests {
             assert!(conn.prepare("SELECT * FROM events").is_err());
             drop(other);
             drop(conn);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    fn object_names(conn: &Connection) -> Vec<(String, String)> {
+        let mut stmt = conn
+            .prepare(
+                r"SELECT type, name FROM sqlite_master
+                  WHERE type IN ('table', 'index', 'trigger')
+                    AND name NOT LIKE 'sqlite\_%' ESCAPE '\'
+                  ORDER BY type, name",
+            )
+            .unwrap();
+        stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    fn has_trigger(conn: &Connection, name: &str) -> bool {
+        object_names(conn)
+            .iter()
+            .any(|(kind, n)| kind == "trigger" && n == name)
+    }
+
+    #[test]
+    fn expected_schema_is_derived_from_schema_and_fts_ddl() {
+        let expected = expected_schema();
+        let tables: Vec<&str> = expected.tables.iter().map(|(t, _)| t.as_str()).collect();
+        for table in [
+            "config",
+            "dependencies",
+            "events",
+            "issues",
+            "notes",
+            "relations",
+        ] {
+            assert!(tables.contains(&table), "{table}");
+        }
+        let issue_columns = &expected
+            .tables
+            .iter()
+            .find(|(t, _)| t == "issues")
+            .unwrap()
+            .1;
+        assert!(issue_columns.contains(&"skills".to_string()));
+        assert!(issue_columns.contains(&"assigned_to".to_string()));
+        assert_eq!(
+            expected.objects.len(),
+            12,
+            "11 indexes + trg_issues_updated_at"
+        );
+        assert!(expected
+            .objects
+            .contains(&("trigger".to_string(), "trg_issues_updated_at".to_string())));
+        assert!(expected.fts_available);
+        assert_eq!(
+            expected.fts_triggers,
+            vec!["issues_fts_ad", "issues_fts_ai", "issues_fts_au"]
+        );
+        let conn = init_db(Path::new(":memory:")).unwrap();
+        assert_eq!(missing_schema_objects(&conn).unwrap(), vec![]);
+    }
+
+    // #241: objects declared only in SCHEMA must reach existing databases,
+    // even when the generation and writer stamps are already current.
+    #[test]
+    fn writable_open_restores_schema_only_objects() {
+        let (dir, path) = schema_test_db_path("reconcile");
+        let fresh = {
+            let conn = init_db(&path).unwrap();
+            let names = object_names(&conn);
+            conn.execute_batch(
+                "DROP INDEX idx_issues_status;
+                 DROP INDEX idx_notes_issue;
+                 DROP INDEX idx_events_issue;
+                 DROP TRIGGER trg_issues_updated_at;",
+            )
+            .unwrap();
+            let missing = missing_schema_objects(&conn).unwrap();
+            assert_eq!(missing.len(), 4, "{missing:?}");
+            assert!(!missing.iter().any(MissingSchemaObject::is_structural));
+            names
+        };
+
+        let conn = open_db(&path).unwrap();
+        assert_eq!(object_names(&conn), fresh);
+        let issue = add(&conn, "touch me");
+        conn.execute(
+            "UPDATE issues SET updated_at = '2020-01-01T00:00:00Z' WHERE id = ?1",
+            params![issue.id],
+        )
+        .unwrap();
+        update_issue_field(&conn, issue.id, "priority", "high").unwrap();
+        assert_ne!(
+            get_issue(&conn, issue.id).unwrap().updated_at,
+            "2020-01-01T00:00:00Z",
+            "restored trigger must stamp updated_at"
+        );
+        drop(conn);
+
+        // The repaired file now takes the zero-write fast path.
+        let before = std::fs::read(&path).unwrap();
+        let wal_before = std::fs::read(path.with_extension("db-wal")).ok();
+        let conn = open_db(&path).unwrap();
+        let changes: i64 = conn
+            .query_row("SELECT total_changes()", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(changes, 0);
+        drop(conn);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(
+            std::fs::read(path.with_extension("db-wal")).ok(),
+            wal_before
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // e3 in the migration review: a dropped FTS sync trigger was invisible to
+    // the fast path, and rows written meanwhile stayed stale forever.
+    #[test]
+    fn writable_open_restores_fts_triggers_and_reindexes() {
+        let (dir, path) = schema_test_db_path("fts-triggers");
+        let (kept, gone) = {
+            let conn = init_db(&path).unwrap();
+            let kept = add(&conn, "alpha widget");
+            let gone = add(&conn, "doomed gizmo");
+            conn.execute_batch("DROP TRIGGER issues_fts_au; DROP TRIGGER issues_fts_ad;")
+                .unwrap();
+            // Raw writers (e.g. `itr ui --allow-dangerous`) bypass fts_index_issue.
+            conn.execute(
+                "UPDATE issues SET title = 'omega widget' WHERE id = ?1",
+                params![kept.id],
+            )
+            .unwrap();
+            conn.execute("DELETE FROM issues WHERE id = ?1", params![gone.id])
+                .unwrap();
+            assert_eq!(fts_search(&conn, "alpha").unwrap(), vec![kept.id]);
+            assert_eq!(fts_search(&conn, "gizmo").unwrap(), vec![gone.id]);
+            (kept, gone)
+        };
+
+        let conn = open_db(&path).unwrap();
+        for trigger in &expected_schema().fts_triggers {
+            assert!(has_trigger(&conn, trigger), "{trigger}");
+        }
+        assert!(fts_search(&conn, "alpha").unwrap().is_empty());
+        assert_eq!(fts_search(&conn, "omega").unwrap(), vec![kept.id]);
+        assert!(
+            fts_search(&conn, "gizmo").unwrap().is_empty(),
+            "entry for deleted issue {} must be gone",
+            gone.id
+        );
+        let fts_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM issues_fts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(fts_count, 1);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn readonly_db_missing_index_or_trigger_opens() {
+        let (dir, path) = schema_test_db_path("readonly-objects");
+        let conn = init_db(&path).unwrap();
+        let issue = add(&conn, "readable");
+        conn.execute_batch(
+            "DROP INDEX idx_issues_priority;
+             DROP TRIGGER trg_issues_updated_at;
+             DROP TRIGGER issues_fts_ai;
+             PRAGMA journal_mode=DELETE;",
+        )
+        .unwrap();
+        drop(conn);
+        let before = std::fs::read(&path).unwrap();
+
+        let conn = open_db(&readonly_uri(&path)).unwrap();
+        assert!(conn.is_readonly(rusqlite::DatabaseName::Main).unwrap());
+        assert_eq!(get_issue(&conn, issue.id).unwrap().title, "readable");
+        assert_eq!(missing_schema_objects(&conn).unwrap().len(), 3);
+        drop(conn);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const OLDEST_FIXTURE: &str = include_str!("../tests/fixtures/schema-v1.0-oldest.sql");
+    const LEGACY_FTS_FIXTURE: &str = include_str!("../tests/fixtures/schema-v2.0-legacy-fts.sql");
+
+    // Real historical shapes, not a fresh DB with pieces subtracted. If a new
+    // SCHEMA column or table lacks its migrate_* helper, this fails because the
+    // old file never reaches the expected object set.
+    #[test]
+    fn old_release_fixtures_upgrade_to_the_complete_schema() {
+        let fresh = object_names(&init_db(Path::new(":memory:")).unwrap());
+        for (name, fixtures) in [
+            ("v1.0", vec![OLDEST_FIXTURE]),
+            ("v2.0", vec![OLDEST_FIXTURE, LEGACY_FTS_FIXTURE]),
+        ] {
+            let (dir, path) = schema_test_db_path(name);
+            {
+                let raw = Connection::open(&path).unwrap();
+                for sql in &fixtures {
+                    raw.execute_batch(sql).unwrap();
+                }
+                assert_eq!(user_version(&raw), 0);
+            }
+
+            let conn = open_db(&path).unwrap();
+            assert_eq!(missing_schema_objects(&conn).unwrap(), vec![], "{name}");
+            assert_eq!(object_names(&conn), fresh, "{name}");
+            assert_eq!(user_version(&conn), SCHEMA_VERSION, "{name}");
+            assert_eq!(writer_version(&conn), Some(writer_stamp()), "{name}");
+            let issues = all_issues(&conn).unwrap();
+            assert_eq!(issues.len(), 4, "{name}");
+            assert_eq!(get_issue(&conn, 2).unwrap().parent_id, Some(1), "{name}");
+            assert_eq!(
+                config_get(&conn, "urgency.priority.high")
+                    .unwrap()
+                    .as_deref(),
+                Some("7")
+            );
+            assert_eq!(fts_search(&conn, "sprocket").unwrap(), vec![2], "{name}");
+            assert_eq!(fts_search(&conn, "manual").unwrap(), vec![4], "{name}");
+            assert!(fts_search(&conn, "cogwheel").unwrap().is_empty(), "{name}");
+            drop(conn);
+
+            let before = std::fs::read(&path).unwrap();
+            drop(open_db(&path).unwrap());
+            assert_eq!(std::fs::read(&path).unwrap(), before, "{name}: second open");
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
