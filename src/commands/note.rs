@@ -82,7 +82,7 @@ pub fn run_multi(
     };
     let agent = resolve_agent(agent);
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = db::write_tx(conn)?;
     let mut notes = Vec::new();
     for &id in &parsed.ids {
         match db::add_note(&tx, id, &content, &agent) {
@@ -147,10 +147,13 @@ pub fn run(
 }
 
 pub fn run_delete(conn: &Connection, note_id: i64, fmt: Format) -> Result<(), ItrError> {
-    let note = db::delete_note(conn, note_id)?;
+    // Delete + audit event commit together (#255).
+    let tx = db::write_tx(conn)?;
+    let note = db::delete_note(&tx, note_id)?;
 
     // Record event for audit trail
-    db::record_event(conn, note.issue_id, "note_deleted", &note.content, "")?;
+    db::record_event(&tx, note.issue_id, "note_deleted", &note.content, "")?;
+    tx.commit()?;
 
     match fmt {
         Format::Json => {
@@ -170,18 +173,21 @@ pub fn run_update(
     text: &str,
     fmt: Format,
 ) -> Result<(), ItrError> {
-    let old_note = db::get_note(conn, note_id)?;
+    // Read + audit event + update commit together (#255).
+    let tx = db::write_tx(conn)?;
+    let old_note = db::get_note(&tx, note_id)?;
 
     // Record event for audit trail
     db::record_event(
-        conn,
+        &tx,
         old_note.issue_id,
         "note_updated",
         &old_note.content,
         text,
     )?;
 
-    let note = db::update_note(conn, note_id, text)?;
+    let note = db::update_note(&tx, note_id, text)?;
+    tx.commit()?;
 
     match fmt {
         Format::Json => {
@@ -315,5 +321,33 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, ItrError::NotFound(999)));
+    }
+
+    // #255: note delete/update and their audit events commit together.
+    #[test]
+    fn delete_and_update_roll_back_when_the_event_fails() {
+        let conn = db::open_test_db();
+        let id = seed(&conn, "noted");
+        let note = db::add_note(&conn, id, "original", "").unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER fail_events BEFORE INSERT ON events
+             BEGIN SELECT RAISE(ABORT, 'injected event failure'); END;",
+        )
+        .unwrap();
+
+        assert!(run_delete(&conn, note.id, Format::Compact).is_err());
+        assert_eq!(
+            note_texts(&conn, id),
+            vec!["original"],
+            "delete must roll back when its audit event fails"
+        );
+
+        assert!(run_update(&conn, note.id, "edited", Format::Compact).is_err());
+        assert_eq!(
+            note_texts(&conn, id),
+            vec!["original"],
+            "update must roll back when its audit event fails"
+        );
+        assert!(conn.is_autocommit(), "no transaction may leak");
     }
 }

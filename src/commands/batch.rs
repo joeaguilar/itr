@@ -197,7 +197,7 @@ fn run_add_core(conn: &Connection, input: &str, dry_run: bool) -> Result<BatchRe
         .collect();
 
     // Use a transaction
-    let tx = conn.unchecked_transaction()?;
+    let tx = db::write_tx(conn)?;
 
     // First pass: create all issues with soft fallback. `created[idx]` is
     // None when the item at that input index failed to parse.
@@ -385,7 +385,7 @@ pub fn run_close(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), It
 fn run_close_core(conn: &Connection, input: &str, dry_run: bool) -> Result<BatchResult, ItrError> {
     let items = parse_each::<BatchCloseInput>(input, BATCH_CLOSE_KNOWN_KEYS)?;
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = db::write_tx(conn)?;
 
     let mut results: Vec<BatchItemResult> = Vec::with_capacity(items.len());
 
@@ -508,7 +508,7 @@ pub fn run_update(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), I
 fn run_update_core(conn: &Connection, input: &str, dry_run: bool) -> Result<BatchResult, ItrError> {
     let items = parse_each::<BatchUpdateInput>(input, BATCH_UPDATE_KNOWN_KEYS)?;
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = db::write_tx(conn)?;
 
     let mut results: Vec<BatchItemResult> = Vec::with_capacity(items.len());
 
@@ -724,7 +724,7 @@ pub fn run_note(conn: &Connection, dry_run: bool, fmt: Format) -> Result<(), Itr
 fn run_note_core(conn: &Connection, input: &str, dry_run: bool) -> Result<BatchResult, ItrError> {
     let items = parse_each::<BatchNoteInput>(input, BATCH_NOTE_KNOWN_KEYS)?;
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = db::write_tx(conn)?;
 
     let mut results: Vec<BatchItemResult> = Vec::with_capacity(items.len());
 

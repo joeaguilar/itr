@@ -56,7 +56,7 @@ pub fn run_multi(
         return Err(ItrError::NotFound(on));
     }
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = db::write_tx(conn)?;
     let mut edges: Vec<(i64, bool)> = Vec::new();
     for &id in &parsed.ids {
         if id == on {
@@ -109,6 +109,9 @@ pub fn run_multi(
 }
 
 pub fn run(conn: &Connection, id: i64, on: i64, fmt: Format) -> Result<(), ItrError> {
+    // `add_dependency` runs its existence check, cycle check, edge insert,
+    // and audit event in one IMMEDIATE transaction (SQ-2 / #229), so two
+    // opposing concurrent `depend` calls cannot both pass the cycle check.
     let created = db::add_dependency(conn, on, id)?;
 
     match fmt {
@@ -132,11 +135,14 @@ pub fn run(conn: &Connection, id: i64, on: i64, fmt: Format) -> Result<(), ItrEr
 pub fn run_undepend(conn: &Connection, id: i64, on: i64, fmt: Format) -> Result<(), ItrError> {
     // Capture pre-state so UNBLOCKED only fires on a real blocked->unblocked
     // transition caused by this command, never on a no-op (#191).
-    let was_blocked = db::is_blocked(conn, id)?;
-    let removed = db::remove_dependency(conn, on, id)?;
+    // The pre-state read, removal, and post-state read share one write
+    // transaction so a concurrent writer cannot skew the UNBLOCKED report.
+    let tx = db::write_tx(conn)?;
+    let was_blocked = db::is_blocked(&tx, id)?;
+    let removed = db::remove_dependency(&tx, on, id)?;
 
-    let unblocked = if removed && was_blocked && !db::is_blocked(conn, id)? {
-        let issue = db::get_issue(conn, id)?;
+    let unblocked = if removed && was_blocked && !db::is_blocked(&tx, id)? {
+        let issue = db::get_issue(&tx, id)?;
         if issue.status != "done" && issue.status != "wontfix" {
             vec![(issue.id, issue.title)]
         } else {
@@ -145,6 +151,7 @@ pub fn run_undepend(conn: &Connection, id: i64, on: i64, fmt: Format) -> Result<
     } else {
         vec![]
     };
+    tx.commit()?;
 
     match fmt {
         Format::Json => {

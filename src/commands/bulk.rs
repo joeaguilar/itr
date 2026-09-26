@@ -79,7 +79,7 @@ pub fn run_close(
     let mut all_unblocked = Vec::new();
 
     if !dry_run {
-        let tx = conn.unchecked_transaction()?;
+        let tx = db::write_tx(conn)?;
         for id in &ids {
             let old_issue = db::get_issue(&tx, *id)?;
             db::record_event(&tx, *id, "status", &old_issue.status, close_status)?;
@@ -197,7 +197,7 @@ fn run_update_core(
     let cleanup_blockers = matches!(set_status.as_deref(), Some("done" | "wontfix"));
 
     if !dry_run {
-        let tx = conn.unchecked_transaction()?;
+        let tx = db::write_tx(conn)?;
         for id in &ids {
             let old_issue = db::get_issue(&tx, *id)?;
             if let Some(ref s) = set_status {
@@ -272,7 +272,7 @@ pub fn run_relate(
         return Err(ItrError::NotFound(to));
     }
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = db::write_tx(conn)?;
     let mut links: Vec<(i64, bool)> = Vec::new();
     for &id in &ids {
         if id == to {
@@ -348,7 +348,7 @@ pub fn run_depend(
         return Err(ItrError::NotFound(on));
     }
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = db::write_tx(conn)?;
     let mut edges: Vec<(i64, bool)> = Vec::new();
     for &id in &ids {
         if id == on {
@@ -425,7 +425,7 @@ pub fn run_note(
     let agent = super::note::resolve_agent(agent);
     let ids = resolve_filter_ids(conn, status, priority, kind, tag, skill, assigned_to)?;
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = db::write_tx(conn)?;
     let mut notes = Vec::new();
     for &id in &ids {
         notes.push(db::add_note(&tx, id, text, &agent)?);

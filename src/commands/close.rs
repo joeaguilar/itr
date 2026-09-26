@@ -66,7 +66,14 @@ pub fn run_multi(
         // issue, duplicate relation recorded before the close.
         let id = parsed.ids[0];
         if let Some(dup_id) = duplicate_of {
-            db::add_relation(conn, id, dup_id, "duplicate")?;
+            // The duplicate relation and the close commit together, so a
+            // failed close cannot leave an orphan relation behind (SQ-12).
+            let tx = db::write_tx(conn)?;
+            db::add_relation(&tx, id, dup_id, "duplicate")?;
+            let (detail, unblocked) = close_issue_in(&tx, id, reason, wontfix)?;
+            tx.commit()?;
+            print_detail_with_unblocked(&detail, &unblocked, fmt);
+            return Ok(());
         }
         return run(conn, id, reason, wontfix, fmt);
     }
@@ -113,7 +120,7 @@ fn close_many(
     let reason = reason.unwrap_or_default();
     let status = if wontfix { "wontfix" } else { "done" };
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = db::write_tx(conn)?;
     // A missing --duplicate-of target can never soft-recover: fail before
     // touching anything, matching the single-ID behavior.
     if let Some(dup_id) = duplicate_of {
@@ -218,32 +225,43 @@ fn close_issue(
     reason: Option<String>,
     wontfix: bool,
 ) -> Result<(IssueDetail, Vec<(i64, String)>), ItrError> {
+    let tx = db::write_tx(conn)?;
+    let out = close_issue_in(&tx, id, reason, wontfix)?;
+    tx.commit()?;
+    Ok(out)
+}
+
+/// The close writes of [`close_issue`], run on a caller-owned write
+/// transaction (`tx`) so they can share it with other writes.
+fn close_issue_in(
+    tx: &Connection,
+    id: i64,
+    reason: Option<String>,
+    wontfix: bool,
+) -> Result<(IssueDetail, Vec<(i64, String)>), ItrError> {
     let reason = reason.unwrap_or_default();
 
     let status = if wontfix { "wontfix" } else { "done" };
 
-    let tx = conn.unchecked_transaction()?;
-
     // Capture old values for event recording
-    let old_issue = db::get_issue(&tx, id)?;
+    let old_issue = db::get_issue(tx, id)?;
 
-    db::record_event(&tx, id, "status", &old_issue.status, status)?;
-    db::update_issue_field(&tx, id, "status", status)?;
+    db::record_event(tx, id, "status", &old_issue.status, status)?;
+    db::update_issue_field(tx, id, "status", status)?;
     if !reason.is_empty() {
-        db::record_event(&tx, id, "close_reason", &old_issue.close_reason, &reason)?;
-        db::update_issue_field(&tx, id, "close_reason", &reason)?;
+        db::record_event(tx, id, "close_reason", &old_issue.close_reason, &reason)?;
+        db::update_issue_field(tx, id, "close_reason", &reason)?;
     }
 
     // Auto-clean dependency edges where this issue was the blocker
-    let unblocked = db::get_newly_unblocked(&tx, id)?;
-    db::remove_blocker_edges(&tx, id)?;
+    let unblocked = db::get_newly_unblocked(tx, id)?;
+    db::remove_blocker_edges(tx, id)?;
 
     // Build the output detail from the updated state
-    let issue = db::get_issue(&tx, id)?;
-    let config = UrgencyConfig::load(&tx);
-    let detail = build_issue_detail(&tx, issue, &config)?;
+    let issue = db::get_issue(tx, id)?;
+    let config = UrgencyConfig::load(tx);
+    let detail = build_issue_detail(tx, issue, &config)?;
 
-    tx.commit()?;
     Ok((detail, unblocked))
 }
 

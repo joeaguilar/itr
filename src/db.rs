@@ -260,6 +260,26 @@ pub fn write_tx(conn: &Connection) -> Result<Transaction<'_>, ItrError> {
     )?)
 }
 
+/// Run `f` atomically under the write lock.
+///
+/// When `conn` is in autocommit mode this opens a [`write_tx`], runs `f`
+/// against it, and commits (any error rolls everything back). When `conn` is
+/// already inside a transaction (a caller-owned `write_tx`, a batch/bulk
+/// transaction, a migration) `f` simply runs on it, so db-layer mutators can
+/// be both standalone-atomic and composable without nesting `BEGIN`s.
+pub fn with_write_tx<T>(
+    conn: &Connection,
+    f: impl FnOnce(&Connection) -> Result<T, ItrError>,
+) -> Result<T, ItrError> {
+    if !conn.is_autocommit() {
+        return f(conn);
+    }
+    let tx = write_tx(conn)?;
+    let out = f(&tx)?;
+    tx.commit()?;
+    Ok(out)
+}
+
 pub fn open_db(path: &Path) -> Result<Connection, ItrError> {
     open_schema_db(path, false)
 }
@@ -757,50 +777,51 @@ pub enum ClaimOutcome {
 /// The UPDATE is guarded with `AND status = 'open'` (compare-and-swap), so a
 /// concurrent claimer that already won leaves this call with 0 affected rows
 /// and a `NotOpen` outcome instead of silently stealing the issue. The
-/// transaction starts IMMEDIATE so the pre-read of status/assignee is made
-/// under the write lock and cannot go stale before the UPDATE.
+/// transaction starts IMMEDIATE (or joins the caller's write transaction)
+/// so the pre-read of status/assignee is made under the write lock and
+/// cannot go stale before the UPDATE.
 pub fn claim_issue(
     conn: &Connection,
     id: i64,
     agent: Option<&str>,
 ) -> Result<ClaimOutcome, ItrError> {
-    let tx = write_tx(conn)?;
-    let (status, assigned_to): (String, String) = tx
-        .query_row(
-            "SELECT status, assigned_to FROM issues WHERE id = ?1",
+    with_write_tx(conn, |tx| {
+        let (status, assigned_to): (String, String) = tx
+            .query_row(
+                "SELECT status, assigned_to FROM issues WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => ItrError::NotFound(id),
+                other => ItrError::Db(other),
+            })?;
+
+        let rows = tx.execute(
+            "UPDATE issues SET status = 'in-progress' WHERE id = ?1 AND status = 'open'",
             params![id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .map_err(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => ItrError::NotFound(id),
-            other => ItrError::Db(other),
-        })?;
-
-    let rows = tx.execute(
-        "UPDATE issues SET status = 'in-progress' WHERE id = ?1 AND status = 'open'",
-        params![id],
-    )?;
-    if rows == 0 {
-        // Lost the race (or the issue is closed); leave everything untouched.
-        return Ok(ClaimOutcome::NotOpen {
-            status,
-            assigned_to,
-        });
-    }
-
-    record_event(&tx, id, "status", &status, "in-progress")?;
-    if let Some(name) = agent {
-        if name != assigned_to {
-            record_event(&tx, id, "assigned_to", &assigned_to, name)?;
-            tx.execute(
-                "UPDATE issues SET assigned_to = ?1 WHERE id = ?2",
-                params![name, id],
-            )?;
+        )?;
+        if rows == 0 {
+            // Lost the race (or the issue is closed); leave everything untouched.
+            return Ok(ClaimOutcome::NotOpen {
+                status,
+                assigned_to,
+            });
         }
-    }
-    tx.commit()?;
-    Ok(ClaimOutcome::Claimed {
-        prior_assigned_to: assigned_to,
+
+        record_event(tx, id, "status", &status, "in-progress")?;
+        if let Some(name) = agent {
+            if name != assigned_to {
+                record_event(tx, id, "assigned_to", &assigned_to, name)?;
+                tx.execute(
+                    "UPDATE issues SET assigned_to = ?1 WHERE id = ?2",
+                    params![name, id],
+                )?;
+            }
+        }
+        Ok(ClaimOutcome::Claimed {
+            prior_assigned_to: assigned_to,
+        })
     })
 }
 
@@ -873,48 +894,50 @@ pub fn add_dependency(
     blocker_id: i64,
     blocked_id: i64,
 ) -> Result<bool, ItrError> {
-    if !issue_exists(conn, blocker_id)? {
-        return Err(ItrError::NotFound(blocker_id));
-    }
-    if !issue_exists(conn, blocked_id)? {
-        return Err(ItrError::NotFound(blocked_id));
-    }
+    with_write_tx(conn, |conn| {
+        if !issue_exists(conn, blocker_id)? {
+            return Err(ItrError::NotFound(blocker_id));
+        }
+        if !issue_exists(conn, blocked_id)? {
+            return Err(ItrError::NotFound(blocked_id));
+        }
 
-    // Check for existing
-    let exists: bool = conn.query_row(
-        "SELECT COUNT(*) > 0 FROM dependencies WHERE blocker_id = ?1 AND blocked_id = ?2",
-        params![blocker_id, blocked_id],
-        |row| row.get(0),
-    )?;
-    if exists {
-        return Ok(false); // idempotent
-    }
+        // Check for existing
+        let exists: bool = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM dependencies WHERE blocker_id = ?1 AND blocked_id = ?2",
+            params![blocker_id, blocked_id],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Ok(false); // idempotent
+        }
 
-    // Cycle check: would adding blocker_id->blocked_id create a cycle?
-    // Check if blocked_id can already reach blocker_id via existing "blocks" edges.
-    // If so, adding this edge would create a cycle.
-    if has_path(conn, blocked_id, blocker_id)? {
-        return Err(ItrError::CycleDetected(format!(
-            "{} -> ... -> {}",
-            blocked_id, blocker_id
-        )));
-    }
+        // Cycle check: would adding blocker_id->blocked_id create a cycle?
+        // Check if blocked_id can already reach blocker_id via existing "blocks" edges.
+        // If so, adding this edge would create a cycle.
+        if has_path(conn, blocked_id, blocker_id)? {
+            return Err(ItrError::CycleDetected(format!(
+                "{} -> ... -> {}",
+                blocked_id, blocker_id
+            )));
+        }
 
-    conn.execute(
-        "INSERT INTO dependencies (blocker_id, blocked_id) VALUES (?1, ?2)",
-        params![blocker_id, blocked_id],
-    )?;
-    // Dependency edges are mutations like any other: record an audit event
-    // on the blocked issue so `itr log` shows who blocked it and when (#35
-    // lesson — every mutation path records its own event).
-    record_event(
-        conn,
-        blocked_id,
-        "dependency_added",
-        "",
-        &blocker_id.to_string(),
-    )?;
-    Ok(true)
+        conn.execute(
+            "INSERT INTO dependencies (blocker_id, blocked_id) VALUES (?1, ?2)",
+            params![blocker_id, blocked_id],
+        )?;
+        // Dependency edges are mutations like any other: record an audit event
+        // on the blocked issue so `itr log` shows who blocked it and when (#35
+        // lesson — every mutation path records its own event).
+        record_event(
+            conn,
+            blocked_id,
+            "dependency_added",
+            "",
+            &blocker_id.to_string(),
+        )?;
+        Ok(true)
+    })
 }
 
 /// Removes the `blocked_id <- blocker_id` edge. Returns whether an edge
@@ -925,26 +948,28 @@ pub fn remove_dependency(
     blocker_id: i64,
     blocked_id: i64,
 ) -> Result<bool, ItrError> {
-    if !issue_exists(conn, blocker_id)? {
-        return Err(ItrError::NotFound(blocker_id));
-    }
-    if !issue_exists(conn, blocked_id)? {
-        return Err(ItrError::NotFound(blocked_id));
-    }
-    let deleted = conn.execute(
-        "DELETE FROM dependencies WHERE blocker_id = ?1 AND blocked_id = ?2",
-        params![blocker_id, blocked_id],
-    )?;
-    if deleted > 0 {
-        record_event(
-            conn,
-            blocked_id,
-            "dependency_removed",
-            &blocker_id.to_string(),
-            "",
+    with_write_tx(conn, |conn| {
+        if !issue_exists(conn, blocker_id)? {
+            return Err(ItrError::NotFound(blocker_id));
+        }
+        if !issue_exists(conn, blocked_id)? {
+            return Err(ItrError::NotFound(blocked_id));
+        }
+        let deleted = conn.execute(
+            "DELETE FROM dependencies WHERE blocker_id = ?1 AND blocked_id = ?2",
+            params![blocker_id, blocked_id],
         )?;
-    }
-    Ok(deleted > 0)
+        if deleted > 0 {
+            record_event(
+                conn,
+                blocked_id,
+                "dependency_removed",
+                &blocker_id.to_string(),
+                "",
+            )?;
+        }
+        Ok(deleted > 0)
+    })
 }
 
 /// Check if there's a path from `from_id` to `to_id` following blocker edges.
@@ -1057,23 +1082,25 @@ pub fn add_note(
     content: &str,
     agent: &str,
 ) -> Result<Note, ItrError> {
-    if !issue_exists(conn, issue_id)? {
-        return Err(ItrError::NotFound(issue_id));
-    }
-    conn.execute(
-        "INSERT INTO notes (issue_id, content, agent) VALUES (?1, ?2, ?3)",
-        params![issue_id, content, agent],
-    )?;
-    let id = conn.last_insert_rowid();
-    // Mirror note_deleted/note_updated: adding a note is an audited mutation
-    // too, so multi-ID and bulk note operations show up in `itr log`.
-    record_event(conn, issue_id, "note_added", "", content)?;
-    conn.query_row(
-        "SELECT id, issue_id, content, agent, created_at FROM notes WHERE id = ?1",
-        params![id],
-        row_to_note,
-    )
-    .map_err(ItrError::Db)
+    with_write_tx(conn, |conn| {
+        if !issue_exists(conn, issue_id)? {
+            return Err(ItrError::NotFound(issue_id));
+        }
+        conn.execute(
+            "INSERT INTO notes (issue_id, content, agent) VALUES (?1, ?2, ?3)",
+            params![issue_id, content, agent],
+        )?;
+        let id = conn.last_insert_rowid();
+        // Mirror note_deleted/note_updated: adding a note is an audited mutation
+        // too, so multi-ID and bulk note operations show up in `itr log`.
+        record_event(conn, issue_id, "note_added", "", content)?;
+        conn.query_row(
+            "SELECT id, issue_id, content, agent, created_at FROM notes WHERE id = ?1",
+            params![id],
+            row_to_note,
+        )
+        .map_err(ItrError::Db)
+    })
 }
 
 pub fn get_notes(conn: &Connection, issue_id: i64) -> Result<Vec<Note>, ItrError> {
@@ -1439,42 +1466,44 @@ pub fn add_relation(
     target_id: i64,
     relation_type: &str,
 ) -> Result<bool, ItrError> {
-    if source_id == target_id {
-        return Err(ItrError::InvalidValue {
-            field: "relation".to_string(),
-            value: "self".to_string(),
-            valid: "source and target must be different issues".to_string(),
-        });
-    }
-    if !issue_exists(conn, source_id)? {
-        return Err(ItrError::NotFound(source_id));
-    }
-    if !issue_exists(conn, target_id)? {
-        return Err(ItrError::NotFound(target_id));
-    }
+    with_write_tx(conn, |conn| {
+        if source_id == target_id {
+            return Err(ItrError::InvalidValue {
+                field: "relation".to_string(),
+                value: "self".to_string(),
+                valid: "source and target must be different issues".to_string(),
+            });
+        }
+        if !issue_exists(conn, source_id)? {
+            return Err(ItrError::NotFound(source_id));
+        }
+        if !issue_exists(conn, target_id)? {
+            return Err(ItrError::NotFound(target_id));
+        }
 
-    let exists: bool = conn.query_row(
-        "SELECT COUNT(*) > 0 FROM relations WHERE source_id = ?1 AND target_id = ?2 AND relation_type = ?3",
-        params![source_id, target_id, relation_type],
-        |row| row.get(0),
-    )?;
-    if exists {
-        return Ok(false);
-    }
+        let exists: bool = conn.query_row(
+            "SELECT COUNT(*) > 0 FROM relations WHERE source_id = ?1 AND target_id = ?2 AND relation_type = ?3",
+            params![source_id, target_id, relation_type],
+            |row| row.get(0),
+        )?;
+        if exists {
+            return Ok(false);
+        }
 
-    conn.execute(
-        "INSERT INTO relations (source_id, target_id, relation_type) VALUES (?1, ?2, ?3)",
-        params![source_id, target_id, relation_type],
-    )?;
+        conn.execute(
+            "INSERT INTO relations (source_id, target_id, relation_type) VALUES (?1, ?2, ?3)",
+            params![source_id, target_id, relation_type],
+        )?;
 
-    record_event(
-        conn,
-        source_id,
-        "relation_added",
-        "",
-        &format!("{}:{}", relation_type, target_id),
-    )?;
-    Ok(true)
+        record_event(
+            conn,
+            source_id,
+            "relation_added",
+            "",
+            &format!("{}:{}", relation_type, target_id),
+        )?;
+        Ok(true)
+    })
 }
 
 /// Removes relations between a pair of issues, matching the pair in EITHER
@@ -1489,38 +1518,40 @@ pub fn remove_relation(
     other_id: i64,
     relation_type: Option<&str>,
 ) -> Result<Vec<Relation>, ItrError> {
-    if !issue_exists(conn, issue_id)? {
-        return Err(ItrError::NotFound(issue_id));
-    }
-    if !issue_exists(conn, other_id)? {
-        return Err(ItrError::NotFound(other_id));
-    }
+    with_write_tx(conn, |conn| {
+        if !issue_exists(conn, issue_id)? {
+            return Err(ItrError::NotFound(issue_id));
+        }
+        if !issue_exists(conn, other_id)? {
+            return Err(ItrError::NotFound(other_id));
+        }
 
-    let mut stmt = conn.prepare(
-        "SELECT id, source_id, target_id, relation_type, created_at
-         FROM relations
-         WHERE ((source_id = ?1 AND target_id = ?2)
-             OR (source_id = ?2 AND target_id = ?1))
-           AND (?3 IS NULL OR relation_type = ?3)
-         ORDER BY id",
-    )?;
-    let matched: Vec<Relation> = stmt
-        .query_map(params![issue_id, other_id, relation_type], row_to_relation)?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    for relation in &matched {
-        conn.execute("DELETE FROM relations WHERE id = ?1", params![relation.id])?;
-        // Mirror relation_added's `type:target` value so the audit log keeps
-        // enough detail to reconstruct exactly which typed link was removed.
-        record_event(
-            conn,
-            relation.source_id,
-            "relation_removed",
-            &format!("{}:{}", relation.relation_type, relation.target_id),
-            "",
+        let mut stmt = conn.prepare(
+            "SELECT id, source_id, target_id, relation_type, created_at
+             FROM relations
+             WHERE ((source_id = ?1 AND target_id = ?2)
+                 OR (source_id = ?2 AND target_id = ?1))
+               AND (?3 IS NULL OR relation_type = ?3)
+             ORDER BY id",
         )?;
-    }
-    Ok(matched)
+        let matched: Vec<Relation> = stmt
+            .query_map(params![issue_id, other_id, relation_type], row_to_relation)?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for relation in &matched {
+            conn.execute("DELETE FROM relations WHERE id = ?1", params![relation.id])?;
+            // Mirror relation_added's `type:target` value so the audit log keeps
+            // enough detail to reconstruct exactly which typed link was removed.
+            record_event(
+                conn,
+                relation.source_id,
+                "relation_removed",
+                &format!("{}:{}", relation.relation_type, relation.target_id),
+                "",
+            )?;
+        }
+        Ok(matched)
+    })
 }
 
 pub fn get_relations(conn: &Connection, issue_id: i64) -> Result<Vec<Relation>, ItrError> {
@@ -2971,6 +3002,68 @@ mod tests {
             stamps,
             vec!["2026-01-03T00:00:00Z", "2026-01-02T00:00:00Z"],
             "limit must keep the newest matches, newest first"
+        );
+    }
+    // --- tx lane: SQ-1 / SQ-2 / #240 / SQ-5 / SQ-9 ---
+
+    fn fail_event_inserts(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TRIGGER fail_events BEFORE INSERT ON events
+             BEGIN SELECT RAISE(ABORT, 'injected event failure'); END;",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn with_write_tx_commits_standalone_and_joins_an_open_transaction() {
+        let conn = test_conn();
+        let a = add(&conn, "a").id;
+        let b = add(&conn, "b").id;
+
+        // Standalone: commits on success.
+        assert!(conn.is_autocommit());
+        add_dependency(&conn, a, b).unwrap();
+        assert!(conn.is_autocommit(), "no transaction may leak");
+        assert_eq!(get_blockers(&conn, b).unwrap(), vec![a]);
+
+        // Nested inside a caller-owned write_tx: no second BEGIN, and the
+        // caller's rollback discards the joined work.
+        let c = add(&conn, "c").id;
+        {
+            let tx = write_tx(&conn).unwrap();
+            assert!(add_dependency(&tx, a, c).unwrap());
+            assert!(!tx.is_autocommit());
+            // dropped without commit -> rollback
+        }
+        assert!(get_blockers(&conn, c).unwrap().is_empty());
+    }
+
+    #[test]
+    fn add_dependency_edge_and_event_are_atomic() {
+        let conn = test_conn();
+        let a = add(&conn, "a").id;
+        let b = add(&conn, "b").id;
+        fail_event_inserts(&conn);
+        assert!(add_dependency(&conn, a, b).is_err());
+        assert!(
+            get_blockers(&conn, b).unwrap().is_empty(),
+            "a failed audit event must roll back the edge (SQ-2 / #255)"
+        );
+        assert!(conn.is_autocommit());
+    }
+
+    #[test]
+    fn note_and_relation_writes_are_atomic_with_their_events() {
+        let conn = test_conn();
+        let a = add(&conn, "a").id;
+        let b = add(&conn, "b").id;
+        fail_event_inserts(&conn);
+        assert!(add_note(&conn, a, "hello", "").is_err());
+        assert_eq!(count_notes(&conn, a).unwrap(), 0, "note must roll back");
+        assert!(add_relation(&conn, a, b, "related").is_err());
+        assert!(
+            get_relations(&conn, a).unwrap().is_empty(),
+            "relation must roll back"
         );
     }
 }

@@ -70,7 +70,7 @@ pub fn run_relate_multi(
         return Err(ItrError::NotFound(target_id));
     }
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = db::write_tx(conn)?;
     let mut links: Vec<(i64, bool)> = Vec::new();
     for &id in &parsed.ids {
         if id == target_id {

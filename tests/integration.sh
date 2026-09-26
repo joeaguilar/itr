@@ -583,6 +583,61 @@ assert_eq "close --wontfix status" "wontfix" "$(jq_val "$OUT" "d['status']")"
 assert_eq "close --wontfix reason" "Superseded by issue 5" "$(jq_val "$OUT" "d['close_reason']")"
 
 # ─────────────────────────────────────────────
+echo "--- concurrent writers: parallel close + opposing depend (SQ-1, SQ-2 / #229) ---"
+# ─────────────────────────────────────────────
+
+# Read-then-write transactions used to BEGIN DEFERRED: under WAL a writer that
+# commits first turns the other's lock upgrade into SQLITE_BUSY_SNAPSHOT,
+# which bypasses busy_timeout ("database is locked"). The single-ID depend
+# path also ran its cycle check and insert as separate autocommits, so two
+# opposing edges could both land. Both must hold under real parallelism.
+CONC_DIR=$(mktemp -d)
+CONC_DB="$CONC_DIR/.itr.db"
+ITR_DB_PATH="$CONC_DB" $ITR init >/dev/null
+python3 -c "import json; print(json.dumps([{'title': 'conc %d' % i} for i in range(1, 81)]))" \
+    | ITR_DB_PATH="$CONC_DB" $ITR batch add >/dev/null
+
+CONC_PIDS=()
+for i in $(seq 1 40); do
+    ITR_DB_PATH="$CONC_DB" $ITR close "$i" "parallel close" >/dev/null 2>"$CONC_DIR/close.$i.err" &
+    CONC_PIDS+=($!)
+done
+CONC_FAILS=0
+for pid in "${CONC_PIDS[@]}"; do
+    wait "$pid" || CONC_FAILS=$((CONC_FAILS + 1))
+done
+CONC_LOCKED=$(cat "$CONC_DIR"/close.*.err | grep -c "database is locked" || true)
+assert_eq "40 parallel closes: zero 'database is locked'" "0" "$CONC_LOCKED"
+assert_eq "40 parallel closes: every process exits 0" "0" "$CONC_FAILS"
+OUT=$(ITR_DB_PATH="$CONC_DB" $ITR list --status done -f json)
+assert_eq "40 parallel closes: all 40 issues are done" "40" "$(jq_val "$OUT" "len(d)")"
+
+# 20 opposing pairs launched simultaneously: exactly one edge per pair.
+CONC_PIDS=()
+for a in $(seq 41 2 79); do
+    b=$((a + 1))
+    ITR_DB_PATH="$CONC_DB" $ITR depend "$a" --on "$b" >/dev/null 2>"$CONC_DIR/dep.$a.err" &
+    CONC_PIDS+=($!)
+    ITR_DB_PATH="$CONC_DB" $ITR depend "$b" --on "$a" >/dev/null 2>"$CONC_DIR/dep.$b.err" &
+    CONC_PIDS+=($!)
+done
+for pid in "${CONC_PIDS[@]}"; do
+    wait "$pid" || true
+done
+CONC_LOCKED=$(cat "$CONC_DIR"/dep.*.err | grep -c "database is locked" || true)
+assert_eq "opposing parallel depends: zero 'database is locked'" "0" "$CONC_LOCKED"
+OUT=$(ITR_DB_PATH="$CONC_DB" $ITR graph -f json)
+assert_eq "opposing parallel depends: no reciprocal edge (no cycle)" "0" \
+    "$(jq_val "$OUT" "sum(1 for x in d['edges'] for y in d['edges'] if x['from'] == y['to'] and x['to'] == y['from'])")"
+assert_eq "opposing parallel depends: exactly one edge per pair" "20" "$(jq_val "$OUT" "len(d['edges'])")"
+set +e
+ITR_DB_PATH="$CONC_DB" $ITR doctor >/dev/null 2>&1
+CONC_DOCTOR_EXIT=$?
+set -e
+assert_eq "opposing parallel depends: doctor finds no cycle" "0" "$CONC_DOCTOR_EXIT"
+rm -rf "$CONC_DIR"
+
+# ─────────────────────────────────────────────
 echo "--- stats ---"
 # ─────────────────────────────────────────────
 

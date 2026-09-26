@@ -122,7 +122,7 @@ pub(crate) fn execute(conn: &Connection, req: AddRequest) -> Result<IssueDetail,
         }
     };
 
-    let tx = conn.unchecked_transaction()?;
+    let tx = db::write_tx(conn)?;
 
     // Soft fallback (#167): a parent that doesn't exist would otherwise
     // surface as a raw FOREIGN KEY constraint error.
