@@ -611,7 +611,7 @@ reporting.
 | `summary` | Reads project counts, ready work, in-progress work, and recent events. | Summary output. |
 | `export` | Reads all issues, notes, dependencies, events, and relations. | JSONL by default or JSON array with `--export-format json`. |
 | `import` | Reads JSON array or JSONL from `--file` or stdin; `--merge` skips existing IDs. | Import object or `IMPORT: <imported> imported, <skipped> skipped, <replaced> replaced (notes n, dependencies n, events n, relations n)`. |
-| `doctor` | Checks orphaned deps, cycles, stale in-progress issues, empty epics, done blockers, and FTS health; `--fix` fixes safe issues. | Doctor report; exits 0 when clean or when `--fix` repaired every detected problem, 1 if problems remain after the run (stderr code `DOCTOR_PROBLEMS_REMAIN`). |
+| `doctor` | Checks orphaned deps, cycles, stale in-progress issues, empty epics, done blockers, schema shape (`missing_schema_object`, `stale_schema_generation`), and FTS health; `--fix` fixes safe issues (schema problems only on a writable handle). | Doctor report; exits 0 when clean or when `--fix` repaired every detected problem, 1 if problems remain after the run (stderr code `DOCTOR_PROBLEMS_REMAIN`). |
 | `ui` | Binds a local HTTP UI to `127.0.0.1`; `--port 0` auto-selects; `--no-open` suppresses browser launch; `--allow-dangerous` enables the raw SQL UI/API. | UI URL and DB path, then serves until stopped. |
 | `config list` | Reads effective config defaults plus overrides. | JSON object of key/value strings or `key=value` lines with `*` for custom values. |
 | `config get` | Requires config key. | Config get object or `key=value`; unknown keys are errors. |

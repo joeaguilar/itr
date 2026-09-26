@@ -76,8 +76,11 @@ load-bearing for the rest of the codebase:
 `src/db.rs` owns persistence:
 
 - schema SQL for initial database creation;
-- idempotent migrations called from `open_db` (including `migrate_add_skills`
-  which adds the `skills TEXT` column on existing databases);
+- idempotent migrations (`migrate_current_schema`) plus a `SCHEMA` reconcile,
+  run by `open_db` in one write-locked transaction only when the file is
+  missing an expected object or its stamps are stale, and guarded by the
+  schema generation in `PRAGMA user_version` (see
+  [migrations.md](migrations.md));
 - SQLite connection setup with WAL and foreign keys;
 - issue, note, dependency, config, event, relation, and FTS helpers;
 - skills helpers — the `skills` column is read, written, filtered (AND logic in

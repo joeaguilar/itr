@@ -466,7 +466,7 @@ itr list --db /path/to/.itr.db
 
 ### Schema
 
-Four tables: `issues`, `dependencies`, `notes`, `config`. Run `itr schema` to see the full SQL.
+Six tables (`issues`, `dependencies`, `notes`, `config`, `events`, `relations`) plus the optional FTS5 search index `issues_fts`. Run `itr schema` to see the SQL. Older databases are migrated automatically on the next writable open; see [docs/migrations.md](docs/migrations.md).
 
 ## Environment Variables
 
