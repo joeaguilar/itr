@@ -835,6 +835,211 @@ else
 fi
 
 # ─────────────────────────────────────────────
+echo "--- schema migrations: old-release fixtures (#241) ---"
+# ─────────────────────────────────────────────
+# Build databases exactly as old releases left them (checked-in DDL + rows,
+# applied with python3's sqlite3 module, not the sqlite3 CLI), then drive the
+# current binary against them. The expected object set comes from a fresh
+# `itr init` DB, so nothing here hard-codes the current schema.
+
+MIG_DIR="$WORKDIR/migrations"
+mkdir -p "$MIG_DIR"
+MIG_FIXTURES="$SCRIPT_DIR/tests/fixtures"
+
+# build_fixture_db <db> <sql>...
+build_fixture_db() {
+    python3 - "$@" <<'PY'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+for path in sys.argv[2:]:
+    with open(path) as fh:
+        conn.executescript(fh.read())
+conn.commit()
+conn.close()
+PY
+}
+
+# schema_state <db>: JSON with the object set, a DDL fingerprint, the
+# generation stamp, the writer row and the main file's md5.
+schema_state() {
+    python3 - "$1" <<'PY'
+import hashlib, json, sqlite3, sys
+path = sys.argv[1]
+conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+rows = conn.execute(
+    "SELECT type, name, sql FROM sqlite_master "
+    "WHERE type IN ('table', 'index', 'trigger') AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' "
+    "AND NOT (type = 'table' AND name LIKE 'issues\\_fts\\_%' ESCAPE '\\')"
+).fetchall()
+ddl = "\n".join(sorted(" ".join((sql or "").split()) for _, _, sql in rows))
+writer = conn.execute("SELECT value FROM config WHERE key = 'last_writer_version'").fetchone()
+state = {
+    "objects": sorted(f"{kind}:{name}" for kind, name, _ in rows),
+    "fingerprint": hashlib.sha256(ddl.encode()).hexdigest(),
+    "user_version": conn.execute("PRAGMA user_version").fetchone()[0],
+    "writer": writer[0] if writer else None,
+}
+conn.close()
+with open(path, "rb") as fh:
+    state["md5"] = hashlib.md5(fh.read()).hexdigest()
+print(json.dumps(state))
+PY
+}
+
+# The reference: a fresh database created by this binary.
+$ITR init --db "$MIG_DIR/fresh.db" >/dev/null
+FRESH_STATE=$(schema_state "$MIG_DIR/fresh.db")
+FRESH_OBJECTS=$(jq_val "$FRESH_STATE" "' '.join(d['objects'])")
+FRESH_GEN=$(jq_val "$FRESH_STATE" "d['user_version']")
+for obj in trigger:trg_issues_updated_at trigger:issues_fts_ai trigger:issues_fts_ad \
+    trigger:issues_fts_au index:idx_issues_status index:idx_notes_issue table:issues_fts; do
+    assert_contains "fresh init declares $obj" "$obj" "$FRESH_OBJECTS"
+done
+
+for MIG_CASE in v1.0-oldest v2.0-legacy-fts; do
+    MIG_DB="$MIG_DIR/$MIG_CASE.db"
+    if [ "$MIG_CASE" = "v1.0-oldest" ]; then
+        build_fixture_db "$MIG_DB" "$MIG_FIXTURES/schema-v1.0-oldest.sql"
+    else
+        build_fixture_db "$MIG_DB" "$MIG_FIXTURES/schema-v1.0-oldest.sql" \
+            "$MIG_FIXTURES/schema-v2.0-legacy-fts.sql"
+    fi
+    OLD_STATE=$(schema_state "$MIG_DB")
+    assert_eq "$MIG_CASE: fixture starts at generation 0" "0" "$(jq_val "$OLD_STATE" "d['user_version']")"
+
+    # First open by the current binary migrates; data must be intact.
+    OUT=$($ITR --db "$MIG_DB" list --all -f json)
+    assert_eq "$MIG_CASE: list returns every old issue" "1,2,3,4" \
+        "$(jq_val "$OUT" "','.join(str(i['id']) for i in sorted(d, key=lambda i: i['id']))")"
+    OUT=$($ITR --db "$MIG_DB" get 2 -f json)
+    assert_eq "$MIG_CASE: old title intact" "Build the sprocket" "$(jq_val "$OUT" "d['title']")"
+    assert_eq "$MIG_CASE: old parent intact" "1" "$(jq_val "$OUT" "d['parent_id']")"
+    assert_eq "$MIG_CASE: old tags intact" "widgets,backend" "$(jq_val "$OUT" "','.join(d['tags'])")"
+    assert_eq "$MIG_CASE: old note intact" "tolerance checked by calipers" \
+        "$(jq_val "$OUT" "d['notes'][0]['content']")"
+    assert_eq "$MIG_CASE: migrated skills default" "[]" "$(jq_val "$OUT" "json.dumps(d['skills'])")"
+    OUT=$($ITR --db "$MIG_DB" config get urgency.priority.high -f json)
+    assert_eq "$MIG_CASE: old config row intact" "7" "$(jq_val "$OUT" "d['value']")"
+
+    STATE=$(schema_state "$MIG_DB")
+    assert_eq "$MIG_CASE: stamped with the current generation" "$FRESH_GEN" \
+        "$(jq_val "$STATE" "d['user_version']")"
+    assert_eq "$MIG_CASE: every expected table/index/trigger present" "$FRESH_OBJECTS" \
+        "$(jq_val "$STATE" "' '.join(d['objects'])")"
+
+    # FTS: backfilled for old rows; the legacy stale token is gone.
+    OUT=$($ITR --db "$MIG_DB" search sprocket -f json)
+    assert_eq "$MIG_CASE: FTS finds an old row" "2" "$(jq_val "$OUT" "','.join(str(i['id']) for i in d)")"
+    OUT=$($ITR --db "$MIG_DB" search manual -f json)
+    assert_eq "$MIG_CASE: FTS finds a never-indexed old row" "4" "$(jq_val "$OUT" "','.join(str(i['id']) for i in d)")"
+    OUT=$($ITR --db "$MIG_DB" search cogwheel -f json)
+    assert_eq "$MIG_CASE: no stale legacy FTS token" "0" "$(jq_val "$OUT" "len(d)")"
+
+    set +e
+    OUT=$($ITR --db "$MIG_DB" doctor -f json 2>/dev/null)
+    DOC_EXIT=$?
+    set -e
+    assert_eq "$MIG_CASE: doctor exits 0 after upgrade" "0" "$DOC_EXIT"
+    assert_eq "$MIG_CASE: doctor reports clean" "True" "$(jq_val "$OUT" "d['clean']")"
+
+    # Writes work on the upgraded file.
+    OUT=$($ITR --db "$MIG_DB" add "Post-upgrade issue" --skills rust -f json)
+    NEW_ID=$(jq_val "$OUT" "d['id']")
+    assert_eq "$MIG_CASE: add after upgrade stores skills" "rust" "$(jq_val "$OUT" "','.join(d['skills'])")"
+    $ITR --db "$MIG_DB" update 2 --title "Build the flywheel" >/dev/null
+    OUT=$($ITR --db "$MIG_DB" get 2 -f json)
+    assert_eq "$MIG_CASE: update after upgrade" "Build the flywheel" "$(jq_val "$OUT" "d['title']")"
+    if [ "$(jq_val "$OUT" "d['updated_at']")" != "2026-02-15T00:00:00Z" ]; then
+        pass "$MIG_CASE: updated_at trigger fires after upgrade"
+    else
+        fail "$MIG_CASE: updated_at trigger fires after upgrade" "updated_at still backdated"
+    fi
+    OUT=$($ITR --db "$MIG_DB" search flywheel -f json)
+    assert_eq "$MIG_CASE: FTS tracks the update" "2" "$(jq_val "$OUT" "','.join(str(i['id']) for i in d)")"
+    OUT=$($ITR --db "$MIG_DB" search rust -f json)
+    assert_contains "$MIG_CASE: FTS indexes the new issue" "$NEW_ID" "$(jq_val "$OUT" "[i['id'] for i in d]")"
+
+    # A second open of an up-to-date file is the zero-write fast path.
+    BEFORE=$(schema_state "$MIG_DB")
+    $ITR --db "$MIG_DB" list >/dev/null
+    AFTER=$(schema_state "$MIG_DB")
+    assert_eq "$MIG_CASE: second open changes nothing" "$BEFORE" "$AFTER"
+done
+
+# Drop SCHEMA-only objects from an up-to-date file: the next open restores them.
+MIG_DB="$MIG_DIR/v1.0-oldest.db"
+python3 - "$MIG_DB" <<'PY'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.executescript("""
+DROP TRIGGER trg_issues_updated_at;
+DROP TRIGGER issues_fts_au;
+DROP INDEX idx_issues_status;
+UPDATE issues SET updated_at = '2020-01-01T00:00:00Z', title = 'Polish the handbook' WHERE id = 4;
+""")
+conn.close()
+PY
+$ITR --db "$MIG_DB" list >/dev/null
+STATE=$(schema_state "$MIG_DB")
+assert_eq "dropped trigger/index restored by the next open" "$FRESH_OBJECTS" \
+    "$(jq_val "$STATE" "' '.join(d['objects'])")"
+OUT=$($ITR --db "$MIG_DB" search handbook -f json)
+assert_eq "FTS reindexes rows written while its trigger was missing" "4" \
+    "$(jq_val "$OUT" "','.join(str(i['id']) for i in d)")"
+$ITR --db "$MIG_DB" update 4 --priority high >/dev/null
+OUT=$($ITR --db "$MIG_DB" get 4 -f json)
+if [ "$(jq_val "$OUT" "d['updated_at']")" != "2020-01-01T00:00:00Z" ]; then
+    pass "restored trg_issues_updated_at stamps updated_at"
+else
+    fail "restored trg_issues_updated_at stamps updated_at" "updated_at still frozen"
+fi
+
+# Read-only handles: missing indexes/triggers are reported, not fatal; missing
+# tables/columns are refused with a dedicated code. chmod cannot stop root.
+if [ "$(id -u)" -ne 0 ]; then
+    RO_DB="$MIG_DIR/readonly-index.db"
+    cp "$MIG_DB" "$RO_DB"
+    python3 - "$RO_DB" <<'PY'
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1])
+conn.executescript("DROP INDEX idx_issues_priority; PRAGMA journal_mode=DELETE;")
+conn.close()
+PY
+    chmod 444 "$RO_DB"
+    RO_MD5=$(jq_val "$(schema_state "$RO_DB")" "d['md5']")
+    assert_exit "read-only DB missing an index still serves reads" 0 $ITR --db "$RO_DB" list
+    set +e
+    OUT=$($ITR --db "$RO_DB" doctor -f json 2>/dev/null)
+    DOC_EXIT=$?
+    set -e
+    assert_eq "doctor on read-only DB with missing index exits 1" "1" "$DOC_EXIT"
+    assert_eq "doctor reports missing_schema_object" "missing_schema_object:False" \
+        "$(jq_val "$OUT" "','.join(p['kind'] + ':' + str(p['fixable']) for p in d['problems'])")"
+    assert_eq "read-only DB left untouched" "$RO_MD5" "$(jq_val "$(schema_state "$RO_DB")" "d['md5']")"
+    chmod 644 "$RO_DB"
+    set +e
+    OUT=$($ITR --db "$RO_DB" doctor --fix -f json 2>/dev/null)
+    DOC_EXIT=$?
+    set -e
+    # The writable open already reconciled the file, so doctor finds nothing.
+    assert_eq "writable reopen repairs the index" "0" "$DOC_EXIT"
+
+    RO_OLD="$MIG_DIR/readonly-oldest.db"
+    build_fixture_db "$RO_OLD" "$MIG_FIXTURES/schema-v1.0-oldest.sql"
+    python3 -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('PRAGMA journal_mode=DELETE'); c.close()" "$RO_OLD"
+    chmod 444 "$RO_OLD"
+    set +e
+    ERR=$($ITR --db "$RO_OLD" list -f json 2>&1 >/dev/null)
+    RO_EXIT=$?
+    set -e
+    assert_eq "read-only un-migrated DB exits 1" "1" "$RO_EXIT"
+    assert_eq "read-only un-migrated DB code" "READONLY_NEEDS_MIGRATION" "$(jq_val "$ERR" "d['code']")"
+    chmod 644 "$RO_OLD"
+else
+    pass "read-only migration checks skipped (running as root)"
+fi
+
+# ─────────────────────────────────────────────
 echo "--- alias commands ---"
 # ─────────────────────────────────────────────
 

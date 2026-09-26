@@ -220,8 +220,13 @@ common agent mistakes.
 
 - Use `rusqlite` with bundled SQLite. Do not assume system SQLite features.
 - Keep schema and migrations in `src/db.rs`.
-- Enable WAL and foreign keys on every opened connection.
-- Add migrations as idempotent helpers called from `open_db`.
+- Open databases through `db::open_db`/`db::init_db`. They set `foreign_keys`
+  on every connection and enable WAL whenever they migrate; the zero-write fast
+  path skips the WAL pragma because it persists in the file.
+- Follow [docs/migrations.md](docs/migrations.md) for schema changes. Declare
+  every object in `SCHEMA`; add an idempotent `migrate_*` helper to
+  `migrate_current_schema` for new columns and tables; bump `SCHEMA_VERSION`
+  when an older binary would mishandle the change.
 - Store `files`, `tags`, and `skills` as JSON arrays in TEXT columns. Use
   `serde_json` to serialize and parse them.
 - Use `params!` or generated placeholders for SQL values. Do not interpolate

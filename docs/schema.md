@@ -4,23 +4,36 @@
 FTS, dependency cycle checks, and event logging. `src/models.rs` is the public
 JSON shape layered over the stored rows.
 
-The live schema is the base `SCHEMA` string plus the idempotent helpers called
-from `open_db`.
+The live schema is the `SCHEMA` string, which declares every table, column,
+index and trigger, plus the optional FTS5 index (`FTS_CREATE`/`FTS_TRIGGERS`).
+A writable open brings any older file up to that shape. The file's schema
+generation is stored in `PRAGMA user_version` (`SCHEMA_VERSION`, currently 1).
 
 ## Connection setup
 
-Every normal DB-backed command opens the database through `db::open_db(path)`.
-That function:
+Every normal DB-backed command opens the database through `db::open_db(path)`,
+which calls `open_schema_db`. That function:
 
-- opens the SQLite connection;
-- runs `PRAGMA journal_mode=WAL`;
-- runs `PRAGMA foreign_keys=ON`;
-- runs idempotent migrations;
-- attempts to create the optional FTS5 table and its sync triggers.
+- opens the connection and sets `busy_timeout=5000` and `foreign_keys=ON`;
+- refuses a file whose `user_version` is above `SCHEMA_VERSION`
+  (`NEWER_SCHEMA`) before any write;
+- **fast path:** returns with zero writes when every expected table, column,
+  index and trigger is present (derived from `SCHEMA` and the FTS DDL) and the
+  generation and writer stamps are current. `journal_mode=WAL` is not re-set
+  here, because it persists in the file;
+- **read-only handle:** fails with `READONLY_NEEDS_MIGRATION` only if a table
+  or column is missing; otherwise it serves reads and leaves index, trigger,
+  FTS and stamp work for the next writable open;
+- **slow path:** sets WAL, then in one `BEGIN IMMEDIATE` transaction it
+  re-checks the generation, runs `migrate_current_schema`, re-runs the
+  idempotent `SCHEMA` (the reconcile that lands every index and trigger),
+  creates or repairs FTS, and stamps `user_version` and `last_writer_version`.
 
-`init_db(path)` executes the base `SCHEMA`, then runs the same idempotent
-migrations and FTS setup as `open_db`. `itr schema` prints the base `SCHEMA`
-string, not the migration-expanded runtime schema.
+`init_db(path)` runs the same slow path, but executes `SCHEMA` first because a
+new file has no tables. `itr schema` prints `SCHEMA_PRAGMAS` plus `SCHEMA`: the
+complete table, column, index and trigger set, but not the FTS objects or the
+generation. See [docs/migrations.md](migrations.md#the-current-mechanism) for
+the full flow.
 
 ## Tables
 
@@ -41,14 +54,20 @@ Important columns:
 - `context`: required text, default empty.
 - `files`: required text, default `[]`; JSON array encoded in TEXT.
 - `tags`: required text, default `[]`; JSON array encoded in TEXT.
-- `skills`: required text, default `[]`; JSON array encoded in TEXT. Also
-  present as the `migrate_add_skills` migration for older databases.
+- `skills`: required text, default `[]`; JSON array encoded in TEXT. Older
+  databases get it from `migrate_add_skills`.
 - `acceptance`: required text, default empty.
 - `parent_id`: optional self-reference to `issues(id)`, `ON DELETE SET NULL`.
 - `close_reason`: required text, default empty.
 - `created_at`: UTC ISO 8601 text from SQLite `strftime`.
 - `updated_at`: UTC ISO 8601 text from SQLite `strftime`.
-- `assigned_to`: required text, default empty; added by `migrate_add_assigned_to`.
+- `assigned_to`: required text, default empty; older databases get it from
+  `migrate_add_assigned_to`.
+
+Migrated databases carry `skills` and `assigned_to` at the end of the table
+(after `updated_at`); fresh ones have them in the order above. All itr SQL
+names its columns, so the physical order does not matter; never use
+`SELECT *` or positional inserts against `issues`.
 
 Indexes:
 
@@ -130,6 +149,9 @@ Behavior:
 - `config_set` uses `INSERT OR REPLACE`.
 - Urgency configuration is loaded from this table, with hardcoded defaults when
   keys are absent or invalid.
+- `last_writer_version` is reserved. It records the release core (`vX.Y.Z`)
+  of the itr that last opened the file writable, and `NEWER_SCHEMA` quotes it.
+  `config set` rejects it, and `config reset` keeps it.
 
 ### `events`
 
@@ -226,9 +248,14 @@ tokens are identical to the space-joined values written by `fts_index_issue`.
 
 Creation and legacy migration:
 
-- `try_create_fts` runs from `open_db` and `init_db`: it creates the table and
-  triggers idempotently, and populates the index from existing issues when the
-  table is newly created.
+- `try_create_fts` runs inside the slow-path migration transaction of
+  `open_db` and `init_db`. It creates the table and triggers idempotently, and
+  populates the index from existing issues when the table is newly created.
+  The fast path counts a missing, legacy, or trigger-less index as missing
+  schema, so a writable open always repairs it.
+- If any sync trigger is missing, rows written in the meantime may be stale,
+  so `try_create_fts` drops and rebuilds the whole index instead of only
+  recreating the trigger.
 - Creation failure is ignored so itr can run with SQLite builds that lack FTS5;
   search then uses the LIKE fallback.
 - One-time auto-migration: if an existing `issues_fts` predates the
@@ -256,8 +283,13 @@ Search behavior:
 - Without FTS, search uses LIKE over issue text fields and note content.
 - Note content is not in `issues_fts`; note-only matches are found only through
   the LIKE fallback path.
-- `doctor` reports the index as stale when the FTS row count differs from the
-  issue count, and rebuilds it with `--fix`.
+- `doctor` reports the index as stale (`fts_stale`) when the FTS row count
+  differs from the issue count, and rebuilds it with `--fix`. It also reports
+  `missing_schema_object` (any expected table, column, index, trigger or FTS
+  object is missing) and `stale_schema_generation` (`user_version` below
+  `SCHEMA_VERSION`). Both are fixable on a writable handle by the same
+  reconcile transaction `open_db` runs; on a read-only handle they are not
+  fixable.
 - See [docs/search.md](search.md) for query semantics, the FTS5/LIKE dispatch,
   and when to run `itr reindex`.
 
@@ -276,54 +308,25 @@ Rules:
 
 ## Migration rules
 
-See [docs/migrations.md](migrations.md) for the contributor walkthrough on
-adding a column or a new table, with worked case studies from the existing
-migrations.
+[docs/migrations.md](migrations.md) is the authoritative guide. It holds the
+ledger of every shipped schema change, the current open and migrate mechanism,
+per-change-type playbooks, rules for when to bump `SCHEMA_VERSION`, and the
+PR checklist. In short:
 
-All migrations live in `src/db.rs` and are wired from `open_db`:
-
-1. `migrate_add_skills`
-2. `migrate_add_assigned_to`
-3. `migrate_add_events`
-4. `migrate_add_relations`
-5. `try_create_fts` (also drops and rebuilds a legacy pre-`contentless_delete`
-   FTS index in place)
-
-Migrations must be idempotent:
-
-- Check for a column with `PRAGMA table_info(table)` before `ALTER TABLE`.
-- Check `sqlite_master` before creating a migrated table.
-- Use `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, and unique
-  constraints where they fit.
-- Use defaults for new NOT NULL columns so old rows remain valid.
-- Do not rely on a global schema version table unless one is added deliberately.
-- Do not assume migration order except the order in `open_db`.
+- The slow-path transaction in `migrate_and_stamp_schema` runs, in order:
+  1. `migrate_current_schema`: `migrate_add_skills`, `migrate_add_assigned_to`,
+     `migrate_add_events`, `migrate_add_relations`;
+  2. the `SCHEMA` reconcile;
+  3. `try_create_fts`, which also rebuilds a legacy or trigger-less index;
+  4. `stamp_schema_version`.
+- Columns and tables need a `migrate_*` helper plus the `SCHEMA` declaration.
+  Indexes and triggers only need the `SCHEMA` declaration.
+- The generation guard is `PRAGMA user_version`. Bump `SCHEMA_VERSION` for any
+  change an older binary would mishandle; the `SCHEMA_FINGERPRINT` unit test
+  forces the decision for DDL changes.
 - Keep migration SQL compatible with bundled SQLite through `rusqlite`.
-
-When adding a column:
-
-- Add it to the base `SCHEMA` when new databases should have it immediately.
-- Add an idempotent migration helper for existing databases.
-- Wire the helper in `open_db`.
-- Update `row_to_issue`, SELECT lists, INSERT/UPDATE helpers, and affected
-  command handlers.
-- Update `src/models.rs` and add `#[serde(default)]` for backward-compatible
-  JSON input/output where appropriate.
-- Add the field to formatting and `--fields` allowlists if it is user-visible.
-- If the field is searchable, add it to the FTS table definition, the sync
-  triggers, and `fts_index_issue`, and rebuild existing indexes via
-  `itr reindex`.
-- Record audit events if the field is mutable user-facing state.
-
-When adding a table:
-
-- Add the base table and indexes to `SCHEMA`.
-- Add an idempotent migration helper for existing databases.
-- Wire the helper in `open_db`.
-- Use foreign keys and `ON DELETE` behavior deliberately.
-- Add DB helper functions rather than issuing ad hoc SQL from commands.
-- Add model structs for JSON-facing rows.
-- Preserve stdout/stderr and soft-fallback behavior in commands.
+- New issue columns must also be added to import's explicit column lists
+  (`insert_issue_row`, `replace_issue_row`).
 
 ## SQL safety
 

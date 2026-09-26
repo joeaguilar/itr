@@ -39,6 +39,21 @@ All notable user-facing changes are recorded here.
 
 ### Release notes
 
+- Fixed: indexes and triggers declared in the schema now reach existing
+  databases (#241). Previously the seven base indexes and the `updated_at`
+  touch trigger were only created by `itr init`, so a file missing
+  `trg_issues_updated_at` kept `updated_at` frozen while `itr doctor`
+  reported "All clean". Every writable open now reconciles the full declared
+  schema in its migration transaction, whenever anything is missing. A
+  dropped FTS sync trigger is now detected too, and the search index is
+  rebuilt so rows written in the meantime are reindexed.
+- Added: `itr doctor` reports `missing_schema_object` and
+  `stale_schema_generation`. `--fix` repairs them on a writable database.
+- Changed: a read-only database that needs a structural migration now fails
+  with the dedicated code `READONLY_NEEDS_MIGRATION` instead of `DB_ERROR`.
+- Docs: `docs/migrations.md` rewritten as the schema-change process guide,
+  with a ledger of every shipped schema change (generation 1 was first
+  stamped by v3.3.0; its shape dates from v2.10.1).
 - Added: `.itr.db` now carries a schema generation in `PRAGMA user_version`
   (currently 1) and records the itr release that last opened it under the
   `last_writer_version` config key. Opening a database with a higher schema
@@ -117,6 +132,10 @@ All notable user-facing changes are recorded here.
   release performs no write. Binaries older than this release cannot see the
   stamp, so bring every install up to date (`.\install.ps1 -Update`,
   `install.sh --update`, or `itr upgrade`) before relying on the guard.
+- The first writable open after upgrading restores any schema index or trigger
+  a database is missing. The schema generation stays 1, so older releases
+  from v3.3.0 on still open these files. Scripts that matched `DB_ERROR` for
+  read-only un-migrated databases should match `READONLY_NEEDS_MIGRATION`.
 - No database migration or CLI action is required for the documented changes.
 - After the next tagged release, installers can fetch prebuilt archives. Source
   installs continue to work.

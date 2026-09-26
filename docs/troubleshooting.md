@@ -360,10 +360,17 @@ stderr. In `-f json` mode the message is wrapped as
 | `UPGRADE_FAILED` | `itr upgrade` could not build, locate source, or overwrite the binary.        | See [`itr upgrade` Fails](#itr-upgrade-fails) above.                        |
 | `NO_FILTERS`     | A `bulk` command was invoked with no filter (would touch every issue).         | Add at least one filter (`--status`, `--tag`, etc.) or use `batch`.         |
 | `NEWER_SCHEMA`   | The database has a higher schema generation than this binary supports; no itr migration or command mutation is applied. | Update itr (`.\install.ps1 -Update`, `install.sh --update`, or `itr upgrade`). |
+| `READONLY_NEEDS_MIGRATION` | The database file (or its directory) is read-only and is missing a table or column this itr needs, so it cannot be read safely or migrated. The file is not modified. | Open it once from a writable location or with write permission (any `itr` command migrates it), or work on a writable copy. Earlier releases reported this as `DB_ERROR`. |
 
 Schema generations describe database compatibility, not release age. Newer itr
 releases sharing generation 1 remain compatible with this guard. Binaries older
 than the guard cannot see the stamp and do not refuse higher generations.
+
+Read-only databases open normally when they already have every table and
+column. Missing indexes or triggers, FTS repairs, and generation stamps wait
+for the next writable open; `itr doctor` reports them meanwhile as
+`missing_schema_object` / `stale_schema_generation` (not fixable on a
+read-only handle). See [docs/migrations.md](migrations.md#read-only-databases).
 
 All errors exit `1`. Use the `code` field in JSON output to dispatch
 recoverable conditions in scripts rather than parsing the human-readable
