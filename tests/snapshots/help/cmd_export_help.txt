@@ -2,7 +2,7 @@ $ itr export --help
 --- exit ---
 0
 --- stdout ---
-Export the full database
+Export issues with notes, dependencies, events, relations (not config)
 
 Usage: itr export [OPTIONS]
 

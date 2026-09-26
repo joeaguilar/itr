@@ -1,7 +1,8 @@
 $ itr import --file <TMP>/importfile/import.jsonl
 --- exit ---
-1
+0
 --- stdout ---
-
+IMPORT: 2 imported, 0 skipped, 1 replaced (notes 0, dependencies 0, events 0, relations 0)
 --- stderr ---
-ERROR: JSON parse error: missing field `issue` at line 1 column 339
+REVIEW: import read flat issue objects (the `itr get -f json` shape) as export bundles: issue(s) 1, 2
+REVIEW: import replaced 1 existing issue(s) whose IDs collided with the imported data and removed 0 of their existing note, audit event, incoming blocker, and relation rows in favor of the payload's (child issues and outgoing blocker edges were kept). Pass --merge to keep existing issues and skip colliding IDs instead.

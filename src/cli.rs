@@ -385,7 +385,7 @@ pub enum Commands {
     /// Project narrative for session start (combines stats + ready + recent activity)
     Summary,
 
-    /// Export the full database
+    /// Export issues with notes, dependencies, events, relations (not config)
     Export {
         /// Export format: jsonl|json
         #[arg(long, default_value = "jsonl")]

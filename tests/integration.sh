@@ -673,6 +673,115 @@ cd "$WORKDIR"
 rm -rf "$IMPORT_DIR"
 
 # ─────────────────────────────────────────────
+echo "--- export/import data integrity (#223 #230 #242 #269 #272) ---"
+# ─────────────────────────────────────────────
+
+DI_SRC=$(mktemp -d)
+cd "$DI_SRC"
+$ITR init -q >/dev/null
+$ITR add "Épic ünïcode \"quoted\"" -k epic --context "line one
+line two	tabbed" >/dev/null
+$ITR add "child" --parent 1 --tags "b,a" --skills "Rust" >/dev/null
+$ITR add "blocked" --blocked-by 2 >/dev/null
+$ITR note 2 "a note with
+two lines" >/dev/null
+$ITR relate 3 --to 1 --type related >/dev/null
+$ITR add "finished" >/dev/null
+$ITR close 4 "shipped" >/dev/null
+$ITR export > "$DI_SRC/one.jsonl"
+
+DI_DST=$(mktemp -d)
+cd "$DI_DST"
+$ITR init -q >/dev/null
+$ITR import --file "$DI_SRC/one.jsonl" >/dev/null 2>"$DI_DST/stderr"
+$ITR export > "$DI_DST/two.jsonl"
+DI_SAME=$(python3 - "$DI_SRC/one.jsonl" "$DI_DST/two.jsonl" <<'PY'
+import json, sys
+def load(path):
+    out = []
+    for line in open(path):
+        b = json.loads(line)
+        for key in ("notes", "events", "relations"):
+            for row in b.get(key, []):
+                row.pop("id", None)
+        out.append(b)
+    return out
+print("same" if load(sys.argv[1]) == load(sys.argv[2]) else "diff")
+PY
+)
+assert_eq "export -> import -> export round-trips every bundle" "same" "$DI_SAME"
+assert_eq "clean round-trip emits no REVIEW notes" "" "$(cat "$DI_DST/stderr")"
+
+# #223: re-importing one existing issue keeps its child link and the edge
+# where it is the blocker, and names how many rows it replaced.
+head -2 "$DI_SRC/one.jsonl" | tail -1 > "$DI_DST/only2.jsonl"
+ERR=$($ITR import --file "$DI_DST/only2.jsonl" 2>&1 >/dev/null)
+assert_contains "replace names removed collateral rows" "removed" "$ERR"
+assert_eq "replace keeps outgoing blocker edge" "[2]" "$(jq_val "$($ITR get 3 -f json)" "d['blocked_by']")"
+assert_eq "replace keeps issue's own parent" "1" "$(jq_val "$($ITR get 2 -f json)" "d['parent_id']")"
+
+# #230: synonyms normalize instead of tripping the SQL CHECK constraint.
+printf '%s\n' '{"issue":{"id":50,"title":"urgent one","priority":"urgent","status":"Open"}}' \
+    '{"issue":{"id":51,"title":"bogus one","priority":"bogus"}}' > "$DI_DST/enums.jsonl"
+OUT=$($ITR import --file "$DI_DST/enums.jsonl" -f json 2>"$DI_DST/stderr")
+assert_eq "import normalizes synonyms (both imported)" "2" "$(jq_val "$OUT" "d['imported']")"
+assert_eq "urgent -> critical on import" "critical" "$(jq_val "$($ITR get 50 -f json)" "d['priority']")"
+assert_contains "unknown priority falls back with REVIEW" "priority 'bogus' not recognized" "$(cat "$DI_DST/stderr")"
+
+# IE-5: a malformed line is skipped by its real line number; the rest import.
+printf '%s\n' '{"issue":{"id":60,"title":"ok 60"}}' '{broken' '{"issue":{"id":61,"title":"ok 61"}}' > "$DI_DST/bad.jsonl"
+OUT=$($ITR import --file "$DI_DST/bad.jsonl" -f json 2>"$DI_DST/stderr")
+assert_eq "malformed line does not abort the import" "2" "$(jq_val "$OUT" "d['imported']")"
+assert_eq "malformed line is counted" "1" "$(jq_val "$OUT" "d['invalid_records']")"
+assert_contains "malformed line is named" "skipped line 2" "$(cat "$DI_DST/stderr")"
+
+# IE-1: an i64::MAX id is refused so later adds keep working.
+echo '{"issue":{"id":9223372036854775807,"title":"huge"}}' > "$DI_DST/huge.jsonl"
+$ITR import --file "$DI_DST/huge.jsonl" >/dev/null 2>&1
+assert_exit "add still works after an out-of-range import" 0 $ITR add "after huge"
+
+# #272: a two-node dependency cycle in the payload is dropped, not stored.
+printf '%s\n' '{"issue":{"id":70,"title":"c1"},"blocked_by":[71]}' '{"issue":{"id":71,"title":"c2"},"blocked_by":[70]}' > "$DI_DST/cycle.jsonl"
+OUT=$($ITR import --file "$DI_DST/cycle.jsonl" -f json 2>/dev/null)
+assert_eq "import drops the cycle-closing edge" "1" "$(jq_val "$OUT" "d['dropped_cycles']")"
+DOCTOR=$($ITR doctor -f json 2>/dev/null || true)
+assert_eq "doctor finds no circular dependency after import" "0" \
+    "$(jq_val "$DOCTOR" "sum(1 for p in d['problems'] if 'circular' in p.get('kind', p.get('type', '')))")"
+
+# #242: a malformed JSON-array cell is exported salvaged, never as [].
+python3 -c "import sqlite3; c=sqlite3.connect('.itr.db'); c.execute(\"UPDATE issues SET tags='[\\\"keepme\\\", broken' WHERE id=60\"); c.commit()"
+ERR=$($ITR export 2>&1 >"$DI_DST/salvage.jsonl")
+assert_contains "malformed tags cell is reported" "is not a JSON array of strings" "$ERR"
+assert_contains "malformed tags cell is exported, not dropped" "keepme" "$(grep '"id":60' "$DI_DST/salvage.jsonl")"
+
+# IE-11: export format is case-insensitive; an unknown one warns.
+$ITR export --export-format JSON > "$DI_DST/upper.json"
+python3 -c "import json; json.load(open('$DI_DST/upper.json'))" && pass "export --export-format JSON is a JSON array" || fail "export --export-format JSON is a JSON array" "parse error"
+ERR=$($ITR export --export-format csv 2>&1 >/dev/null)
+assert_contains "unknown export format warns" "export format 'csv' not recognized" "$ERR"
+
+# AW-1: titles are required and cleaned the same way on every write path.
+assert_exit "add rejects an empty title" 1 $ITR add "   "
+OUT=$($ITR add "  padded  " -f json)
+assert_eq "add trims the title" "padded" "$(jq_val "$OUT" "d['title']")"
+PADDED_ID=$(jq_val "$OUT" "d['id']")
+OUT=$($ITR update "$PADDED_ID" --title "" -f json)
+assert_eq "update --title '' keeps the title" "padded" "$(jq_val "$OUT" "d['title']")"
+assert_contains "update --title '' records a REVIEW note" "kept 'padded'" "$(jq_val "$OUT" "[n['content'] for n in d['notes']]")"
+# #222: an unrecognized priority/kind on update keeps the current value.
+$ITR update "$PADDED_ID" -p high -k bug >/dev/null
+OUT=$($ITR update "$PADDED_ID" -p bogus -k nonsense -f json)
+assert_eq "update keeps priority on unrecognized value (#222)" "high" "$(jq_val "$OUT" "d['priority']")"
+assert_eq "update keeps kind on unrecognized value (#222)" "bug" "$(jq_val "$OUT" "d['kind']")"
+OUT=$(echo '[{"title":"   "},{"title":"batch ok","tags":[" x ","x",""]}]' | $ITR batch add -f json)
+assert_eq "batch add reports the empty title as an item error" "error" "$(jq_val "$OUT" "d['results'][0]['outcome']")"
+assert_eq "batch add still creates the valid item" "ok" "$(jq_val "$OUT" "d['results'][1]['outcome']")"
+assert_eq "batch add cleans list fields" "['x']" "$(jq_val "$OUT" "d['results'][1]['issue']['tags']")"
+
+cd "$WORKDIR"
+rm -rf "$DI_SRC" "$DI_DST"
+
+# ─────────────────────────────────────────────
 echo "--- config ---"
 # ─────────────────────────────────────────────
 

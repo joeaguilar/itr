@@ -25,7 +25,7 @@ Commands:
   graph        Output the dependency graph
   stats        Project health summary
   summary      Project narrative for session start (combines stats + ready + recent activity)
-  export       Export the full database
+  export       Export issues with notes, dependencies, events, relations (not config)
   import       Import issues from JSONL or JSON
   doctor       Run database integrity checks
   ui           Start a local browser UI for editing the itr database

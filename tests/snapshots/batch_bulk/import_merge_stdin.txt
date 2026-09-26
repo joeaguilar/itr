@@ -1,7 +1,7 @@
 $ itr import --merge
 --- exit ---
-1
+0
 --- stdout ---
-
+IMPORT: 1 imported, 1 skipped, 0 replaced (notes 0, dependencies 0, events 0, relations 0)
 --- stderr ---
-ERROR: JSON parse error: missing field `issue` at line 1 column 339
+REVIEW: import read flat issue objects (the `itr get -f json` shape) as export bundles: issue(s) 1, 2
