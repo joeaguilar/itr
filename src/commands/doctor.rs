@@ -9,6 +9,13 @@ use rusqlite::{params, Connection};
 /// codes like `INVALID_VALUE` (see src/error.rs).
 const PROBLEMS_REMAIN_CODE: &str = "DOCTOR_PROBLEMS_REMAIN";
 
+/// Problem kind for an expected table, column, index, trigger or FTS object
+/// that the database lacks.
+const MISSING_SCHEMA_OBJECT: &str = "missing_schema_object";
+
+/// Problem kind for `PRAGMA user_version` below `db::SCHEMA_VERSION`.
+const STALE_SCHEMA_GENERATION: &str = "stale_schema_generation";
+
 pub fn run(conn: &Connection, fix: bool, fmt: Format) -> Result<(), ItrError> {
     let report = diagnose(conn, fix)?;
 
@@ -160,7 +167,40 @@ fn detect_problems(conn: &Connection) -> Result<Vec<Problem>, ItrError> {
         });
     }
 
-    // 6. FTS index health
+    // 6. Schema shape: every table, column, index and trigger this binary
+    // declares (derived from db::SCHEMA and the FTS DDL). A writable open
+    // already reconciles these, so this mostly fires on read-only handles or
+    // when an object was dropped after the open (e.g. raw SQL in `itr ui`).
+    let writable = !conn.is_readonly(rusqlite::DatabaseName::Main)?;
+    let reopen_hint = if writable {
+        ""
+    } else {
+        " (read-only database: reopen it writable to repair)"
+    };
+    for missing in db::missing_schema_objects(conn)? {
+        problems.push(Problem {
+            kind: MISSING_SCHEMA_OBJECT.to_string(),
+            message: format!("Schema {missing}{reopen_hint}"),
+            fixable: writable,
+        });
+    }
+
+    // 7. Schema generation stamp behind this binary's generation.
+    let generation = db::schema_generation(conn)?;
+    if generation < db::SCHEMA_VERSION {
+        problems.push(Problem {
+            kind: STALE_SCHEMA_GENERATION.to_string(),
+            message: format!(
+                "Schema generation {} is below this itr's generation {}{}",
+                generation,
+                db::SCHEMA_VERSION,
+                reopen_hint
+            ),
+            fixable: writable,
+        });
+    }
+
+    // 8. FTS index health
     if db::has_fts(conn) {
         // FTS exists, check if it's in sync
         let issue_count = db::all_issues(conn)?.len();
@@ -184,6 +224,24 @@ fn detect_problems(conn: &Connection) -> Result<Vec<Problem>, ItrError> {
 
 fn apply_fixes(conn: &Connection, problems: &[Problem]) -> Result<Vec<String>, ItrError> {
     let mut fixed: Vec<String> = Vec::new();
+
+    // Schema first, so the later repairs run against the full schema. This is
+    // the same migrate + reconcile + FTS + stamp transaction as `open_db`.
+    let schema_objects = problems
+        .iter()
+        .filter(|p| p.fixable && p.kind == MISSING_SCHEMA_OBJECT)
+        .count();
+    let stale_generation = problems
+        .iter()
+        .any(|p| p.fixable && p.kind == STALE_SCHEMA_GENERATION);
+    if schema_objects > 0 || stale_generation {
+        db::reconcile_schema(conn)?;
+        fixed.push(if schema_objects > 0 {
+            format!("Restored {} missing schema objects", schema_objects)
+        } else {
+            "Stamped the current schema generation".to_string()
+        });
+    }
 
     let orphaned = problems
         .iter()
@@ -314,9 +372,7 @@ mod tests {
     use super::*;
 
     fn test_conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(db::get_schema_sql()).unwrap();
-        conn
+        db::open_test_db()
     }
 
     fn insert_issue(conn: &Connection, title: &str, kind: &str, status: &str) -> i64 {
@@ -431,5 +487,96 @@ mod tests {
         assert!(report.remaining.is_empty());
         assert_eq!(failure_message(&report, false), None);
         run(&conn, false, Format::Compact).unwrap();
+    }
+
+    fn kinds(problems: &[Problem]) -> Vec<&str> {
+        problems.iter().map(|p| p.kind.as_str()).collect()
+    }
+
+    // #241: dropped SCHEMA-only objects are reported, and --fix restores them
+    // through the same reconcile transaction `open_db` runs.
+    #[test]
+    fn missing_schema_objects_are_reported_and_fixed() {
+        let conn = test_conn();
+        insert_issue(&conn, "healthy issue", "task", "open");
+        conn.execute_batch(
+            "DROP INDEX idx_issues_status;
+             DROP TRIGGER trg_issues_updated_at;
+             DROP TRIGGER issues_fts_au;",
+        )
+        .unwrap();
+
+        let report = diagnose(&conn, false).unwrap();
+        assert_eq!(kinds(&report.problems), vec![MISSING_SCHEMA_OBJECT; 3]);
+        assert!(report.problems.iter().all(|p| p.fixable));
+        let messages: Vec<&str> = report.problems.iter().map(|p| p.message.as_str()).collect();
+        assert!(messages.contains(&"Schema index idx_issues_status is missing"));
+        assert!(messages.contains(&"Schema trigger trg_issues_updated_at is missing"));
+        assert!(messages.contains(&"Schema trigger issues_fts_au is missing"));
+        assert!(failure_message(&report, false)
+            .unwrap()
+            .contains("itr doctor --fix"));
+
+        let report = diagnose(&conn, true).unwrap();
+        assert_eq!(
+            report.fixed,
+            vec!["Restored 3 missing schema objects".to_string()]
+        );
+        assert!(report.remaining.is_empty());
+        assert!(db::missing_schema_objects(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn stale_schema_generation_is_reported_and_fixed() {
+        let conn = test_conn();
+        conn.execute_batch("PRAGMA user_version = 0;").unwrap();
+
+        let report = diagnose(&conn, false).unwrap();
+        assert_eq!(kinds(&report.problems), vec![STALE_SCHEMA_GENERATION]);
+        assert!(report.problems[0].fixable);
+
+        let report = diagnose(&conn, true).unwrap();
+        assert!(report.remaining.is_empty());
+        assert_eq!(db::schema_generation(&conn).unwrap(), db::SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn readonly_schema_problems_are_reported_but_not_fixed() {
+        let dir = std::env::temp_dir().join(format!(
+            "itr-doctor-ro-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(".itr.db");
+        {
+            let file = db::init_db(&path).unwrap();
+            file.execute_batch(
+                "DROP INDEX idx_issues_kind; PRAGMA user_version = 0; PRAGMA journal_mode=DELETE;",
+            )
+            .unwrap();
+        }
+        // URI mode enforces a read-only handle even when tests run as root.
+        let uri = format!("file:{}?mode=ro", path.to_string_lossy().replace('\\', "/"));
+        let ro = db::open_db(std::path::Path::new(&uri)).unwrap();
+        assert!(ro.is_readonly(rusqlite::DatabaseName::Main).unwrap());
+
+        let report = diagnose(&ro, true).unwrap();
+        assert_eq!(
+            kinds(&report.problems),
+            vec![MISSING_SCHEMA_OBJECT, STALE_SCHEMA_GENERATION]
+        );
+        assert!(report.problems.iter().all(|p| !p.fixable));
+        assert!(report.problems[0].message.contains("reopen it writable"));
+        assert!(
+            report.fixed.is_empty(),
+            "--fix must not write a read-only handle"
+        );
+        assert_eq!(report.remaining.len(), 2);
+        drop(ro);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
