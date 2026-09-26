@@ -38,40 +38,73 @@ use std::cmp::Ordering;
 
 /// Build an `IssueSummary` for a single issue: compute urgency, resolve blockers.
 ///
-/// Borrowing wrapper around [`build_issue_summary_owned`]. Prefer the owned
-/// variant when the caller owns the [`Issue`] (e.g. iterating `Vec<Issue>` with
-/// `into_iter()`) — it avoids cloning every string/vec field. This wrapper
-/// exists for callers that only have a borrow (e.g. `summary.rs` which iterates
-/// a slice and reuses each `Issue` afterwards).
+/// Infallible borrowing wrapper kept for `ui.rs` callers. It no longer
+/// swallows dependency-query errors silently (#240): on failure it prints a
+/// `REVIEW:` note naming the issue and the error, then returns the summary
+/// with empty dependency state. CLI callers use the fallible
+/// [`try_build_issue_summary`] / [`build_issue_summary_owned`] and propagate
+/// the error instead.
 pub fn build_issue_summary(
     conn: &Connection,
     issue: &Issue,
     config: &UrgencyConfig,
 ) -> IssueSummary {
+    match try_build_issue_summary(conn, issue, config) {
+        Ok(summary) => summary,
+        Err(e) => {
+            eprintln!(
+                "REVIEW: could not load dependency state for issue {}: {}",
+                issue.id, e
+            );
+            let urg = urgency::compute_urgency(issue, config, conn);
+            assemble_summary(issue.clone(), urg, Vec::new(), Vec::new(), false)
+        }
+    }
+}
+
+/// Fallible borrowing variant of [`build_issue_summary_owned`], for callers
+/// that only hold a borrow (e.g. `summary.rs`, which reuses each `Issue`).
+pub fn try_build_issue_summary(
+    conn: &Connection,
+    issue: &Issue,
+    config: &UrgencyConfig,
+) -> Result<IssueSummary, ItrError> {
     build_issue_summary_owned(conn, issue.clone(), config)
 }
 
-/// Owned-input variant of [`build_issue_summary`].
+/// Owned-input summary builder.
 ///
 /// Moves the [`Issue`]'s string and vec fields directly into the resulting
 /// [`IssueSummary`], avoiding the per-field `.clone()` storm that the borrowing
 /// wrapper incurs. Use this from any caller that has ownership of the `Issue`.
+/// Dependency-query errors propagate (#240) — a failed `is_blocked` must not
+/// quietly report a blocked issue as ready.
 pub fn build_issue_summary_owned(
     conn: &Connection,
     issue: Issue,
     config: &UrgencyConfig,
-) -> IssueSummary {
+) -> Result<IssueSummary, ItrError> {
     let urg = urgency::compute_urgency(&issue, config, conn);
-    let blocked_by = db::get_blockers(conn, issue.id).unwrap_or_default();
-    let blocks = db::get_blocking(conn, issue.id).unwrap_or_default();
-    let is_blocked = db::is_blocked(conn, issue.id).unwrap_or(false);
+    let blocked_by = db::get_blockers(conn, issue.id)?;
+    let blocks = db::get_blocking(conn, issue.id)?;
+    let is_blocked = db::is_blocked(conn, issue.id)?;
+    Ok(assemble_summary(issue, urg, blocked_by, blocks, is_blocked))
+}
+
+fn assemble_summary(
+    issue: Issue,
+    urgency: f64,
+    blocked_by: Vec<i64>,
+    blocks: Vec<i64>,
+    is_blocked: bool,
+) -> IssueSummary {
     IssueSummary {
         id: issue.id,
         title: issue.title,
         status: issue.status,
         priority: issue.priority,
         kind: issue.kind,
-        urgency: urg,
+        urgency,
         is_blocked,
         blocked_by,
         blocks,

@@ -153,14 +153,15 @@ pub(crate) fn run_core(
         remove_skills,
     } = req;
 
-    // Capture old values for event recording
-    let old_issue = db::get_issue(conn, id)?;
+    // Capture old values for event recording — inside the write
+    // transaction so a concurrent writer cannot make them stale (SQ-12).
+    let tx = db::write_tx(conn)?;
+    let old_issue = db::get_issue(&tx, id)?;
 
     let status = status.map(|s| normalize::normalize_status(&s));
     let priority = priority.map(|p| normalize::normalize_priority(&p));
     let kind = kind.map(|k| normalize::normalize_kind(&k));
 
-    let tx = conn.unchecked_transaction()?;
     let mut review_notes: Vec<String> = Vec::new();
     let mut terminal_status_applied = false;
 

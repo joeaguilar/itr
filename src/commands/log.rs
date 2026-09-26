@@ -2,7 +2,79 @@ use crate::db;
 use crate::error::{self, ItrError};
 use crate::format::{self, Format};
 use crate::models::Event;
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
 use rusqlite::Connection;
+
+/// The canonical form of every stored `created_at` (UTC, second resolution).
+/// `--since` is compared as TEXT against it, so it must be re-emitted in
+/// exactly this shape before binding.
+const CANONICAL_TS: &str = "%Y-%m-%dT%H:%M:%SZ";
+
+/// Parse a `--since` value into the canonical stored timestamp form
+/// (`%Y-%m-%dT%H:%M:%SZ`, UTC). Returns `None` when unparseable (SQ-7).
+///
+/// Accepted forms:
+/// - RFC 3339 with any offset (`2026-01-05T12:00:00Z`, `...+05:00`), also
+///   with a space instead of `T`;
+/// - naive date-times, taken as UTC (`2026-01-05T12:00:00`,
+///   `2026-01-05 12:00:00`, `2026-01-05T12:00`, optional trailing `Z`,
+///   optional fractional seconds);
+/// - a bare date (`2026-01-05`), meaning midnight UTC;
+/// - relative ages `<N>s|m|h|d|w` (e.g. `24h`, `7d`), plus `now`, `today`
+///   and `yesterday` (midnight UTC).
+pub(crate) fn parse_since(value: &str, now: DateTime<Utc>) -> Option<String> {
+    let v = value.trim();
+    if v.is_empty() {
+        return None;
+    }
+    let lower = v.to_ascii_lowercase();
+    let midnight = |d: NaiveDate| d.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc());
+    let resolved: Option<DateTime<Utc>> = match lower.as_str() {
+        "now" => Some(now),
+        "today" => midnight(now.date_naive()),
+        "yesterday" => midnight(now.date_naive() - Duration::days(1)),
+        _ => parse_relative(&lower, now)
+            .or_else(|| parse_absolute(v))
+            .or_else(|| {
+                NaiveDate::parse_from_str(v, "%Y-%m-%d")
+                    .ok()
+                    .and_then(midnight)
+            }),
+    };
+    resolved.map(|dt| dt.format(CANONICAL_TS).to_string())
+}
+
+/// `<N><unit>` with unit in s/m/h/d/w, measured back from `now`.
+fn parse_relative(v: &str, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let unit = v.chars().last()?;
+    let amount: i64 = v[..v.len() - unit.len_utf8()].parse().ok()?;
+    if amount < 0 {
+        return None;
+    }
+    let span = match unit {
+        's' => Duration::try_seconds(amount)?,
+        'm' => Duration::try_minutes(amount)?,
+        'h' => Duration::try_hours(amount)?,
+        'd' => Duration::try_days(amount)?,
+        'w' => Duration::try_weeks(amount)?,
+        _ => return None,
+    };
+    now.checked_sub_signed(span)
+}
+
+/// RFC 3339 (any offset, `T` or space separator) or a naive date-time
+/// taken as UTC.
+fn parse_absolute(v: &str) -> Option<DateTime<Utc>> {
+    let t_form = v.replacen(' ', "T", 1);
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&t_form) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    let naive = t_form.strip_suffix(['Z', 'z']).unwrap_or(&t_form);
+    ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M"]
+        .iter()
+        .find_map(|f| NaiveDateTime::parse_from_str(naive, f).ok())
+        .map(|dt| dt.and_utc())
+}
 
 pub fn run(
     conn: &Connection,
@@ -41,7 +113,23 @@ pub(crate) fn run_core(
         let _issue = db::get_issue(conn, issue_id)?;
     }
 
-    let mut events = db::get_events_filtered(conn, id, limit, since, agent)?;
+    // Normalize --since to the stored canonical form before the TEXT
+    // comparison (SQ-7). An unparseable value is reported and ignored
+    // (soft fallback) instead of silently misfiltering or returning [].
+    let since = match since {
+        Some(raw) => match parse_since(raw, Utc::now()) {
+            Some(ts) => Some(ts),
+            None => {
+                eprintln!(
+                    "REVIEW: --since '{raw}' not recognized as a timestamp; filter ignored. Use RFC 3339 (2026-01-05T12:00:00Z), YYYY-MM-DD, or a relative age like 24h / 7d"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+
+    let mut events = db::get_events_filtered(conn, id, limit, since.as_deref(), agent)?;
     if id.is_some() {
         // get_events_filtered returns newest-first; per-issue history reads
         // top-to-bottom in chronological order.
@@ -144,6 +232,88 @@ mod tests {
         let events = run_core(&conn, None, 50, None, None).unwrap();
         let stamps: Vec<&str> = events.iter().map(|e| e.created_at.as_str()).collect();
         assert_eq!(stamps, vec!["2026-01-02T00:00:00Z", "2026-01-01T00:00:00Z"]);
+    }
+
+    // SQ-7: --since is normalized to the canonical stored form.
+    #[test]
+    fn parse_since_accepts_absolute_forms() {
+        let now = Utc::now();
+        let cases = [
+            ("2026-01-05T12:00:00Z", "2026-01-05T12:00:00Z"),
+            ("2026-01-05T12:00:00+05:00", "2026-01-05T07:00:00Z"),
+            ("2026-01-05T12:00:00.750Z", "2026-01-05T12:00:00Z"),
+            ("2026-01-05 12:00:00", "2026-01-05T12:00:00Z"),
+            ("2026-01-05 12:00:00-02:00", "2026-01-05T14:00:00Z"),
+            ("2026-01-05T12:00:00", "2026-01-05T12:00:00Z"),
+            ("2026-01-05T12:00", "2026-01-05T12:00:00Z"),
+            ("2026-01-05", "2026-01-05T00:00:00Z"),
+            ("  2026-01-05  ", "2026-01-05T00:00:00Z"),
+        ];
+        for (input, want) in cases {
+            assert_eq!(
+                parse_since(input, now).as_deref(),
+                Some(want),
+                "input {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_since_accepts_relative_forms() {
+        let now = DateTime::parse_from_rfc3339("2026-01-05T12:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let cases = [
+            ("24h", "2026-01-04T12:30:00Z"),
+            ("7d", "2025-12-29T12:30:00Z"),
+            ("2w", "2025-12-22T12:30:00Z"),
+            ("30m", "2026-01-05T12:00:00Z"),
+            ("45s", "2026-01-05T12:29:15Z"),
+            ("now", "2026-01-05T12:30:00Z"),
+            ("today", "2026-01-05T00:00:00Z"),
+            ("Yesterday", "2026-01-04T00:00:00Z"),
+        ];
+        for (input, want) in cases {
+            assert_eq!(
+                parse_since(input, now).as_deref(),
+                Some(want),
+                "input {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_since_rejects_garbage() {
+        let now = Utc::now();
+        for input in ["", "   ", "soon", "7x", "-3d", "2026-13-45", "d"] {
+            assert_eq!(parse_since(input, now), None, "input {input:?}");
+        }
+    }
+
+    // SQ-7 end to end: a space-separated or offset --since filters on the
+    // real instant instead of a raw string comparison.
+    #[test]
+    fn since_is_compared_as_an_instant() {
+        let conn = db::open_test_db();
+        let id = seed_issue(&conn);
+        insert_event_at(&conn, id, "alice", "2026-01-05T08:00:00Z");
+        insert_event_at(&conn, id, "alice", "2026-01-05T20:00:00Z");
+
+        let stamps = |since: &str| -> Vec<String> {
+            run_core(&conn, None, 50, Some(since), None)
+                .unwrap()
+                .into_iter()
+                .map(|e| e.created_at)
+                .collect()
+        };
+        assert_eq!(stamps("2026-01-05 12:00:00"), vec!["2026-01-05T20:00:00Z"]);
+        assert_eq!(
+            stamps("2026-01-05T12:00:00+05:00"),
+            vec!["2026-01-05T20:00:00Z", "2026-01-05T08:00:00Z"],
+            "12:00+05:00 is 07:00Z, so the 08:00Z event is included"
+        );
+        // Unparseable: REVIEW note + filter ignored, never a silent [].
+        assert_eq!(stamps("soon").len(), 2);
     }
 
     // Unknown issue IDs still surface NOT_FOUND.

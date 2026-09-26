@@ -145,8 +145,8 @@ fn run_core(
         let issue = db::get_issue(conn, *id)?;
         let notes = db::get_notes(conn, *id)?;
         let urg = urgency::compute_urgency(&issue, &config, conn);
-        let blocked_by = db::get_blockers(conn, *id).unwrap_or_default();
-        let is_blocked = db::is_blocked(conn, *id).unwrap_or(false);
+        let blocked_by = db::get_blockers(conn, *id)?;
+        let is_blocked = db::is_blocked(conn, *id)?;
         let (matched_fields, context_snippets) =
             compute_matched_fields_with_snippets(terms, &issue, &notes);
 
@@ -181,13 +181,14 @@ fn run_core(
         });
     }
 
-    // Filter by skills (AND logic)
+    // Filter by skills (AND logic, case-insensitive — SQ-5 / #224)
+    let skills = db::normalize_skill_filters(skills);
     let mut results = if skills.is_empty() {
         results
     } else {
         results
             .into_iter()
-            .filter(|r| skills.iter().all(|s| r.skills.contains(s)))
+            .filter(|r| skills.iter().all(|s| db::has_skill(&r.skills, s)))
             .collect()
     };
 

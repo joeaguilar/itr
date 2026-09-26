@@ -322,6 +322,10 @@ Commands: `stats`, `summary`.
   percent, oldest open issue, in-progress issues, ready issues, and recent
   events. Non-JSON modes share compact narrative lines beginning with
   `PROJECT:`.
+- `stats`, `summary`, and `ready` share one blocked/ready definition (SQ-8):
+  the active issues (`open` ∪ `in-progress`) are partitioned into `blocked`
+  (at least one `open`/`in-progress` blocker) and `ready` (not blocked), so
+  `ready` counts and lists agree across all three commands.
 
 ### Graph
 
@@ -407,6 +411,11 @@ Commands: `bulk close`, `bulk update`, `bulk relate`, `bulk depend`,
   `relation_type` or `on`); line output prints the planned/applied
   `RELATION:`/`DEPEND:`/`NOTE:` lines followed by the `BULK_*` summary line.
   A matched issue equal to `--to`/`--on` is skipped with a `REVIEW:` note.
+- Every bulk verb normalizes `--status`/`--priority`/`--kind` exactly like
+  `list` (#234): synonyms resolve, and an unrecognized value emits the same
+  `REVIEW: <field> filter '<value>' not recognized; it will match nothing`
+  note. `--skill` filters everywhere (list, search, next/claim, ready, bulk)
+  are trimmed and matched case-insensitively (#224).
   Validation is the single-verb code path run inside a transaction — a
   `--dry-run` rolls it back instead of committing, so dependency cycles fail
   identically in both modes and a dry run writes nothing (no rows, no audit
@@ -633,7 +642,7 @@ reporting.
 | `claim`, `start` | With ID, claims that issue; without ID, same selection as `next --claim`; optional skill/agent/assignee filters. | Issue detail or empty result. |
 | `assign` | Requires issue ID and agent. | Issue detail with `assigned_to` set. |
 | `unassign` | Requires issue ID. | Issue detail with `assigned_to` cleared. |
-| `log` | Lists audit events globally or for one issue; supports limit, since, and agent filter. | Event list or empty result. |
+| `log` | Lists audit events globally or for one issue; supports limit, since, and agent filter. `--since` accepts RFC 3339 (any offset), `YYYY-MM-DD`, or a relative age (`24h`, `7d`, `today`, `yesterday`) and is normalized to UTC before comparison; an unparseable value emits a `REVIEW:` note and is ignored. | Event list or empty result. |
 | `relate` | One or more source IDs (repeated, comma-separated, or ranges), `--to <target_id>`, and relation type `duplicate`, `related`, or `supersedes`. | Relation object(s) or `RELATION:created|exists ...` per source. |
 | `unrelate` | Requires source ID and `--from <target_id>`; optional `--type` (alias of `--relation-type`) limits removal to one relation type (`duplicate`, `related`, or `supersedes`), default removes every type between the pair. | Unrelate object or `RELATION:removed|not_found ...`. |
 | `reindex` | Rebuilds FTS index. | Reindex object or `REINDEX: Rebuilt FTS index for <n> issues`. |

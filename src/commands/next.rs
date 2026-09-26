@@ -141,6 +141,11 @@ fn claim_by_id(
         ));
     }
 
+    // One IMMEDIATE transaction around the claim and the in-progress
+    // adoption write, so the observed assignee cannot change between the
+    // read and the write (SQ-12). `claim_issue` joins this transaction.
+    let tx = db::write_tx(conn)?;
+    let conn: &Connection = &tx;
     match db::claim_issue(conn, id, agent)? {
         ClaimOutcome::Claimed { prior_assigned_to } => {
             if !prior_assigned_to.is_empty() && agent != Some(prior_assigned_to.as_str()) {
@@ -192,6 +197,7 @@ fn claim_by_id(
             }
         },
     }
+    tx.commit()?;
     Ok(notes)
 }
 

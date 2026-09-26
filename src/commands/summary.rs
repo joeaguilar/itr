@@ -1,4 +1,4 @@
-use crate::commands::build_issue_summary;
+use crate::commands::try_build_issue_summary;
 use crate::db;
 use crate::error::ItrError;
 use crate::format::Format;
@@ -62,38 +62,38 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
     let mut ready_issues = Vec::new();
 
     for issue in &all_issues {
+        if issue.status == "done" || issue.status == "wontfix" {
+            done += 1;
+            continue;
+        }
+
+        // Active (open ∪ in-progress) issues are partitioned into blocked /
+        // ready exactly like `itr ready` and `itr stats` (SQ-8): blocked
+        // means an open or in-progress blocker, ready means active and not
+        // blocked. Dependency-query errors propagate (#240).
+        let s = try_build_issue_summary(conn, issue, &config)?;
+        let entry = || SummaryIssue {
+            id: issue.id,
+            title: issue.title.clone(),
+            priority: issue.priority.clone(),
+            kind: issue.kind.clone(),
+            urgency: s.urgency,
+            assigned_to: issue.assigned_to.clone(),
+        };
+        if s.is_blocked {
+            blocked += 1;
+        } else {
+            ready += 1;
+            ready_issues.push(entry());
+        }
+
         match issue.status.as_str() {
-            "done" | "wontfix" => done += 1,
             "in-progress" => {
                 in_progress += 1;
-                let s = build_issue_summary(conn, issue, &config);
-                wip_issues.push(SummaryIssue {
-                    id: issue.id,
-                    title: issue.title.clone(),
-                    priority: issue.priority.clone(),
-                    kind: issue.kind.clone(),
-                    urgency: s.urgency,
-                    assigned_to: issue.assigned_to.clone(),
-                });
+                wip_issues.push(entry());
             }
             _ => {
                 open += 1;
-                let is_blocked = db::is_blocked(conn, issue.id).unwrap_or(false);
-                if is_blocked {
-                    blocked += 1;
-                } else {
-                    ready += 1;
-                    let s = build_issue_summary(conn, issue, &config);
-                    ready_issues.push(SummaryIssue {
-                        id: issue.id,
-                        title: issue.title.clone(),
-                        priority: issue.priority.clone(),
-                        kind: issue.kind.clone(),
-                        urgency: s.urgency,
-                        assigned_to: issue.assigned_to.clone(),
-                    });
-                }
-
                 let days = util::days_since(&issue.created_at) as i64;
                 match &oldest_open {
                     None => {
@@ -166,7 +166,7 @@ pub fn run(conn: &Connection, fmt: Format) -> Result<(), ItrError> {
 
 fn print_compact(s: &Summary) {
     println!(
-        "PROJECT: {} issues, {} done ({:.0}%), {} in-progress, {} open ({} ready, {} blocked)",
+        "PROJECT: {} issues, {} done ({:.0}%), {} in-progress, {} open; {} ready, {} blocked",
         s.total, s.done, s.completion_pct, s.in_progress, s.open, s.ready, s.blocked
     );
 

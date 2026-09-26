@@ -502,7 +502,8 @@ pub enum Commands {
         #[arg(short = 'n', long, default_value = "50")]
         limit: usize,
 
-        /// Only show events since this timestamp (ISO 8601)
+        /// Only show events since this time: RFC 3339 / ISO 8601 (any offset),
+        /// YYYY-MM-DD, or a relative age like 24h, 7d, today, yesterday
         #[arg(long)]
         since: Option<String>,
 

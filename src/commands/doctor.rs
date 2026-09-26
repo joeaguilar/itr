@@ -280,7 +280,8 @@ fn find_orphaned_deps(conn: &Connection) -> Result<Vec<(i64, i64)>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT d.blocker_id, d.blocked_id FROM dependencies d
          WHERE NOT EXISTS (SELECT 1 FROM issues WHERE id = d.blocker_id)
-         OR NOT EXISTS (SELECT 1 FROM issues WHERE id = d.blocked_id)",
+         OR NOT EXISTS (SELECT 1 FROM issues WHERE id = d.blocked_id)
+         ORDER BY d.blocker_id, d.blocked_id",
     )?;
     let results: Vec<(i64, i64)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -323,7 +324,8 @@ fn find_stuck_in_progress(
         "SELECT id, title, CAST((julianday('now') - julianday(updated_at)) AS INTEGER) as days
          FROM issues
          WHERE status = 'in-progress'
-         AND CAST((julianday('now') - julianday(updated_at)) AS INTEGER) > ?1",
+         AND CAST((julianday('now') - julianday(updated_at)) AS INTEGER) > ?1
+         ORDER BY id",
     )?;
     let results: Vec<(i64, String, i64)> = stmt
         .query_map(params![max_days], |row| {
@@ -338,7 +340,8 @@ fn find_empty_epics(conn: &Connection) -> Result<Vec<(i64, String)>, ItrError> {
         "SELECT i.id, i.title FROM issues i
          WHERE i.kind = 'epic'
          AND i.status NOT IN ('done', 'wontfix')
-         AND NOT EXISTS (SELECT 1 FROM issues c WHERE c.parent_id = i.id)",
+         AND NOT EXISTS (SELECT 1 FROM issues c WHERE c.parent_id = i.id)
+         ORDER BY i.id",
     )?;
     let results: Vec<(i64, String)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -350,7 +353,8 @@ fn find_done_blockers(conn: &Connection) -> Result<Vec<(i64, i64)>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT d.blocker_id, d.blocked_id FROM dependencies d
          JOIN issues i ON d.blocker_id = i.id
-         WHERE i.status IN ('done', 'wontfix')",
+         WHERE i.status IN ('done', 'wontfix')
+         ORDER BY d.blocker_id, d.blocked_id",
     )?;
     let results: Vec<(i64, i64)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?

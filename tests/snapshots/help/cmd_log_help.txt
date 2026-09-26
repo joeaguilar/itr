@@ -11,7 +11,7 @@ Arguments:
 
 Options:
   -n, --limit <LIMIT>    Max events to show [default: 50]
-      --since <SINCE>    Only show events since this timestamp (ISO 8601)
+      --since <SINCE>    Only show events since this time: RFC 3339 / ISO 8601 (any offset), YYYY-MM-DD, or a relative age like 24h, 7d, today, yesterday
       --agent <AGENT>    Filter by agent name
   -f, --format <FORMAT>  Output format: compact|json|pretty|oneline [default: compact]
       --db <DB>          Override database path (skips walk-up search)

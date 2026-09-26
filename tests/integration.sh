@@ -583,6 +583,61 @@ assert_eq "close --wontfix status" "wontfix" "$(jq_val "$OUT" "d['status']")"
 assert_eq "close --wontfix reason" "Superseded by issue 5" "$(jq_val "$OUT" "d['close_reason']")"
 
 # ─────────────────────────────────────────────
+echo "--- concurrent writers: parallel close + opposing depend (SQ-1, SQ-2 / #229) ---"
+# ─────────────────────────────────────────────
+
+# Read-then-write transactions used to BEGIN DEFERRED: under WAL a writer that
+# commits first turns the other's lock upgrade into SQLITE_BUSY_SNAPSHOT,
+# which bypasses busy_timeout ("database is locked"). The single-ID depend
+# path also ran its cycle check and insert as separate autocommits, so two
+# opposing edges could both land. Both must hold under real parallelism.
+CONC_DIR=$(mktemp -d)
+CONC_DB="$CONC_DIR/.itr.db"
+ITR_DB_PATH="$CONC_DB" $ITR init >/dev/null
+python3 -c "import json; print(json.dumps([{'title': 'conc %d' % i} for i in range(1, 81)]))" \
+    | ITR_DB_PATH="$CONC_DB" $ITR batch add >/dev/null
+
+CONC_PIDS=()
+for i in $(seq 1 40); do
+    ITR_DB_PATH="$CONC_DB" $ITR close "$i" "parallel close" >/dev/null 2>"$CONC_DIR/close.$i.err" &
+    CONC_PIDS+=($!)
+done
+CONC_FAILS=0
+for pid in "${CONC_PIDS[@]}"; do
+    wait "$pid" || CONC_FAILS=$((CONC_FAILS + 1))
+done
+CONC_LOCKED=$(cat "$CONC_DIR"/close.*.err | grep -c "database is locked" || true)
+assert_eq "40 parallel closes: zero 'database is locked'" "0" "$CONC_LOCKED"
+assert_eq "40 parallel closes: every process exits 0" "0" "$CONC_FAILS"
+OUT=$(ITR_DB_PATH="$CONC_DB" $ITR list --status done -f json)
+assert_eq "40 parallel closes: all 40 issues are done" "40" "$(jq_val "$OUT" "len(d)")"
+
+# 20 opposing pairs launched simultaneously: exactly one edge per pair.
+CONC_PIDS=()
+for a in $(seq 41 2 79); do
+    b=$((a + 1))
+    ITR_DB_PATH="$CONC_DB" $ITR depend "$a" --on "$b" >/dev/null 2>"$CONC_DIR/dep.$a.err" &
+    CONC_PIDS+=($!)
+    ITR_DB_PATH="$CONC_DB" $ITR depend "$b" --on "$a" >/dev/null 2>"$CONC_DIR/dep.$b.err" &
+    CONC_PIDS+=($!)
+done
+for pid in "${CONC_PIDS[@]}"; do
+    wait "$pid" || true
+done
+CONC_LOCKED=$(cat "$CONC_DIR"/dep.*.err | grep -c "database is locked" || true)
+assert_eq "opposing parallel depends: zero 'database is locked'" "0" "$CONC_LOCKED"
+OUT=$(ITR_DB_PATH="$CONC_DB" $ITR graph -f json)
+assert_eq "opposing parallel depends: no reciprocal edge (no cycle)" "0" \
+    "$(jq_val "$OUT" "sum(1 for x in d['edges'] for y in d['edges'] if x['from'] == y['to'] and x['to'] == y['from'])")"
+assert_eq "opposing parallel depends: exactly one edge per pair" "20" "$(jq_val "$OUT" "len(d['edges'])")"
+set +e
+ITR_DB_PATH="$CONC_DB" $ITR doctor >/dev/null 2>&1
+CONC_DOCTOR_EXIT=$?
+set -e
+assert_eq "opposing parallel depends: doctor finds no cycle" "0" "$CONC_DOCTOR_EXIT"
+rm -rf "$CONC_DIR"
+
+# ─────────────────────────────────────────────
 echo "--- stats ---"
 # ─────────────────────────────────────────────
 
@@ -2030,6 +2085,69 @@ OUT=$(ITR_DB_PATH="$SA_DIR/.itr.db" $ITR get $SA_ID -f json)
 assert_eq "sub-agent final status done" "done" "$(jq_val "$OUT" "d['status']")"
 
 rm -rf "$SA_DIR"
+
+# ─────────────────────────────────────────────
+echo "--- query correctness: shared blocked/ready, skill case, bulk filter notes, log --since, note atomicity (SQ-5 #224, SQ-7, SQ-8, #234, #255) ---"
+# ─────────────────────────────────────────────
+
+QC_DIR=$(mktemp -d)
+QC_DB="$QC_DIR/.itr.db"
+ITR_DB_PATH="$QC_DB" $ITR init >/dev/null
+
+# SQ-8: an open blocker A blocking an in-progress B. stats, summary, and
+# ready must all agree: 1 blocked (B), 1 ready (A).
+QC_A=$(jq_val "$(ITR_DB_PATH="$QC_DB" $ITR add "qc blocker" -f json)" "d['id']")
+QC_B=$(jq_val "$(ITR_DB_PATH="$QC_DB" $ITR add "qc blocked wip" --skill Rust -f json)" "d['id']")
+ITR_DB_PATH="$QC_DB" $ITR depend "$QC_B" --on "$QC_A" >/dev/null
+ITR_DB_PATH="$QC_DB" $ITR update "$QC_B" --status in-progress >/dev/null
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR stats -f json)
+assert_eq "SQ-8: stats blocked counts the in-progress blocked issue" "1" "$(jq_val "$OUT" "d['blocked']")"
+assert_eq "SQ-8: stats ready" "1" "$(jq_val "$OUT" "d['ready']")"
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR summary -f json)
+assert_eq "SQ-8: summary blocked matches stats" "1" "$(jq_val "$OUT" "d['blocked']")"
+assert_eq "SQ-8: summary ready matches stats" "1" "$(jq_val "$OUT" "d['ready']")"
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR ready -f json)
+assert_eq "SQ-8: ready lists the same single issue" "[$QC_A]" "$(jq_val "$OUT" "[i['id'] for i in d]")"
+
+# SQ-5 / #224: skills are stored lowercase; filters must match any case.
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR list --skill RUST -f json)
+assert_eq "#224: list --skill RUST matches stored rust" "[$QC_B]" "$(jq_val "$OUT" "[i['id'] for i in d]")"
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR search qc --skill ' Rust ' -f json)
+assert_eq "#224: search --skill ' Rust ' matches stored rust" "[$QC_B]" "$(jq_val "$OUT" "[i['id'] for i in d]")"
+QC_C=$(jq_val "$(ITR_DB_PATH="$QC_DB" $ITR add "qc skilled open" --skill rust -f json)" "d['id']")
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR next --skill Rust -f json)
+assert_eq "#224: next --skill Rust finds the open rust issue" "$QC_C" "$(jq_val "$OUT" "d['id']")"
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR bulk close --skill RUST --dry-run -f json)
+assert_eq "#224: bulk --skill RUST matches both rust issues" "2" "$(jq_val "$OUT" "d['count']")"
+
+# #234: bulk filters warn exactly like list does.
+ERR=$(ITR_DB_PATH="$QC_DB" $ITR bulk close --status bogus --dry-run 2>&1 >/dev/null || true)
+assert_contains "#234: bulk names the unrecognized status" "REVIEW: status filter 'bogus' not recognized; it will match nothing" "$ERR"
+ERR=$(ITR_DB_PATH="$QC_DB" $ITR bulk close --priority nope --dry-run 2>&1 >/dev/null || true)
+assert_contains "#234: bulk names the unrecognized priority" "REVIEW: priority filter 'nope' not recognized" "$ERR"
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR bulk close --status wip --dry-run -f json)
+assert_eq "#234: bulk --status wip resolves to in-progress" "[$QC_B]" "$(jq_val "$OUT" "d['ids']")"
+
+# SQ-7: --since is parsed and normalized, never compared as a raw string.
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR log --since 2000-01-01 -f json)
+QC_ALL=$(jq_val "$OUT" "len(d)")
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR log --since '2000-01-01 00:00:00' -f json)
+assert_eq "SQ-7: space-separated --since is an instant" "$QC_ALL" "$(jq_val "$OUT" "len(d)")"
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR log --since 1h -f json)
+assert_eq "SQ-7: relative --since 1h includes just-written events" "$QC_ALL" "$(jq_val "$OUT" "len(d)")"
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR log --since 2099-01-01 -f json)
+assert_eq "SQ-7: future --since is empty" "0" "$(jq_val "$OUT" "len(d)")"
+ERR=$(ITR_DB_PATH="$QC_DB" $ITR log --since soonish -f json 2>&1 >/dev/null)
+assert_contains "SQ-7: unparseable --since gets a REVIEW note naming it" "REVIEW: --since 'soonish' not recognized" "$ERR"
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR log --since soonish -f json 2>/dev/null)
+assert_eq "SQ-7: unparseable --since is ignored, not a silent []" "$QC_ALL" "$(jq_val "$OUT" "len(d)")"
+
+# #255: note delete records its audit event in the same commit.
+QC_NOTE=$(jq_val "$(ITR_DB_PATH="$QC_DB" $ITR note "$QC_A" "to be deleted" -f json)" "d['id']")
+ITR_DB_PATH="$QC_DB" $ITR note-delete "$QC_NOTE" >/dev/null
+OUT=$(ITR_DB_PATH="$QC_DB" $ITR log "$QC_A" -f json)
+assert_eq "#255: note delete is audited" "1" "$(jq_val "$OUT" "sum(1 for e in d if e['field'] == 'note_deleted')")"
+rm -rf "$QC_DIR"
 
 # ─────────────────────────────────────────────
 # Known bugs — these tests document expected behavior once fixed

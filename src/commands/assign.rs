@@ -6,28 +6,33 @@ use crate::urgency::UrgencyConfig;
 use rusqlite::Connection;
 
 pub fn run_assign(conn: &Connection, id: i64, agent: &str, fmt: Format) -> Result<(), ItrError> {
-    let old_issue = db::get_issue(conn, id)?;
+    // Read + event + field + note land atomically under the write lock.
+    let tx = db::write_tx(conn)?;
+    let old_issue = db::get_issue(&tx, id)?;
 
-    db::record_event(conn, id, "assigned_to", &old_issue.assigned_to, agent)?;
-    db::update_issue_field(conn, id, "assigned_to", agent)?;
-    db::add_note(conn, id, &format!("Assigned to {}", agent), "itr")?;
+    db::record_event(&tx, id, "assigned_to", &old_issue.assigned_to, agent)?;
+    db::update_issue_field(&tx, id, "assigned_to", agent)?;
+    db::add_note(&tx, id, &format!("Assigned to {}", agent), "itr")?;
+    tx.commit()?;
 
     print_detail(conn, id, fmt)
 }
 
 pub fn run_unassign(conn: &Connection, id: i64, fmt: Format) -> Result<(), ItrError> {
-    let issue = db::get_issue(conn, id)?;
+    let tx = db::write_tx(conn)?;
+    let issue = db::get_issue(&tx, id)?;
 
-    db::record_event(conn, id, "assigned_to", &issue.assigned_to, "")?;
+    db::record_event(&tx, id, "assigned_to", &issue.assigned_to, "")?;
     if !issue.assigned_to.is_empty() {
         db::add_note(
-            conn,
+            &tx,
             id,
             &format!("Unassigned from {}", issue.assigned_to),
             "itr",
         )?;
     }
-    db::update_issue_field(conn, id, "assigned_to", "")?;
+    db::update_issue_field(&tx, id, "assigned_to", "")?;
+    tx.commit()?;
 
     print_detail(conn, id, fmt)
 }
