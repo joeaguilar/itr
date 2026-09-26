@@ -987,6 +987,77 @@ SKILLS=$(jq_val "$OUT" "d['skills']")
 assert_eq "export/import round-trip preserves skills" "['alpha', 'gamma']" "$SKILLS"
 rm -rf "$IMPORT_DIR"
 
+# ─────────────────────────────────────────────
+echo "--- export/import: forward references, events, relations (#263) ---"
+# ─────────────────────────────────────────────
+# Real exports reference higher IDs (a child filed before its epic, a blocker
+# filed after the issue it blocks). Import must restore them into a fresh DB
+# and round-trip audit events and relations.
+FWD_DIR=$(mktemp -d)
+FWD_DB="$FWD_DIR/.itr.db"
+ITR_DB_PATH="$FWD_DB" $ITR init >/dev/null
+ITR_DB_PATH="$FWD_DB" $ITR add "fwd child" >/dev/null            # id 1
+ITR_DB_PATH="$FWD_DB" $ITR add "fwd epic" -k epic >/dev/null     # id 2
+ITR_DB_PATH="$FWD_DB" $ITR add "fwd blocker" >/dev/null          # id 3
+ITR_DB_PATH="$FWD_DB" $ITR update 1 --parent 2 >/dev/null
+ITR_DB_PATH="$FWD_DB" $ITR depend 1 --on 3 >/dev/null
+ITR_DB_PATH="$FWD_DB" $ITR relate 1 --to 3 --type related >/dev/null
+ITR_DB_PATH="$FWD_DB" $ITR update 1 -p high >/dev/null           # records an event
+FWD_EXPORT="$FWD_DIR/export.jsonl"
+ITR_DB_PATH="$FWD_DB" $ITR export > "$FWD_EXPORT"
+SRC_EVENTS=$(jq_val "$(ITR_DB_PATH="$FWD_DB" $ITR log 1 -f json)" "len(d)")
+
+FWD_IMPORT_DIR=$(mktemp -d)
+FWD_IMPORT_DB="$FWD_IMPORT_DIR/.itr.db"
+ITR_DB_PATH="$FWD_IMPORT_DB" $ITR init >/dev/null
+OUT=$(ITR_DB_PATH="$FWD_IMPORT_DB" $ITR import --file "$FWD_EXPORT" -f json 2>"$FWD_IMPORT_DIR/stderr")
+assert_eq "import with forward refs succeeds" "3" "$(jq_val "$OUT" "d['imported']")"
+assert_eq "import restores relations" "1" "$(jq_val "$OUT" "d['relations']")"
+assert_eq "import restores events" "$SRC_EVENTS" "$(jq_val "$OUT" "d['events']")"
+assert_eq "import drops no references" "0" "$(jq_val "$OUT" "d['dropped_references']")"
+if grep -q "REVIEW" "$FWD_IMPORT_DIR/stderr"; then
+    fail "import of clean export emits no REVIEW" "$(cat "$FWD_IMPORT_DIR/stderr")"
+else
+    pass "import of clean export emits no REVIEW"
+fi
+OUT=$(ITR_DB_PATH="$FWD_IMPORT_DB" $ITR get 1 -f json)
+assert_eq "forward parent_id restored" "2" "$(jq_val "$OUT" "d['parent_id']")"
+assert_eq "forward blocker restored" "[3]" "$(jq_val "$OUT" "d['blocked_by']")"
+assert_eq "relation restored on target side" "1" "$(jq_val "$(ITR_DB_PATH="$FWD_IMPORT_DB" $ITR get 3 -f json)" "len(d['relations'])")"
+assert_eq "events restored" "$SRC_EVENTS" "$(jq_val "$(ITR_DB_PATH="$FWD_IMPORT_DB" $ITR log 1 -f json)" "len(d)")"
+SRC_UPDATED=$(jq_val "$(ITR_DB_PATH="$FWD_DB" $ITR get 1 -f json)" "d['updated_at']")
+assert_eq "updated_at preserved verbatim" "$SRC_UPDATED" "$(jq_val "$OUT" "d['updated_at']")"
+# Full re-export must match the source line for line, ignoring child-row IDs.
+python3 - "$FWD_EXPORT" <(ITR_DB_PATH="$FWD_IMPORT_DB" $ITR export) <<'PY' && pass "re-export matches source export" || fail "re-export matches source export" "diff"
+import json, sys
+def load(p):
+    out = []
+    for line in open(p):
+        if not line.strip():
+            continue
+        d = json.loads(line)
+        for key in ("notes", "events", "relations"):
+            d[key] = sorted(json.dumps({k: v for k, v in r.items() if k != "id"}, sort_keys=True) for r in d[key])
+        d["blocked_by"] = sorted(d["blocked_by"])
+        out.append(json.dumps(d, sort_keys=True))
+    return out
+a, b = load(sys.argv[1]), load(sys.argv[2])
+sys.exit(0 if a == b else 1)
+PY
+# Dangling references: soft fallback, counted, never a hard error.
+DANGLE_DIR=$(mktemp -d)
+ITR_DB_PATH="$DANGLE_DIR/.itr.db" $ITR init >/dev/null
+python3 -c "
+import json, sys
+items = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+keep = [i for i in items if i['issue']['id'] == 1]
+print(json.dumps(keep[0]))" "$FWD_EXPORT" > "$DANGLE_DIR/one.jsonl"
+OUT=$(ITR_DB_PATH="$DANGLE_DIR/.itr.db" $ITR import --file "$DANGLE_DIR/one.jsonl" -f json 2>"$DANGLE_DIR/stderr")
+assert_eq "dangling refs still import the issue" "1" "$(jq_val "$OUT" "d['imported']")"
+assert_eq "dangling refs are counted" "3" "$(jq_val "$OUT" "d['dropped_references']")"
+assert_contains "dangling refs emit REVIEW" "REVIEW: import dropped" "$(cat "$DANGLE_DIR/stderr")"
+rm -rf "$FWD_DIR" "$FWD_IMPORT_DIR" "$DANGLE_DIR"
+
 # Claim --skill
 OUT=$(ITR_DB_PATH="$SKILLS_DIR/.itr.db" $ITR claim --skill database -f json)
 ID=$(jq_val "$OUT" "d['id']")
@@ -2241,8 +2312,8 @@ for line in open(sys.argv[1]):
     d=json.loads(line)
     n+=len(d.get('relations',[]))
 print(n)" "$EXPORT_WARN_FILE")
-[ "$HAS_EVENTS" -ge 1 ] && pass "export bundle contains events to drop" || \
-    fail "export bundle contains events to drop" "events=$HAS_EVENTS"
+[ "$HAS_EVENTS" -ge 1 ] && pass "export bundle contains events to restore" || \
+    fail "export bundle contains events to restore" "events=$HAS_EVENTS"
 
 # Import into a fresh DB and capture stderr.
 IMPORT_WARN_DST=$(mktemp -d)
@@ -2252,22 +2323,25 @@ WARN_STDOUT=$(ITR_DB_PATH="$IMPORT_WARN_DST/.itr.db" $ITR import --file "$EXPORT
 WARN_RC=$?
 WARN_STDERR=$(cat "$WARN_STDERR_FILE")
 
-# Exit code should still be 0 (soft fallback).
-assert_eq "import with dropped events/relations exits 0" "0" "$WARN_RC"
+assert_eq "import with events/relations exits 0" "0" "$WARN_RC"
 
-# stdout JSON should still report imported count.
 WARN_IMPORTED=$(jq_val "$WARN_STDOUT" "d['imported']")
-[ "$WARN_IMPORTED" -ge 1 ] && pass "import still wrote issues despite drops" || \
-    fail "import still wrote issues despite drops" "imported=$WARN_IMPORTED"
+[ "$WARN_IMPORTED" -ge 1 ] && pass "import wrote issues" || \
+    fail "import wrote issues" "imported=$WARN_IMPORTED"
 
-# stderr should carry the REVIEW: warning and name the dropped table.
-assert_contains "import emits REVIEW: warning on stderr" "REVIEW:" "$WARN_STDERR"
-assert_contains "import REVIEW warning names events table" "events" "$WARN_STDERR"
-
-# Only mention relations if any were actually generated (relate command may
-# vary between builds); skip the relations assertion if there were none.
+# #263: events and relations are restored (counts match the bundle), and a
+# clean bundle produces no REVIEW: warning at all.
+assert_eq "import restores every event in the bundle" "$HAS_EVENTS" "$(jq_val "$WARN_STDOUT" "d['events']")"
 if [ "$HAS_RELATIONS" -ge 1 ]; then
-    assert_contains "import REVIEW warning names relations table" "relations" "$WARN_STDERR"
+    # Bundles list each relation under both endpoints; the DB holds one row.
+    WARN_RELATIONS=$(jq_val "$WARN_STDOUT" "d['relations']")
+    [ "$WARN_RELATIONS" -ge 1 ] && pass "import restores relations from the bundle" || \
+        fail "import restores relations from the bundle" "relations=$WARN_RELATIONS"
+fi
+if [ -z "$WARN_STDERR" ]; then
+    pass "import of a clean bundle emits no REVIEW warning"
+else
+    fail "import of a clean bundle emits no REVIEW warning" "$WARN_STDERR"
 fi
 
 # stdout must NOT contain the warning — output contract: stderr-only.

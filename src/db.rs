@@ -90,6 +90,32 @@ BEGIN
 END;
 ";
 
+/// The `updated_at` touch trigger exactly as `SCHEMA` declares it (a unit
+/// test keeps the two in sync). Restore paths that must write `updated_at`
+/// verbatim drop it via `suspend_updated_at_trigger` and put it back with
+/// `restore_updated_at_trigger` inside the same transaction.
+pub const UPDATED_AT_TRIGGER: &str = "CREATE TRIGGER IF NOT EXISTS trg_issues_updated_at
+    AFTER UPDATE ON issues
+    FOR EACH ROW
+BEGIN
+    UPDATE issues SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+    WHERE id = OLD.id;
+END;";
+
+/// Drop `trg_issues_updated_at` so the caller can set `updated_at` to an
+/// exact value (for example when restoring an export). Always pair with
+/// [`restore_updated_at_trigger`] before the enclosing transaction commits.
+pub fn suspend_updated_at_trigger(conn: &Connection) -> Result<(), ItrError> {
+    conn.execute_batch("DROP TRIGGER IF EXISTS trg_issues_updated_at")?;
+    Ok(())
+}
+
+/// Recreate `trg_issues_updated_at` after [`suspend_updated_at_trigger`].
+pub fn restore_updated_at_trigger(conn: &Connection) -> Result<(), ItrError> {
+    conn.execute_batch(UPDATED_AT_TRIGGER)?;
+    Ok(())
+}
+
 pub fn find_db(override_path: Option<&str>) -> Result<PathBuf, ItrError> {
     // Explicit overrides (ITR_DB_PATH, then --db) are validated before use.
     let env_path = env::var("ITR_DB_PATH").ok();
@@ -1552,6 +1578,37 @@ mod tests {
     }
 
     // --- #152: FTS staleness on field updates ---
+
+    #[test]
+    fn updated_at_trigger_const_matches_schema() {
+        assert!(
+            SCHEMA.contains(UPDATED_AT_TRIGGER),
+            "UPDATED_AT_TRIGGER drifted from the trigger declared in SCHEMA"
+        );
+    }
+
+    #[test]
+    fn suspend_and_restore_updated_at_trigger_round_trip() {
+        let conn = test_conn();
+        let issue = add(&conn, "trigger toggle");
+        suspend_updated_at_trigger(&conn).unwrap();
+        conn.execute(
+            "UPDATE issues SET updated_at = '2020-01-02T00:00:00Z' WHERE id = ?1",
+            [issue.id],
+        )
+        .unwrap();
+        assert_eq!(
+            get_issue(&conn, issue.id).unwrap().updated_at,
+            "2020-01-02T00:00:00Z"
+        );
+        restore_updated_at_trigger(&conn).unwrap();
+        update_issue_field(&conn, issue.id, "title", "touched").unwrap();
+        assert_ne!(
+            get_issue(&conn, issue.id).unwrap().updated_at,
+            "2020-01-02T00:00:00Z",
+            "trigger must re-stamp updated_at once restored"
+        );
+    }
 
     #[test]
     fn fts_update_title_removes_stale_tokens() {

@@ -129,8 +129,19 @@ cat itr-backup.jsonl | itr import
 itr import --file itr-backup.json --merge
 ```
 
-Import preserves issue IDs and uses `INSERT OR REPLACE` for issue and note rows.
-Dependencies are inserted with `INSERT OR IGNORE`.
+Import preserves issue IDs and runs in two passes inside one transaction:
+issue rows land first (foreign-key checks are deferred to commit, so a parent
+or blocker may appear later in the file than the issue that references it),
+then notes, blocker edges, audit events, and relations are attached. Notes,
+events, and relations receive fresh row IDs; nothing in the export format
+references them by ID. Exported `created_at` / `updated_at` values are written
+verbatim.
+
+Without `--merge`, an imported issue whose ID already exists is updated in
+place and its notes, audit events, incoming blockers, and relations are
+replaced by the payload's. Child issues keep their `parent_id`, and edges
+where the existing issue is the blocker survive. The count of replaced issues
+is reported in a `REVIEW:` note.
 
 `--merge` skips imported issues whose IDs already exist:
 
@@ -144,34 +155,36 @@ replaced.
 
 ## Round-Trip Expectations
 
-Current import/export preserves:
+Import/export preserves:
 
 - issues
 - notes
 - dependency blockers
+- audit events (`itr log`)
+- relations (`itr relate`)
 - tags, files, skills, and assignees
 - parent IDs and close reasons
 - created and updated timestamps
 
-The export data shape also includes events and relations. The current importer
-does not restore those fields; use a direct `.itr.db` file copy when you need a
-full-fidelity backup that includes audit history and relation rows. If import
-support for events or relations changes, add round-trip tests and update this
-section.
+Note, event, and relation rows come back under new row IDs; every other value
+round-trips exactly. `itr export` followed by `itr import` into a fresh
+database yields a database whose export is identical to the original apart
+from those row IDs.
 
-When an import bundle contains `events` or `relations` records, import drops
-those rows but still writes the issue, notes, and dependency data. A single
-`REVIEW:` warning is emitted on stderr naming the dropped tables and the total
-number of dropped rows, for example:
+### Dangling References
+
+A reference to an issue that exists in neither the payload nor the target
+database (a `parent_id`, a `blocked_by` entry, or a relation endpoint) cannot
+be restored. Import keeps the issue, drops only the reference, and reports the
+count on stderr:
 
 ```
-REVIEW: import dropped data from unsupported tables: events (12 row(s)), relations (3 row(s)). Round-trip restore of audit history and relation rows is not implemented; use a direct .itr.db file copy for full-fidelity backups. See docs/backup-import-export.md.
+REVIEW: import dropped 1 parent link(s), 2 blocker edge(s) because the referenced issue exists in neither the import payload nor the database (or references itself). The issues themselves were imported.
 ```
 
-The warning goes to stderr only — it does not change the exit code, the stdout
-import summary, or the `imported` / `skipped` counts. If you need a backup that
-preserves audit events and relations, use a direct `.itr.db` file copy as
-described above.
+The JSON summary carries the same number as `dropped_references`. A complete
+export never triggers this; it appears when importing a hand-edited or
+filtered subset.
 
 ## Backup Before Bulk Changes
 

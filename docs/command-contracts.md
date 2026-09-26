@@ -437,7 +437,7 @@ Commands: `note`, `note-delete`, `note-update`.
 - `config get -f json`: `{ "key": ..., "value": ... }`.
 - `config set -f json`: `{ "action": "set", "key": ..., "value": ... }`.
 - `config reset -f json`: `{ "action": "reset" }`.
-- `import -f json`: `{ "action": "import", "imported": n, "skipped": n }`.
+- `import -f json`: `{ "action": "import", "imported": n, "skipped": n, "replaced": n, "notes": n, "dependencies": n, "events": n, "relations": n, "dropped_references": n }`.
 - `doctor -f json`: `{ "problems": [...], "fixed": [...], "clean": bool }`.
   `problems` lists what was detected at the start of the run; `clean` reflects
   the post-fix state (true when nothing remains, matching exit 0).
@@ -610,7 +610,7 @@ reporting.
 | `stats` | Reads all issues and current urgency config. | Stats output. |
 | `summary` | Reads project counts, ready work, in-progress work, and recent events. | Summary output. |
 | `export` | Reads all issues, notes, dependencies, events, and relations. | JSONL by default or JSON array with `--export-format json`. |
-| `import` | Reads JSON array or JSONL from `--file` or stdin; `--merge` skips existing IDs. | Import object or `IMPORT: <imported> imported, <skipped> skipped`. |
+| `import` | Reads JSON array or JSONL from `--file` or stdin; `--merge` skips existing IDs. | Import object or `IMPORT: <imported> imported, <skipped> skipped, <replaced> replaced (notes n, dependencies n, events n, relations n)`. |
 | `doctor` | Checks orphaned deps, cycles, stale in-progress issues, empty epics, done blockers, and FTS health; `--fix` fixes safe issues. | Doctor report; exits 0 when clean or when `--fix` repaired every detected problem, 1 if problems remain after the run (stderr code `DOCTOR_PROBLEMS_REMAIN`). |
 | `ui` | Binds a local HTTP UI to `127.0.0.1`; `--port 0` auto-selects; `--no-open` suppresses browser launch; `--allow-dangerous` enables the raw SQL UI/API. | UI URL and DB path, then serves until stopped. |
 | `config list` | Reads effective config defaults plus overrides. | JSON object of key/value strings or `key=value` lines with `*` for custom values. |
