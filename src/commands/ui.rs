@@ -1,4 +1,4 @@
-use super::{build_issue_detail, build_issue_summary, sort_by_urgency_desc};
+use super::{add, build_issue_detail, build_issue_summary, sort_by_urgency_desc};
 use crate::db;
 use crate::error::ItrError;
 use crate::format::Format;
@@ -47,31 +47,6 @@ struct HttpResponse {
     status: u16,
     content_type: &'static str,
     body: Vec<u8>,
-}
-
-#[derive(Debug, Deserialize)]
-struct IssueCreateInput {
-    title: String,
-    #[serde(default)]
-    priority: Option<String>,
-    #[serde(default)]
-    kind: Option<String>,
-    #[serde(default)]
-    context: String,
-    #[serde(default)]
-    files: Vec<String>,
-    #[serde(default)]
-    tags: Vec<String>,
-    #[serde(default)]
-    skills: Vec<String>,
-    #[serde(default)]
-    acceptance: String,
-    #[serde(default)]
-    parent_id: Option<i64>,
-    #[serde(default)]
-    assigned_to: String,
-    #[serde(default)]
-    blocked_by: Vec<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -534,9 +509,8 @@ fn route_request(
         }
         ("POST", "/api/issues") => {
             require_token(request, token)?;
-            let input: IssueCreateInput = parse_body(request)?;
-            let detail = create_issue(conn, input)?;
-            json_response(json!({ "issue": detail }))
+            let (detail, review_notes) = create_issue(conn, &request.body)?;
+            json_response(json!({ "issue": detail, "review_notes": review_notes }))
         }
         ("POST", "/api/bulk/resolve/preview") => {
             require_token(request, token)?;
@@ -551,20 +525,7 @@ fn route_request(
         ("POST", "/api/bulk/resolve/apply") => {
             require_token(request, token)?;
             let input: BulkResolveInput = parse_body(request)?;
-            let mut resolved = Vec::new();
-            let mut unblocked = Vec::new();
-            for id in input.ids {
-                let result = resolve_issue(conn, id, &input.reason, input.wontfix)?;
-                if let Some(items) = result.get("unblocked").and_then(Value::as_array) {
-                    unblocked.extend(items.iter().cloned());
-                }
-                resolved.push(result["issue"].clone());
-            }
-            json_response(json!({
-                "count": resolved.len(),
-                "issues": resolved,
-                "unblocked": unblocked,
-            }))
+            json_response(bulk_resolve(conn, &input)?)
         }
         _ => route_dynamic(request, conn, token),
     }
@@ -591,8 +552,12 @@ fn route_dynamic(
         ("PATCH", ["api", "issues", id]) => {
             let id = parse_id(id, "id")?;
             let patch: Value = parse_body(request)?;
-            let detail = patch_issue(conn, id, &patch)?;
-            json_response(json!({ "issue": detail }))
+            let outcome = patch_issue(conn, id, &patch)?;
+            json_response(json!({
+                "issue": outcome.detail,
+                "unblocked": unblocked_json(outcome.unblocked),
+                "review_notes": outcome.review_notes,
+            }))
         }
         ("POST", ["api", "issues", id, "close"]) => {
             let id = parse_id(id, "id")?;
@@ -602,71 +567,49 @@ fn route_dynamic(
         ("POST", ["api", "issues", id, "notes"]) => {
             let id = parse_id(id, "id")?;
             let input: NoteInput = parse_body(request)?;
-            let note = db::add_note(conn, id, &input.content, &input.agent)?;
-            json_response(json!({ "note": note, "issue": issue_detail(conn, id)? }))
+            json_response(add_ui_note(conn, id, &input)?)
         }
         ("PATCH", ["api", "notes", id]) => {
             let id = parse_id(id, "id")?;
             let input: NoteInput = parse_body(request)?;
-            let old_note = db::get_note(conn, id)?;
-            db::record_event(
-                conn,
-                old_note.issue_id,
-                "note_updated",
-                &old_note.content,
-                &input.content,
-            )?;
-            let note = db::update_note(conn, id, &input.content)?;
-            json_response(json!({
-                "note": note,
-                "issue": issue_detail(conn, old_note.issue_id)?,
-            }))
+            json_response(update_ui_note(conn, id, &input)?)
         }
         ("DELETE", ["api", "notes", id]) => {
             let id = parse_id(id, "id")?;
-            let note = db::delete_note(conn, id)?;
-            db::record_event(conn, note.issue_id, "note_deleted", &note.content, "")?;
-            json_response(json!({
-                "note": note,
-                "issue": issue_detail(conn, note.issue_id)?,
-            }))
+            json_response(delete_ui_note(conn, id)?)
         }
         ("POST", ["api", "issues", id, "dependencies"]) => {
             let id = parse_id(id, "id")?;
             let input: DependencyInput = parse_body(request)?;
-            let created = db::add_dependency(conn, input.blocker_id, id)?;
-            json_response(json!({
-                "created": created,
-                "issue": issue_detail(conn, id)?,
-            }))
+            json_response(in_write_tx(conn, |tx| {
+                let created = db::add_dependency(tx, input.blocker_id, id)?;
+                Ok(json!({ "created": created, "issue": issue_detail(tx, id)? }))
+            })?)
         }
         ("DELETE", ["api", "issues", id, "dependencies", blocker_id]) => {
             let id = parse_id(id, "id")?;
             let blocker_id = parse_id(blocker_id, "blocker_id")?;
-            let removed = db::remove_dependency(conn, blocker_id, id)?;
-            json_response(json!({
-                "removed": removed,
-                "issue": issue_detail(conn, id)?,
-            }))
+            json_response(in_write_tx(conn, |tx| {
+                let removed = db::remove_dependency(tx, blocker_id, id)?;
+                Ok(json!({ "removed": removed, "issue": issue_detail(tx, id)? }))
+            })?)
         }
         ("POST", ["api", "issues", id, "relations"]) => {
             let id = parse_id(id, "id")?;
             let input: RelationInput = parse_body(request)?;
             validate_relation_type(&input.relation_type)?;
-            let created = db::add_relation(conn, id, input.target_id, &input.relation_type)?;
-            json_response(json!({
-                "created": created,
-                "issue": issue_detail(conn, id)?,
-            }))
+            json_response(in_write_tx(conn, |tx| {
+                let created = db::add_relation(tx, id, input.target_id, &input.relation_type)?;
+                Ok(json!({ "created": created, "issue": issue_detail(tx, id)? }))
+            })?)
         }
         ("DELETE", ["api", "issues", id, "relations", target_id]) => {
             let id = parse_id(id, "id")?;
             let target_id = parse_id(target_id, "target_id")?;
-            let removed = db::remove_relation(conn, id, target_id, None)?;
-            json_response(json!({
-                "removed": !removed.is_empty(),
-                "issue": issue_detail(conn, id)?,
-            }))
+            json_response(in_write_tx(conn, |tx| {
+                let removed = db::remove_relation(tx, id, target_id, None)?;
+                Ok(json!({ "removed": !removed.is_empty(), "issue": issue_detail(tx, id)? }))
+            })?)
         }
         _ => Ok(error_response(404, "Route not found", "NOT_FOUND")),
     }
@@ -786,14 +729,20 @@ fn run_sql(conn: &Connection, sql: &str) -> Result<Value, ItrError> {
         });
     }
 
-    let before_changes = total_changes(conn)?;
     let mut statement = conn.prepare(sql)?;
     let column_count = statement.column_count();
 
     if column_count == 0 {
         drop(statement);
-        conn.execute_batch(sql)?;
-        let changes = total_changes(conn)?.saturating_sub(before_changes);
+        let mut changes = 0_i64;
+        let mut batch = rusqlite::Batch::new(conn, sql);
+        while let Some(mut stmt) = batch.next()? {
+            let before = total_changes(conn)?;
+            let mut rows = stmt.raw_query();
+            while rows.next()?.is_some() {}
+            drop(rows);
+            changes += statement_changes(conn, before)?;
+        }
         return Ok(json!({
             "columns": [],
             "rows": [],
@@ -808,6 +757,7 @@ fn run_sql(conn: &Connection, sql: &str) -> Result<Value, ItrError> {
         .iter()
         .map(|name| (*name).to_string())
         .collect();
+    let before_changes = total_changes(conn)?;
     let mut rows = statement.query([])?;
     let mut result_rows = Vec::new();
     let mut row_count = 0_i64;
@@ -826,7 +776,9 @@ fn run_sql(conn: &Connection, sql: &str) -> Result<Value, ItrError> {
         row_count += 1;
     }
 
-    let changes = total_changes(conn)?.saturating_sub(before_changes);
+    drop(rows);
+    drop(statement);
+    let changes = statement_changes(conn, before_changes)?;
     Ok(json!({
         "columns": columns,
         "rows": result_rows,
@@ -838,6 +790,18 @@ fn run_sql(conn: &Connection, sql: &str) -> Result<Value, ItrError> {
 
 fn total_changes(conn: &Connection) -> Result<i64, ItrError> {
     Ok(conn.query_row("SELECT total_changes()", [], |row| row.get(0))?)
+}
+
+/// Rows changed by the statement that just finished (SQ-11). The
+/// `total_changes()` delta alone over-counts: it includes rows touched by
+/// trigger programs (the `updated_at` touch, FTS sync). `sqlite3_changes`
+/// counts only the top-level statement, but is stale after a statement that
+/// changed nothing (DDL, a no-match UPDATE), so the delta gates it.
+fn statement_changes(conn: &Connection, total_before: i64) -> Result<i64, ItrError> {
+    if total_changes(conn)? == total_before {
+        return Ok(0);
+    }
+    Ok(i64::try_from(conn.changes()).unwrap_or(i64::MAX))
 }
 
 fn sql_value_to_json(value: ValueRef<'_>) -> Value {
@@ -882,8 +846,25 @@ fn issue_detail(conn: &Connection, id: i64) -> Result<IssueDetail, ItrError> {
     Ok(detail)
 }
 
-fn create_issue(conn: &Connection, input: IssueCreateInput) -> Result<IssueDetail, ItrError> {
-    let title = input.title.trim();
+/// `POST /api/issues`: create through the exact CLI path `add --stdin-json`
+/// uses (#237/#255/#258/#270). The body is parsed by the shared
+/// `parse_add_item` (unknown-key REVIEW notes, `parent` alias, string or
+/// integer `blocked_by`) and inserted by `add::execute`, so the whole create
+/// is one transaction: a missing blocker rolls back the issue instead of
+/// orphaning it, and a missing parent is a soft fallback, not an FK error.
+///
+/// UI-only normalization kept on top: the title is trimmed and an empty one
+/// is a 400, and list fields are trimmed/deduped (skills lowercased).
+/// Returns the full detail plus the REVIEW notes the create produced.
+fn create_issue(conn: &Connection, body: &[u8]) -> Result<(IssueDetail, Vec<String>), ItrError> {
+    let text = std::str::from_utf8(body).map_err(|_| ItrError::InvalidValue {
+        field: "body".to_string(),
+        value: "<non-UTF-8 bytes>".to_string(),
+        valid: "UTF-8 JSON object".to_string(),
+    })?;
+    let mut req = add::parse_stdin_json(text)?;
+
+    let title = req.title.trim();
     if title.is_empty() {
         return Err(ItrError::InvalidValue {
             field: "title".to_string(),
@@ -891,141 +872,277 @@ fn create_issue(conn: &Connection, input: IssueCreateInput) -> Result<IssueDetai
             valid: "non-empty string".to_string(),
         });
     }
+    req.title = title.to_string();
+    req.tags = clean_list(std::mem::take(&mut req.tags), false);
+    req.files = clean_list(std::mem::take(&mut req.files), false);
+    req.skills = clean_list(std::mem::take(&mut req.skills), true);
 
-    let priority = normalize::normalize_priority(input.priority.as_deref().unwrap_or("medium"));
-    let kind = normalize::normalize_kind(input.kind.as_deref().unwrap_or("task"));
-    let mut tags = clean_list(input.tags, false);
-    let skills = clean_list(input.skills, true);
-    let files = clean_list(input.files, false);
-    let mut review_notes = Vec::new();
-
-    let priority = match validate_priority(&priority) {
-        Ok(()) => priority,
-        Err(_) => {
-            review_notes.push(format!(
-                "REVIEW: priority '{}' not recognized, defaulted to 'medium'. Valid: critical, high, medium, low",
-                priority
-            ));
-            "medium".to_string()
-        }
-    };
-    let kind = match validate_kind(&kind) {
-        Ok(()) => kind,
-        Err(_) => {
-            review_notes.push(format!(
-                "REVIEW: kind '{}' not recognized, defaulted to 'task'. Valid: bug, feature, task, epic",
-                kind
-            ));
-            "task".to_string()
-        }
-    };
-
-    if !review_notes.is_empty() && !tags.contains(&"_needs_review".to_string()) {
-        tags.push("_needs_review".to_string());
-    }
-
-    let issue = db::insert_issue(
-        conn,
-        title,
-        &priority,
-        &kind,
-        &input.context,
-        &files,
-        &tags,
-        &skills,
-        &input.acceptance,
-        input.parent_id,
-        &input.assigned_to,
-    )?;
-
-    for note in review_notes {
-        db::add_note(conn, issue.id, &note, "itr")?;
-    }
-    for blocker_id in input.blocked_by {
-        db::add_dependency(conn, blocker_id, issue.id)?;
-    }
-
-    issue_detail(conn, issue.id)
+    let created = add::execute(conn, req)?;
+    let detail = issue_detail(conn, created.issue.id)?;
+    // A brand-new issue's notes are exactly the REVIEW notes `execute`
+    // attached while creating it.
+    let review_notes = detail
+        .notes
+        .iter()
+        .map(|note| note.content.clone())
+        .collect();
+    Ok((detail, review_notes))
 }
 
-fn patch_issue(conn: &Connection, id: i64, patch: &Value) -> Result<IssueDetail, ItrError> {
-    // Single transaction: a failure on any field rolls back the whole patch.
-    let tx = conn.unchecked_transaction()?;
+/// Text fields a PATCH may set; each must be a JSON string when present.
+const PATCH_TEXT_FIELDS: &[&str] = &[
+    "title",
+    "context",
+    "acceptance",
+    "assigned_to",
+    "close_reason",
+];
+/// Enum fields a PATCH may set; each must be a JSON string when present.
+const PATCH_ENUM_FIELDS: &[&str] = &["status", "priority", "kind"];
+/// List fields a PATCH may replace; each must be an array of strings.
+const PATCH_LIST_FIELDS: &[&str] = &["files", "tags", "skills"];
+/// Every key `PATCH /api/issues/{id}` understands (`parent` aliases
+/// `parent_id`, #150). Anything else gets a REVIEW note (#212 parity).
+const PATCH_KNOWN_KEYS: &[&str] = &[
+    "title",
+    "context",
+    "acceptance",
+    "assigned_to",
+    "close_reason",
+    "status",
+    "priority",
+    "kind",
+    "files",
+    "tags",
+    "skills",
+    "parent_id",
+    "parent",
+];
+
+/// Result of a UI issue PATCH.
+#[derive(Debug)]
+struct PatchOutcome {
+    detail: IssueDetail,
+    /// Issues unblocked because the patch moved this issue to done/wontfix.
+    unblocked: Vec<(i64, String)>,
+    /// REVIEW notes produced by the patch (also persisted on the issue).
+    review_notes: Vec<String>,
+}
+
+/// A requested parent change: `ParentChange(None)` clears the parent.
+#[derive(Debug, Clone, Copy)]
+struct ParentChange(Option<i64>);
+
+/// A validated PATCH body: every present field has the right JSON type.
+struct ValidatedPatch<'a> {
+    map: &'a serde_json::Map<String, Value>,
+    /// `None` leaves the parent alone; otherwise the new parent (or clear).
+    parent: Option<ParentChange>,
+    review_notes: Vec<String>,
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// Parse a PATCH `parent_id`: an integer id, a numeric string, or `null`
+/// (clear). Anything else is rejected rather than silently clearing (AW-5).
+fn parse_patch_parent(value: &Value) -> Result<Option<i64>, String> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Number(n) => n
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| format!("{} (not an integer)", n)),
+        Value::String(text) => text
+            .trim()
+            .parse::<i64>()
+            .map(Some)
+            .map_err(|_| format!("{:?} (not an integer)", text)),
+        other => Err(json_type_name(other).to_string()),
+    }
+}
+
+/// Type-check a PATCH body before any write (AW-17). Wrong-typed values are a
+/// 400 naming every offending field instead of being ignored with a 200.
+fn validate_patch(patch: &Value) -> Result<ValidatedPatch<'_>, ItrError> {
+    let Some(map) = patch.as_object() else {
+        return Err(ItrError::InvalidValue {
+            field: "body".to_string(),
+            value: json_type_name(patch).to_string(),
+            valid: "JSON object of issue fields".to_string(),
+        });
+    };
+
+    let mut bad: Vec<(String, String)> = Vec::new();
+    for field in PATCH_TEXT_FIELDS.iter().chain(PATCH_ENUM_FIELDS) {
+        if let Some(value) = map.get(*field) {
+            if !value.is_string() {
+                bad.push(((*field).to_string(), json_type_name(value).to_string()));
+            }
+        }
+    }
+    if map
+        .get("title")
+        .and_then(Value::as_str)
+        .is_some_and(|title| title.trim().is_empty())
+    {
+        bad.push(("title".to_string(), "empty string".to_string()));
+    }
+    for field in PATCH_LIST_FIELDS {
+        if let Some(value) = map.get(*field) {
+            let ok = value
+                .as_array()
+                .is_some_and(|items| items.iter().all(Value::is_string));
+            if !ok {
+                bad.push(((*field).to_string(), json_type_name(value).to_string()));
+            }
+        }
+    }
+
+    let mut review_notes = crate::commands::batch::unknown_key_notes(patch, PATCH_KNOWN_KEYS);
+    let parent_key = if map.contains_key("parent_id") {
+        if map.contains_key("parent") {
+            review_notes.push(
+                "REVIEW: both 'parent_id' and 'parent' were sent; 'parent' was ignored".to_string(),
+            );
+        }
+        Some("parent_id")
+    } else if map.contains_key("parent") {
+        Some("parent")
+    } else {
+        None
+    };
+    let parent = match parent_key {
+        Some(key) => match parse_patch_parent(&map[key]) {
+            Ok(parent) => Some(ParentChange(parent)),
+            Err(got) => {
+                bad.push((key.to_string(), got));
+                None
+            }
+        },
+        None => None,
+    };
+
+    if !bad.is_empty() {
+        return Err(ItrError::InvalidValue {
+            field: bad
+                .iter()
+                .map(|(field, _)| field.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            value: bad
+                .iter()
+                .map(|(field, got)| format!("{field}={got}"))
+                .collect::<Vec<_>>()
+                .join(", "),
+            valid: "non-empty string for title; strings for context, acceptance, assigned_to, close_reason, status, priority, kind; arrays of strings for files, tags, skills; integer issue id or null for parent_id".to_string(),
+        });
+    }
+
+    Ok(ValidatedPatch {
+        map,
+        parent,
+        review_notes,
+    })
+}
+
+/// `PATCH /api/issues/{id}`. One IMMEDIATE transaction: a failure on any
+/// field rolls back the whole patch. Enum handling mirrors the CLI update
+/// soft fallback: an unrecognized status/priority/kind keeps the current
+/// value with a REVIEW note (#228, never a silent reopen), and a transition
+/// to done/wontfix cleans blocker edges and reports unblocked issues exactly
+/// like `itr close` / `itr update --status done` (#274).
+fn patch_issue(conn: &Connection, id: i64, patch: &Value) -> Result<PatchOutcome, ItrError> {
+    let ValidatedPatch {
+        map,
+        parent,
+        mut review_notes,
+    } = validate_patch(patch)?;
+
+    let tx = db::write_tx(conn)?;
     let old_issue = db::get_issue(&tx, id)?;
 
-    patch_string_field(&tx, id, patch, "title", "title", &old_issue.title)?;
-    patch_string_field(&tx, id, patch, "context", "context", &old_issue.context)?;
-    patch_string_field(
-        &tx,
-        id,
-        patch,
-        "acceptance",
-        "acceptance",
-        &old_issue.acceptance,
-    )?;
-    patch_string_field(
-        &tx,
-        id,
-        patch,
-        "assigned_to",
-        "assigned_to",
-        &old_issue.assigned_to,
-    )?;
-    patch_string_field(
-        &tx,
-        id,
-        patch,
-        "close_reason",
-        "close_reason",
-        &old_issue.close_reason,
-    )?;
+    for field in PATCH_TEXT_FIELDS {
+        if let Some(value) = map.get(*field).and_then(Value::as_str) {
+            let old_value = match *field {
+                "title" => &old_issue.title,
+                "context" => &old_issue.context,
+                "acceptance" => &old_issue.acceptance,
+                "assigned_to" => &old_issue.assigned_to,
+                _ => &old_issue.close_reason,
+            };
+            // Titles are trimmed, matching UI create.
+            let value = if *field == "title" {
+                value.trim()
+            } else {
+                value
+            };
+            db::record_event(&tx, id, field, old_value, value)?;
+            db::update_issue_field(&tx, id, field, value)?;
+        }
+    }
 
-    if let Some(value) = patch.get("status").and_then(Value::as_str) {
+    let mut terminal_status_applied = false;
+    if let Some(value) = map.get("status").and_then(Value::as_str) {
         let status = normalize::normalize_status(value);
-        let status = match validate_status(&status) {
-            Ok(()) => status,
-            Err(_) => "open".to_string(),
-        };
-        db::record_event(&tx, id, "status", &old_issue.status, &status)?;
-        db::update_issue_field(&tx, id, "status", &status)?;
-    }
-    if let Some(value) = patch.get("priority").and_then(Value::as_str) {
-        let priority = normalize::normalize_priority(value);
-        let priority = match validate_priority(&priority) {
-            Ok(()) => priority,
-            Err(_) => "medium".to_string(),
-        };
-        db::record_event(&tx, id, "priority", &old_issue.priority, &priority)?;
-        db::update_issue_field(&tx, id, "priority", &priority)?;
-    }
-    if let Some(value) = patch.get("kind").and_then(Value::as_str) {
-        let kind = normalize::normalize_kind(value);
-        let kind = match validate_kind(&kind) {
-            Ok(()) => kind,
-            Err(_) => "task".to_string(),
-        };
-        db::record_event(&tx, id, "kind", &old_issue.kind, &kind)?;
-        db::update_issue_field(&tx, id, "kind", &kind)?;
-    }
-
-    patch_array_field(&tx, id, patch, "files", &old_issue.files, false)?;
-    patch_array_field(&tx, id, patch, "tags", &old_issue.tags, false)?;
-    patch_array_field(&tx, id, patch, "skills", &old_issue.skills, true)?;
-
-    if let Some(parent_value) = patch.get("parent_id") {
-        let parent_id = if parent_value.is_null() {
-            None
+        if validate_status(&status).is_ok() {
+            db::record_event(&tx, id, "status", &old_issue.status, &status)?;
+            db::update_issue_field(&tx, id, "status", &status)?;
+            terminal_status_applied = status == "done" || status == "wontfix";
         } else {
-            Some(
-                parent_value
-                    .as_i64()
-                    .ok_or_else(|| ItrError::InvalidValue {
-                        field: "parent_id".to_string(),
-                        value: parent_value.to_string(),
-                        valid: "integer issue id or null".to_string(),
-                    })?,
-            )
-        };
+            review_notes.push(format!(
+                "REVIEW: status '{}' not recognized, kept '{}'. Valid: open, in-progress, done, wontfix",
+                value, old_issue.status
+            ));
+        }
+    }
+    if let Some(value) = map.get("priority").and_then(Value::as_str) {
+        let priority = normalize::normalize_priority(value);
+        if validate_priority(&priority).is_ok() {
+            db::record_event(&tx, id, "priority", &old_issue.priority, &priority)?;
+            db::update_issue_field(&tx, id, "priority", &priority)?;
+        } else {
+            review_notes.push(format!(
+                "REVIEW: priority '{}' not recognized, kept '{}'. Valid: critical, high, medium, low",
+                value, old_issue.priority
+            ));
+        }
+    }
+    if let Some(value) = map.get("kind").and_then(Value::as_str) {
+        let kind = normalize::normalize_kind(value);
+        if validate_kind(&kind).is_ok() {
+            db::record_event(&tx, id, "kind", &old_issue.kind, &kind)?;
+            db::update_issue_field(&tx, id, "kind", &kind)?;
+        } else {
+            review_notes.push(format!(
+                "REVIEW: kind '{}' not recognized, kept '{}'. Valid: bug, feature, task, epic",
+                value, old_issue.kind
+            ));
+        }
+    }
+
+    for field in PATCH_LIST_FIELDS {
+        if let Some(value) = map.get(*field) {
+            let values: Vec<String> = serde_json::from_value(value.clone())?;
+            let old_values = match *field {
+                "files" => &old_issue.files,
+                "tags" => &old_issue.tags,
+                _ => &old_issue.skills,
+            };
+            let values = clean_list(values, *field == "skills");
+            persist_list(&tx, id, field, old_values, &values)?;
+        }
+    }
+
+    if let Some(ParentChange(parent_id)) = parent {
         db::record_event(
             &tx,
             id,
@@ -1039,44 +1156,129 @@ fn patch_issue(conn: &Connection, id: i64, patch: &Value) -> Result<IssueDetail,
         db::update_issue_parent(&tx, id, parent_id)?;
     }
 
+    // Same persistence as the CLI update path: `_needs_review` (with its own
+    // tags event) plus one `itr` note per REVIEW message.
+    if !review_notes.is_empty() {
+        let current_tags = db::get_issue(&tx, id)?.tags;
+        if !current_tags.iter().any(|tag| tag == "_needs_review") {
+            let mut new_tags = current_tags.clone();
+            new_tags.push("_needs_review".to_string());
+            persist_list(&tx, id, "tags", &current_tags, &new_tags)?;
+        }
+        for note in &review_notes {
+            db::add_note(&tx, id, note, "itr")?;
+        }
+    }
+
+    let unblocked = if terminal_status_applied {
+        let unblocked = db::get_newly_unblocked(&tx, id)?;
+        db::remove_blocker_edges(&tx, id)?;
+        unblocked
+    } else {
+        Vec::new()
+    };
+
     let detail = issue_detail(&tx, id)?;
     tx.commit()?;
-    Ok(detail)
+    Ok(PatchOutcome {
+        detail,
+        unblocked,
+        review_notes,
+    })
 }
 
-fn patch_string_field(
+/// Write a JSON-array list field with an audit event in the same JSON-array
+/// format the CLI records (#187).
+fn persist_list(
     conn: &Connection,
     id: i64,
-    patch: &Value,
-    json_name: &str,
-    db_name: &str,
-    old_value: &str,
+    field: &str,
+    old_values: &[String],
+    new_values: &[String],
 ) -> Result<(), ItrError> {
-    if let Some(value) = patch.get(json_name).and_then(Value::as_str) {
-        db::record_event(conn, id, db_name, old_value, value)?;
-        db::update_issue_field(conn, id, db_name, value)?;
+    let old_json = serde_json::to_string(old_values)?;
+    let new_json = serde_json::to_string(new_values)?;
+    db::record_event(conn, id, field, &old_json, &new_json)?;
+    db::update_issue_field(conn, id, field, &new_json)?;
+    Ok(())
+}
+
+/// Run `f` inside one `BEGIN IMMEDIATE` transaction (SQ-1/SQ-12): the write
+/// lock is taken up front, so read-then-write handlers never hit
+/// `SQLITE_BUSY_SNAPSHOT`, and any error rolls every statement back.
+fn in_write_tx<T>(
+    conn: &Connection,
+    f: impl FnOnce(&Connection) -> Result<T, ItrError>,
+) -> Result<T, ItrError> {
+    let tx = db::write_tx(conn)?;
+    let out = f(&tx)?;
+    tx.commit()?;
+    Ok(out)
+}
+
+fn unblocked_json(unblocked: Vec<(i64, String)>) -> Vec<Value> {
+    unblocked
+        .into_iter()
+        .map(|(uid, title)| json!({ "id": uid, "title": title }))
+        .collect()
+}
+
+/// Reject empty or whitespace-only note content (AW-8), matching the CLI's
+/// `non-empty string` contract for note text.
+fn require_note_content(content: &str) -> Result<(), ItrError> {
+    if content.trim().is_empty() {
+        return Err(ItrError::InvalidValue {
+            field: "content".to_string(),
+            value: content.to_string(),
+            valid: "non-empty string".to_string(),
+        });
     }
     Ok(())
 }
 
-fn patch_array_field(
-    conn: &Connection,
-    id: i64,
-    patch: &Value,
-    field: &str,
-    old_values: &[String],
-    lowercase: bool,
-) -> Result<(), ItrError> {
-    let Some(value) = patch.get(field) else {
-        return Ok(());
-    };
-    let values: Vec<String> = serde_json::from_value(value.clone())?;
-    let values = clean_list(values, lowercase);
-    let old_json = serde_json::to_string(old_values)?;
-    let new_json = serde_json::to_string(&values)?;
-    db::record_event(conn, id, field, &old_json, &new_json)?;
-    db::update_issue_field(conn, id, field, &new_json)?;
-    Ok(())
+/// `POST /api/issues/{id}/notes`: the note and its `note_added` event commit
+/// together (#255), and the author falls back to `ITR_AGENT` like `itr note`.
+fn add_ui_note(conn: &Connection, id: i64, input: &NoteInput) -> Result<Value, ItrError> {
+    require_note_content(&input.content)?;
+    let agent = crate::commands::note::resolve_agent(&input.agent);
+    in_write_tx(conn, |tx| {
+        let note = db::add_note(tx, id, &input.content, &agent)?;
+        Ok(json!({ "note": note, "issue": issue_detail(tx, id)? }))
+    })
+}
+
+/// `PATCH /api/notes/{id}`: content update and `note_updated` event in one
+/// transaction.
+fn update_ui_note(conn: &Connection, note_id: i64, input: &NoteInput) -> Result<Value, ItrError> {
+    require_note_content(&input.content)?;
+    in_write_tx(conn, |tx| {
+        let old_note = db::get_note(tx, note_id)?;
+        db::record_event(
+            tx,
+            old_note.issue_id,
+            "note_updated",
+            &old_note.content,
+            &input.content,
+        )?;
+        let note = db::update_note(tx, note_id, &input.content)?;
+        Ok(json!({
+            "note": note,
+            "issue": issue_detail(tx, old_note.issue_id)?,
+        }))
+    })
+}
+
+/// `DELETE /api/notes/{id}`: delete and `note_deleted` event in one
+/// transaction.
+fn delete_ui_note(conn: &Connection, note_id: i64) -> Result<Value, ItrError> {
+    in_write_tx(conn, |tx| {
+        let note = db::delete_note(tx, note_id)?;
+        db::record_event(tx, note.issue_id, "note_deleted", &note.content, "")?;
+        Ok(json!({
+            "note": note,
+            "issue": issue_detail(tx, note.issue_id)?,
+        }))
+    })
 }
 
 fn clean_list(values: Vec<String>, lowercase: bool) -> Vec<String> {
@@ -1102,26 +1304,78 @@ fn resolve_issue(
 ) -> Result<Value, ItrError> {
     // Single transaction (mirrors `itr close`): a mid-resolve failure leaves
     // the issue fully unchanged — no stray events, status flip, or lost edges.
+    in_write_tx(conn, |tx| {
+        let (detail, unblocked) = resolve_in_tx(tx, id, reason, wontfix)?;
+        Ok(json!({ "issue": detail, "unblocked": unblocked_json(unblocked) }))
+    })
+}
+
+/// Resolve one issue on a connection that is already inside a transaction.
+fn resolve_in_tx(
+    tx: &Connection,
+    id: i64,
+    reason: &str,
+    wontfix: bool,
+) -> Result<(IssueDetail, Vec<(i64, String)>), ItrError> {
     let status = if wontfix { "wontfix" } else { "done" };
-    let tx = conn.unchecked_transaction()?;
-    let old_issue = db::get_issue(&tx, id)?;
-    db::record_event(&tx, id, "status", &old_issue.status, status)?;
-    db::update_issue_field(&tx, id, "status", status)?;
+    let old_issue = db::get_issue(tx, id)?;
+    db::record_event(tx, id, "status", &old_issue.status, status)?;
+    db::update_issue_field(tx, id, "status", status)?;
     if !reason.trim().is_empty() {
-        db::record_event(&tx, id, "close_reason", &old_issue.close_reason, reason)?;
-        db::update_issue_field(&tx, id, "close_reason", reason)?;
+        db::record_event(tx, id, "close_reason", &old_issue.close_reason, reason)?;
+        db::update_issue_field(tx, id, "close_reason", reason)?;
     }
-    let unblocked = db::get_newly_unblocked(&tx, id)?;
-    db::remove_blocker_edges(&tx, id)?;
-    let detail = issue_detail(&tx, id)?;
-    tx.commit()?;
-    Ok(json!({
-        "issue": detail,
-        "unblocked": unblocked
-            .into_iter()
-            .map(|(uid, title)| json!({ "id": uid, "title": title }))
-            .collect::<Vec<_>>(),
-    }))
+    let unblocked = db::get_newly_unblocked(tx, id)?;
+    db::remove_blocker_edges(tx, id)?;
+    Ok((issue_detail(tx, id)?, unblocked))
+}
+
+/// `POST /api/bulk/resolve/apply` is all-or-nothing (AW-4): every id is
+/// checked before any write, and all resolves share one transaction, so a
+/// missing id or a mid-loop failure leaves every selected issue unchanged.
+/// Duplicate ids are resolved once.
+fn bulk_resolve(conn: &Connection, input: &BulkResolveInput) -> Result<Value, ItrError> {
+    let mut ids: Vec<i64> = Vec::with_capacity(input.ids.len());
+    for id in &input.ids {
+        if !ids.contains(id) {
+            ids.push(*id);
+        }
+    }
+    in_write_tx(conn, |tx| {
+        let mut missing = Vec::new();
+        for id in &ids {
+            if !db::issue_exists(tx, *id)? {
+                missing.push(*id);
+            }
+        }
+        match missing.as_slice() {
+            [] => {}
+            [only] => return Err(ItrError::NotFound(*only)),
+            _ => {
+                return Err(ItrError::InvalidValue {
+                    field: "ids".to_string(),
+                    value: missing
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(","),
+                    valid: "existing issue ids (nothing was resolved)".to_string(),
+                })
+            }
+        }
+        let mut resolved = Vec::with_capacity(ids.len());
+        let mut unblocked = Vec::new();
+        for id in &ids {
+            let (detail, freed) = resolve_in_tx(tx, *id, &input.reason, input.wontfix)?;
+            unblocked.extend(unblocked_json(freed));
+            resolved.push(detail);
+        }
+        Ok(json!({
+            "count": resolved.len(),
+            "issues": resolved,
+            "unblocked": unblocked,
+        }))
+    })
 }
 
 /// Result of a UI issue listing. `pinned_id` is the issue the search box named
@@ -1473,8 +1727,14 @@ fn stats_value(conn: &Connection) -> Result<Value, ItrError> {
         .iter()
         .filter(|issue| issue.status == "wontfix")
         .count();
+    // Same definition as `itr stats` (SQ-3): only active issues can be
+    // blocked, so blocked + ready partition `active`. A closed issue whose
+    // blocker is still open is neither.
     let mut blocked = 0;
-    for issue in &issues {
+    for issue in issues
+        .iter()
+        .filter(|issue| issue.status != "done" && issue.status != "wontfix")
+    {
         if db::is_blocked(conn, issue.id)? {
             blocked += 1;
         }
@@ -2092,6 +2352,269 @@ mod tests {
             vec![blocker],
             "dependency edge must be retained"
         );
+    }
+
+    // --- UI write-path integrity (#255 #258 #270 #274 #228, AW-4..AW-17) ---
+
+    fn create_json(conn: &Connection, body: &str) -> Result<(IssueDetail, Vec<String>), ItrError> {
+        create_issue(conn, body.as_bytes())
+    }
+
+    fn issue_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM issues", [], |row| row.get(0))
+            .expect("count issues")
+    }
+
+    #[test]
+    fn ui_create_missing_blocker_rolls_back_whole_create() {
+        let conn = test_db();
+        let result = create_json(
+            &conn,
+            r#"{"title":"missing blocker","priority":"bogus","blocked_by":[9999]}"#,
+        );
+        assert!(
+            matches!(result, Err(ItrError::NotFound(9999))),
+            "got {:?}",
+            result.map(|(d, _)| d.issue.id)
+        );
+        assert_eq!(issue_count(&conn), 0, "no orphan issue may be committed");
+        let notes: i64 = conn
+            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
+            .expect("count notes");
+        assert_eq!(notes, 0, "no orphan REVIEW notes may be committed");
+    }
+
+    #[test]
+    fn ui_create_missing_parent_is_soft_fallback() {
+        let conn = test_db();
+        let (detail, review) =
+            create_json(&conn, r#"{"title":"orphan","parent_id":9999}"#).expect("created");
+        assert_eq!(detail.issue.parent_id, None);
+        assert!(detail.issue.tags.contains(&"_needs_review".to_string()));
+        assert!(review.iter().any(|note| note.contains("parent 9999")));
+    }
+
+    #[test]
+    fn ui_create_matches_stdin_json_shape() {
+        let conn = test_db();
+        let parent = insert_test_issue(&conn, "parent");
+        let blocker = insert_test_issue(&conn, "blocker");
+        let body = format!(
+            r#"{{"title":"  alias  ","parent":{parent},"priorty":"high","blocked_by":["{blocker}"],"tags":[" a ","a",""]}}"#
+        );
+        let (detail, review) = create_json(&conn, &body).expect("created");
+        assert_eq!(detail.issue.title, "alias", "UI keeps trimming titles");
+        assert_eq!(detail.issue.parent_id, Some(parent), "`parent` alias links");
+        assert_eq!(
+            detail.blocked_by,
+            vec![blocker],
+            "string blocked_by accepted"
+        );
+        assert!(detail.issue.tags.contains(&"a".to_string()));
+        assert!(
+            review.iter().any(|note| note.contains("priorty")),
+            "unknown key must be reported, got {:?}",
+            review
+        );
+        assert!(detail.issue.tags.contains(&"_needs_review".to_string()));
+    }
+
+    #[test]
+    fn ui_create_empty_blocked_by_and_blank_title() {
+        let conn = test_db();
+        let (detail, review) =
+            create_json(&conn, r#"{"title":"no blockers","blocked_by":[]}"#).expect("created");
+        assert!(detail.blocked_by.is_empty());
+        assert!(review.is_empty(), "clean create has no review notes");
+        let result = create_json(&conn, r#"{"title":"   "}"#);
+        assert!(matches!(result, Err(ItrError::InvalidValue { .. })));
+        assert_eq!(issue_count(&conn), 1);
+    }
+
+    #[test]
+    fn ui_patch_unknown_status_keeps_closed_issue_closed() {
+        let conn = test_db();
+        let id = insert_test_issue(&conn, "closed");
+        resolve_issue(&conn, id, "", false).expect("close");
+        let outcome = patch_issue(
+            &conn,
+            id,
+            &json!({ "status": "bogus", "priority": "nope", "kind": "zzz" }),
+        )
+        .expect("patch");
+        assert_eq!(outcome.detail.issue.status, "done", "#228: never reopen");
+        assert_eq!(outcome.detail.issue.priority, "medium");
+        assert_eq!(outcome.detail.issue.kind, "task");
+        assert_eq!(outcome.review_notes.len(), 3);
+        assert!(outcome.review_notes[0].contains("kept 'done'"));
+        assert!(outcome
+            .detail
+            .issue
+            .tags
+            .contains(&"_needs_review".to_string()));
+    }
+
+    #[test]
+    fn ui_patch_status_done_cleans_blocker_edges() {
+        let conn = test_db();
+        let blocker = insert_test_issue(&conn, "blocker");
+        let blocked = insert_test_issue(&conn, "blocked");
+        db::add_dependency(&conn, blocker, blocked).expect("dep");
+        let outcome = patch_issue(&conn, blocker, &json!({ "status": "done" })).expect("patch");
+        assert_eq!(outcome.unblocked, vec![(blocked, "blocked".to_string())]);
+        assert!(db::get_blockers(&conn, blocked)
+            .expect("blockers")
+            .is_empty());
+        assert!(outcome.detail.blocks.is_empty());
+    }
+
+    #[test]
+    fn ui_patch_wrong_types_are_rejected_before_any_write() {
+        let conn = test_db();
+        let id = insert_test_issue(&conn, "typed");
+        let result = patch_issue(
+            &conn,
+            id,
+            &json!({ "title": null, "context": 123, "status": "done", "tags": "a,b" }),
+        );
+        match result {
+            Err(ItrError::InvalidValue { field, .. }) => {
+                assert!(field.contains("title"), "{field}");
+                assert!(field.contains("context"), "{field}");
+                assert!(field.contains("tags"), "{field}");
+            }
+            Err(other) => panic!("expected InvalidValue, got {other:?}"),
+            Ok(_) => panic!("expected InvalidValue, got success"),
+        }
+        let issue = db::get_issue(&conn, id).expect("issue");
+        assert_eq!(
+            issue.status, "open",
+            "valid fields of a rejected patch are not applied"
+        );
+        assert!(db::get_events_for_issue(&conn, id)
+            .expect("events")
+            .is_empty());
+
+        for bad_parent in [json!("abc"), json!(1.5), json!(true)] {
+            let result = patch_issue(&conn, id, &json!({ "parent_id": bad_parent }));
+            assert!(matches!(result, Err(ItrError::InvalidValue { .. })));
+        }
+        let empty_title = patch_issue(&conn, id, &json!({ "title": "  " }));
+        assert!(matches!(empty_title, Err(ItrError::InvalidValue { .. })));
+    }
+
+    #[test]
+    fn ui_patch_accepts_numeric_string_parent_and_reports_unknown_keys() {
+        let conn = test_db();
+        let parent = insert_test_issue(&conn, "parent");
+        let child = insert_test_issue(&conn, "child");
+        let outcome = patch_issue(
+            &conn,
+            child,
+            &json!({ "parent_id": parent.to_string(), "colour": "red" }),
+        )
+        .expect("patch");
+        assert_eq!(outcome.detail.issue.parent_id, Some(parent));
+        assert!(outcome.review_notes.iter().any(|n| n.contains("colour")));
+    }
+
+    #[test]
+    fn ui_notes_reject_blank_content_and_are_atomic() {
+        let conn = test_db();
+        let id = insert_test_issue(&conn, "noted");
+        let blank = NoteInput {
+            content: "   ".to_string(),
+            agent: String::new(),
+        };
+        assert!(matches!(
+            add_ui_note(&conn, id, &blank),
+            Err(ItrError::InvalidValue { .. })
+        ));
+
+        // Fail the audit-event insert: the note row must roll back with it.
+        conn.execute_batch(
+            "CREATE TRIGGER fail_note_event BEFORE INSERT ON events
+             WHEN NEW.field = 'note_added'
+             BEGIN SELECT RAISE(ABORT, 'injected event failure'); END;",
+        )
+        .expect("trigger");
+        let input = NoteInput {
+            content: "real note".to_string(),
+            agent: "tester".to_string(),
+        };
+        assert!(add_ui_note(&conn, id, &input).is_err());
+        assert!(db::get_notes(&conn, id).expect("notes").is_empty());
+
+        conn.execute_batch("DROP TRIGGER fail_note_event;")
+            .expect("drop trigger");
+        let added = add_ui_note(&conn, id, &input).expect("add note");
+        let note_id = added["note"]["id"].as_i64().expect("note id");
+        assert_eq!(added["note"]["agent"], "tester");
+        assert!(matches!(
+            update_ui_note(&conn, note_id, &blank),
+            Err(ItrError::InvalidValue { .. })
+        ));
+        delete_ui_note(&conn, note_id).expect("delete");
+        assert!(db::get_notes(&conn, id).expect("notes").is_empty());
+    }
+
+    #[test]
+    fn ui_bulk_resolve_is_all_or_nothing() {
+        let conn = test_db();
+        let a = insert_test_issue(&conn, "a");
+        let b = insert_test_issue(&conn, "b");
+        let input = BulkResolveInput {
+            ids: vec![a, 99999, b],
+            reason: "bulk".to_string(),
+            wontfix: false,
+        };
+        assert!(matches!(
+            bulk_resolve(&conn, &input),
+            Err(ItrError::NotFound(99999))
+        ));
+        for id in [a, b] {
+            assert_eq!(db::get_issue(&conn, id).expect("issue").status, "open");
+        }
+
+        let input = BulkResolveInput {
+            ids: vec![a, b, a],
+            reason: "bulk".to_string(),
+            wontfix: true,
+        };
+        let result = bulk_resolve(&conn, &input).expect("resolve");
+        assert_eq!(result["count"], 2, "duplicate ids resolved once");
+        assert_eq!(db::get_issue(&conn, b).expect("issue").status, "wontfix");
+    }
+
+    #[test]
+    fn ui_stats_do_not_count_closed_issues_as_blocked() {
+        let conn = test_db();
+        let blocker = insert_test_issue(&conn, "blocker");
+        let blocked = insert_test_issue(&conn, "blocked");
+        db::add_dependency(&conn, blocker, blocked).expect("dep");
+        // Close the BLOCKED issue: its edge from the still-open blocker stays.
+        resolve_issue(&conn, blocked, "", false).expect("close");
+        let stats = stats_value(&conn).expect("stats");
+        assert_eq!(stats["active"], 1);
+        assert_eq!(stats["blocked"], 0, "SQ-3: closed issues are never blocked");
+        assert_eq!(stats["ready"], 1);
+    }
+
+    #[test]
+    fn dangerous_sql_changes_ignore_trigger_rows() {
+        let conn = test_db();
+        insert_test_issue(&conn, "sql target");
+        let result =
+            run_sql(&conn, "UPDATE issues SET title = 'renamed' WHERE id = 1").expect("update");
+        assert_eq!(result["changes"], 1, "SQ-11: only top-level rows count");
+        let result = run_sql(&conn, "UPDATE issues SET title = 'x' WHERE id = 999").expect("noop");
+        assert_eq!(result["changes"], 0);
+        let result = run_sql(
+            &conn,
+            "CREATE TABLE scratch (x); INSERT INTO scratch VALUES (1), (2);",
+        )
+        .expect("batch");
+        assert_eq!(result["changes"], 2);
     }
 
     // --- Batched issue fetch: GET /api/issues?ids=... (#136) ---

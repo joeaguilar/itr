@@ -52,7 +52,7 @@ fn parse_blocked_by_tokens(blocked_by: Option<String>) -> (Vec<i64>, Vec<String>
 /// item, including string/integer `blocked_by` entries (#165) and the
 /// `parent` alias for `parent_id` (#150). Unresolvable tokens become REVIEW
 /// notes instead of being silently dropped.
-fn parse_stdin_json(input: &str) -> Result<AddRequest, ItrError> {
+pub(crate) fn parse_stdin_json(input: &str) -> Result<AddRequest, ItrError> {
     let value: serde_json::Value = serde_json::from_str(input)?;
     let (data, mut review_notes) = parse_add_item(&value)?;
 
