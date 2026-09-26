@@ -1021,7 +1021,8 @@ pub fn has_path(conn: &Connection, from_id: i64, to_id: i64) -> Result<bool, Itr
 }
 
 pub fn get_blockers(conn: &Connection, issue_id: i64) -> Result<Vec<i64>, ItrError> {
-    let mut stmt = conn.prepare("SELECT blocker_id FROM dependencies WHERE blocked_id = ?1")?;
+    let mut stmt = conn
+        .prepare("SELECT blocker_id FROM dependencies WHERE blocked_id = ?1 ORDER BY blocker_id")?;
     let ids: Vec<i64> = stmt
         .query_map(params![issue_id], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1029,7 +1030,8 @@ pub fn get_blockers(conn: &Connection, issue_id: i64) -> Result<Vec<i64>, ItrErr
 }
 
 pub fn get_blocking(conn: &Connection, issue_id: i64) -> Result<Vec<i64>, ItrError> {
-    let mut stmt = conn.prepare("SELECT blocked_id FROM dependencies WHERE blocker_id = ?1")?;
+    let mut stmt = conn
+        .prepare("SELECT blocked_id FROM dependencies WHERE blocker_id = ?1 ORDER BY blocked_id")?;
     let ids: Vec<i64> = stmt
         .query_map(params![issue_id], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1076,7 +1078,8 @@ pub fn get_newly_unblocked(
              WHERE d2.blocked_id = i.id
              AND d2.blocker_id != ?1
              AND i2.status NOT IN ('done', 'wontfix')
-         )",
+         )
+         ORDER BY i.id",
     )?;
     let results: Vec<(i64, String)> = stmt
         .query_map(params![closed_id], |row| Ok((row.get(0)?, row.get(1)?)))?
@@ -1125,7 +1128,7 @@ pub fn add_note(
 
 pub fn get_notes(conn: &Connection, issue_id: i64) -> Result<Vec<Note>, ItrError> {
     let mut stmt = conn.prepare(
-        "SELECT id, issue_id, content, agent, created_at FROM notes WHERE issue_id = ?1 ORDER BY created_at ASC",
+        "SELECT id, issue_id, content, agent, created_at FROM notes WHERE issue_id = ?1 ORDER BY created_at ASC, id ASC",
     )?;
     let notes: Vec<Note> = stmt
         .query_map(params![issue_id], row_to_note)?
@@ -1237,6 +1240,9 @@ pub fn search_issue_ids(
         append_in_clause(&mut sql, &mut param_values, "i.kind", kinds);
     }
 
+    // Deterministic order for urgency ties downstream (SQ-9).
+    sql.push_str(" ORDER BY i.id");
+
     let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values
         .iter()
         .map(std::convert::AsRef::as_ref)
@@ -1287,6 +1293,9 @@ pub fn search_note_issue_ids(
     if !kinds.is_empty() {
         append_in_clause(&mut sql, &mut param_values, "i.kind", kinds);
     }
+
+    // Deterministic order for urgency ties downstream (SQ-9).
+    sql.push_str(" ORDER BY i.id");
 
     let params_ref: Vec<&dyn rusqlite::types::ToSql> = param_values
         .iter()
@@ -1351,7 +1360,9 @@ pub fn all_issues(conn: &Connection) -> Result<Vec<Issue>, ItrError> {
 }
 
 pub fn all_dependencies(conn: &Connection) -> Result<Vec<(i64, i64)>, ItrError> {
-    let mut stmt = conn.prepare("SELECT blocker_id, blocked_id FROM dependencies")?;
+    let mut stmt = conn.prepare(
+        "SELECT blocker_id, blocked_id FROM dependencies ORDER BY blocker_id, blocked_id",
+    )?;
     let deps: Vec<(i64, i64)> = stmt
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -1389,7 +1400,7 @@ pub fn record_event(
 pub fn get_events_for_issue(conn: &Connection, issue_id: i64) -> Result<Vec<Event>, ItrError> {
     let mut stmt = conn.prepare(
         "SELECT id, issue_id, field, old_value, new_value, agent, created_at
-         FROM events WHERE issue_id = ?1 ORDER BY created_at ASC",
+         FROM events WHERE issue_id = ?1 ORDER BY created_at ASC, id ASC",
     )?;
     let events: Vec<Event> = stmt
         .query_map(params![issue_id], row_to_event)?
@@ -1406,14 +1417,14 @@ pub fn get_recent_events(
         if let Some(since_ts) = since {
             (
                 "SELECT id, issue_id, field, old_value, new_value, agent, created_at
-                 FROM events WHERE created_at >= ?1 ORDER BY created_at DESC LIMIT ?2"
+                 FROM events WHERE created_at >= ?1 ORDER BY created_at DESC, id DESC LIMIT ?2"
                     .to_string(),
                 vec![Box::new(since_ts.to_string()), Box::new(limit as i64)],
             )
         } else {
             (
                 "SELECT id, issue_id, field, old_value, new_value, agent, created_at
-                 FROM events ORDER BY created_at DESC LIMIT ?1"
+                 FROM events ORDER BY created_at DESC, id DESC LIMIT ?1"
                     .to_string(),
                 vec![Box::new(limit as i64)],
             )
@@ -1578,7 +1589,7 @@ pub fn get_relations(conn: &Connection, issue_id: i64) -> Result<Vec<Relation>, 
     let mut stmt = conn.prepare(
         "SELECT id, source_id, target_id, relation_type, created_at
          FROM relations WHERE source_id = ?1 OR target_id = ?1
-         ORDER BY created_at ASC",
+         ORDER BY created_at ASC, id ASC",
     )?;
     let relations: Vec<Relation> = stmt
         .query_map(params![issue_id], row_to_relation)?
@@ -1745,8 +1756,8 @@ pub fn fts_search(conn: &Connection, query: &str) -> Result<Vec<i64>, ItrError> 
         .collect::<Vec<_>>()
         .join(" AND ");
 
-    let mut stmt =
-        conn.prepare("SELECT rowid FROM issues_fts WHERE issues_fts MATCH ?1 ORDER BY rank")?;
+    let mut stmt = conn
+        .prepare("SELECT rowid FROM issues_fts WHERE issues_fts MATCH ?1 ORDER BY rank, rowid")?;
     let ids: Vec<i64> = stmt
         .query_map(params![fts_query], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
@@ -3024,6 +3035,7 @@ mod tests {
             "limit must keep the newest matches, newest first"
         );
     }
+
     // --- tx lane: SQ-1 / SQ-2 / #240 / SQ-5 / SQ-9 ---
 
     fn fail_event_inserts(conn: &Connection) {
@@ -3086,6 +3098,7 @@ mod tests {
             "relation must roll back"
         );
     }
+
     // #240: dependency-query errors propagate.
     #[test]
     fn list_issues_propagates_blocked_check_errors() {
@@ -3104,6 +3117,7 @@ mod tests {
             "a failed is_blocked must not read as 'not blocked' (#240)"
         );
     }
+
     // SQ-5 / #224: skill filters are trimmed and case-insensitive.
     fn add_with_skill(conn: &Connection, title: &str, skill: &str) -> i64 {
         insert_issue(
@@ -3149,5 +3163,55 @@ mod tests {
             ids(" ").is_empty(),
             "a blank skill must not widen the filter"
         );
+    }
+
+    // SQ-9: same-second rows come back in id order.
+    #[test]
+    fn same_second_rows_order_by_id() {
+        let conn = test_conn();
+        let a = add(&conn, "a").id;
+        let b = add(&conn, "b").id;
+        let c = add(&conn, "c").id;
+        let ts = "2026-01-01T00:00:00Z";
+        conn.execute(
+            "INSERT INTO relations (id, source_id, target_id, relation_type, created_at)
+             VALUES (2, ?1, ?2, 'related', ?3), (1, ?4, ?1, 'related', ?3)",
+            params![a, b, ts, c],
+        )
+        .unwrap();
+        let ids: Vec<i64> = get_relations(&conn, a)
+            .unwrap()
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(ids, vec![1, 2]);
+
+        conn.execute(
+            "INSERT INTO notes (id, issue_id, content, created_at)
+             VALUES (7, ?1, 'second', ?2), (3, ?1, 'first', ?2)",
+            params![a, ts],
+        )
+        .unwrap();
+        let notes: Vec<i64> = get_notes(&conn, a).unwrap().iter().map(|n| n.id).collect();
+        assert_eq!(notes, vec![3, 7]);
+
+        conn.execute(
+            "INSERT INTO events (id, issue_id, field, old_value, new_value, created_at)
+             VALUES (9, ?1, 'x', '', '', ?2), (5, ?1, 'y', '', '', ?2)",
+            params![a, ts],
+        )
+        .unwrap();
+        let asc: Vec<i64> = get_events_for_issue(&conn, a)
+            .unwrap()
+            .iter()
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(asc, vec![5, 9]);
+        let desc: Vec<i64> = get_recent_events(&conn, 10, None)
+            .unwrap()
+            .iter()
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(desc, vec![9, 5]);
     }
 }
