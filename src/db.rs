@@ -616,6 +616,25 @@ fn row_to_relation(row: &rusqlite::Row) -> rusqlite::Result<Relation> {
     })
 }
 
+/// Canonicalize `--skill` filter values the same way skills are written:
+/// trimmed and lowercased (SQ-5 / #224). Every skill filter (list,
+/// next/claim, ready, search, bulk) must go through this so `--skill Rust`
+/// matches a stored `rust`. A blank value is kept (it matches nothing, as
+/// before) rather than dropped, so `bulk --skill " "` can never widen into
+/// an unfiltered mass mutation.
+pub fn normalize_skill_filters(skills: &[String]) -> Vec<String> {
+    skills.iter().map(|s| s.trim().to_lowercase()).collect()
+}
+
+/// Whether `issue_skills` contains the (already normalized) `wanted` skill.
+/// Stored values are compared case-insensitively too, so rows written before
+/// skills were lowercased on write still match.
+pub fn has_skill(issue_skills: &[String], wanted: &str) -> bool {
+    issue_skills
+        .iter()
+        .any(|s| s.trim().to_lowercase() == wanted)
+}
+
 pub fn list_issues(
     conn: &Connection,
     filter: &crate::models::ListFilter,
@@ -688,13 +707,14 @@ pub fn list_issues(
             .collect()
     };
 
-    // Filter by skills (AND logic)
-    let issues = if filter.skills.is_empty() {
+    // Filter by skills (AND logic, case-insensitive — SQ-5 / #224)
+    let wanted_skills = normalize_skill_filters(&filter.skills);
+    let issues = if wanted_skills.is_empty() {
         issues
     } else {
         issues
             .into_iter()
-            .filter(|i| filter.skills.iter().all(|s| i.skills.contains(s)))
+            .filter(|i| wanted_skills.iter().all(|s| has_skill(&i.skills, s)))
             .collect()
     };
 
@@ -3082,6 +3102,52 @@ mod tests {
         assert!(
             err.is_err(),
             "a failed is_blocked must not read as 'not blocked' (#240)"
+        );
+    }
+    // SQ-5 / #224: skill filters are trimmed and case-insensitive.
+    fn add_with_skill(conn: &Connection, title: &str, skill: &str) -> i64 {
+        insert_issue(
+            conn,
+            title,
+            "medium",
+            "task",
+            "",
+            &[],
+            &[],
+            &[skill.to_string()],
+            "",
+            None,
+            "",
+        )
+        .unwrap()
+        .id
+    }
+
+    #[test]
+    fn skill_filter_is_trimmed_and_case_insensitive() {
+        let conn = test_conn();
+        let lower = add_with_skill(&conn, "lower", "rust");
+        // A legacy row written before skills were lowercased on write.
+        let legacy = add_with_skill(&conn, "legacy", "Rust");
+        add(&conn, "no skill");
+        let ids = |skill: &str| -> Vec<i64> {
+            list_issues(
+                &conn,
+                &crate::models::ListFilter {
+                    skills: vec![skill.to_string()],
+                    ..crate::models::ListFilter::default()
+                },
+            )
+            .unwrap()
+            .into_iter()
+            .map(|i| i.id)
+            .collect()
+        };
+        assert_eq!(ids("Rust"), vec![lower, legacy]);
+        assert_eq!(ids(" RUST "), vec![lower, legacy]);
+        assert!(
+            ids(" ").is_empty(),
+            "a blank skill must not widen the filter"
         );
     }
 }

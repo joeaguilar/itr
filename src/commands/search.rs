@@ -181,13 +181,14 @@ fn run_core(
         });
     }
 
-    // Filter by skills (AND logic)
+    // Filter by skills (AND logic, case-insensitive — SQ-5 / #224)
+    let skills = db::normalize_skill_filters(skills);
     let mut results = if skills.is_empty() {
         results
     } else {
         results
             .into_iter()
-            .filter(|r| skills.iter().all(|s| r.skills.contains(s)))
+            .filter(|r| skills.iter().all(|s| db::has_skill(&r.skills, s)))
             .collect()
     };
 

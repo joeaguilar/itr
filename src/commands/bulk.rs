@@ -30,15 +30,21 @@ fn resolve_filter_ids(
         return Err(ItrError::NoFilters);
     }
 
-    let statuses = status
-        .map(|s| vec![normalize::normalize_status(&s)])
-        .unwrap_or_default();
-    let priorities = priority
-        .map(|p| vec![normalize::normalize_priority(&p)])
-        .unwrap_or_default();
-    let kinds = kind
-        .map(|k| vec![normalize::normalize_kind(&k)])
-        .unwrap_or_default();
+    // Same warning-producing normalization as `list` (#234): an
+    // unrecognized value gets a REVIEW note naming it and matches nothing.
+    let (statuses, status_notes) =
+        normalize::normalize_status_filters(&status.into_iter().collect::<Vec<_>>());
+    let (priorities, priority_notes) =
+        normalize::normalize_priority_filters(&priority.into_iter().collect::<Vec<_>>());
+    let (kinds, kind_notes) =
+        normalize::normalize_kind_filters(&kind.into_iter().collect::<Vec<_>>());
+    for note in status_notes
+        .iter()
+        .chain(&priority_notes)
+        .chain(&kind_notes)
+    {
+        eprintln!("{}", note);
+    }
     let tags: Vec<String> = tag.into_iter().collect();
     let skills: Vec<String> = skill.into_iter().collect();
 
